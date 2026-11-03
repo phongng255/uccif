@@ -1,0 +1,73 @@
+import pytest
+
+from uccif_lib import task
+from uccif_lib.task import TaskError
+
+
+def test_start_show_checkpoint_close(project):
+    t = task.start(project, "Fix login", "bug", goal="login works")
+    assert t["id"] == "T-001"
+    task.checkpoint(project, next="write repro", tests=["npm test: fail"], decisions=["use cookie"])
+    md = (project.data_dir / "current-task.md").read_text()
+    assert "Task: T-001 — Fix login" in md
+    assert "- use cookie" in md and "Next step: write repro" in md
+    task.close(project, issues=["safari drops cookie"])
+    assert task.load_current(project)["status"] == "done"
+    assert "[T-001] use cookie" in (project.docs_dir / "decisions.md").read_text()
+    assert "[T-001] safari drops cookie" in (project.docs_dir / "known-issues.md").read_text()
+    assert len(list((project.data_dir / "tasks" / "history").glob("*T-001.md"))) == 1
+
+
+def test_ids_increment(project):
+    task.start(project, "a", "ui")
+    task.close(project, no_findings=True)
+    assert task.start(project, "b", "ui")["id"] == "T-002"
+
+
+def test_cannot_start_while_open(project):
+    task.start(project, "a", "ui")
+    with pytest.raises(TaskError, match="still open"):
+        task.start(project, "b", "ui")
+
+
+def test_close_requires_findings_flag(project):
+    task.start(project, "a", "ui")
+    with pytest.raises(TaskError):
+        task.close(project)
+
+
+def test_status_cannot_be_set_by_checkpoint(project):
+    task.start(project, "a", "ui")
+    with pytest.raises(TaskError, match="task close"):
+        task.checkpoint(project, sets=["Status=done"])
+    task.checkpoint(project, sets=["next=do it"])
+    assert task.load_current(project)["next"] == "do it"
+
+
+def test_bad_type_and_no_open_task(project):
+    with pytest.raises(TaskError):
+        task.start(project, "a", "nope")
+    with pytest.raises(TaskError, match="No open task"):
+        task.checkpoint(project, next="x")
+
+
+def test_add_modified_dedupes_and_ignores_without_task(project):
+    assert task.add_modified(project, "src/a.ts") is False
+    task.start(project, "a", "ui")
+    assert task.add_modified(project, "src/a.ts") is True
+    assert task.add_modified(project, "src/a.ts") is False
+    assert task.load_current(project)["files"] == ["src/a.ts"]
+
+
+def test_history_keeps_last_20(project):
+    task.start(project, "a", "ui")
+    for i in range(25):
+        task.snapshot(project, label="s%02d" % i)
+    assert len(list((project.data_dir / "tasks" / "history").glob("*.md"))) == task.HISTORY_KEEP
+
+
+def test_summary_lines(project):
+    assert task.summary_lines(project) == []
+    task.start(project, "Fix login", "bug")
+    task.checkpoint(project, next="repro")
+    assert task.summary_lines(project) == ["Open task T-001 (bug): Fix login", "Next step: repro"]

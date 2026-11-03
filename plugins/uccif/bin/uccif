@@ -1,0 +1,21 @@
+#!/bin/sh
+# UCCIF launcher: finds a Python 3 interpreter and runs the uccif_lib CLI.
+# Tries python3 -> python -> py -3. Never fails a hook: on error, exits 0 when
+# called as `uccif hook ...`, exits 127 otherwise.
+here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+root=$(dirname -- "$here")
+
+is_hook=0
+[ "$1" = "hook" ] && is_hook=1
+
+for cand in python3 python "py -3"; do
+  # shellcheck disable=SC2086
+  if $cand -c 'import sys; sys.exit(0 if sys.version_info >= (3, 8) else 1)' >/dev/null 2>&1; then
+    PYTHONPATH="$root${PYTHONPATH:+:$PYTHONPATH}" PYTHONDONTWRITEBYTECODE=1 \
+      exec $cand -m uccif_lib "$@"
+  fi
+done
+
+echo "uccif: no Python 3.8+ found (tried python3, python, py -3)" >&2
+[ "$is_hook" = 1 ] && exit 0
+exit 127

@@ -1,0 +1,28 @@
+{
+  "name": "uccif",
+  "displayName": "UCCIF",
+  "version": "3.0.0-dev.1",
+  "description": "Task memory, token reporting, project docs and a code-change workflow for any repository. Hooks inject CORE RULES; the core plugin never blocks.",
+  "author": {
+    "name": "phongng255",
+    "url": "https://github.com/phongng255"
+  },
+  "homepage": "https://github.com/phongng255/uccif",
+  "repository": "https://github.com/phongng255/uccif",
+  "license": "MIT",
+  "keywords": ["workflow", "context", "tokens", "resume", "code-intelligence"],
+  "userConfig": {
+    "reply_language": {
+      "type": "string",
+      "title": "Reply language",
+      "description": "Language Claude uses when replying to you (framework files stay English). Example: vi, en.",
+      "default": "vi"
+    },
+    "token_report": {
+      "type": "boolean",
+      "title": "Token line after each turn",
+      "description": "Show one line with real token usage (read from the transcript) after each reply.",
+      "default": true
+    }
+  }
+}
