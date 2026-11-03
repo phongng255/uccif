@@ -1,0 +1,17 @@
+{
+  "name": "uccif",
+  "description": "UCCIF — Universal Claude Code Intelligence Framework: task memory, token reporting, project docs and code-intel workflow for any repository.",
+  "owner": {
+    "name": "phongng255",
+    "url": "https://github.com/phongng255"
+  },
+  "plugins": [
+    {
+      "name": "uccif",
+      "source": "./plugins/uccif",
+      "description": "Core UCCIF plugin: CORE RULES via hooks, task/resume, token line, logs, /uccif:init, read-only analysis agents. Never blocks.",
+      "category": "productivity",
+      "tags": ["workflow", "context", "tokens", "code-intelligence"]
+    }
+  ]
+}

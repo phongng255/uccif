@@ -1,0 +1,27 @@
+name: smoke
+
+# Headless end-to-end run of Claude Code with the plugin loaded (tests/smoke.sh).
+# Uses the API, so it only runs by hand and needs the ANTHROPIC_API_KEY repo secret.
+on:
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm install -g @anthropic-ai/claude-code
+      - run: tests/smoke.sh
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-output
+          path: tests/.smoke/
