@@ -26,7 +26,7 @@ from uccif_lib import ts_parse, vue_template
 from uccif_lib.resolve import JS_RESOLVE_EXT, Resolver  # noqa: F401 (re-exported)
 from uccif_lib.paths import LockTimeout, file_lock, now_iso
 
-SCHEMA = 8
+SCHEMA = 9
 MAX_BYTES = 1000000
 QUERY_LINES = 30
 
@@ -173,6 +173,9 @@ def connect(project, write=True):
         CREATE TABLE IF NOT EXISTS refs (src_id TEXT, src_path TEXT, kind TEXT, member TEXT, line INTEGER,
             origin_path TEXT, origin_name TEXT);
         CREATE INDEX IF NOT EXISTS refs_path ON refs(src_path);
+        CREATE TABLE IF NOT EXISTS tag_uses (path TEXT, tag TEXT, line INTEGER, kind TEXT, name TEXT,
+            attr_line INTEGER);
+        CREATE INDEX IF NOT EXISTS tag_uses_path ON tag_uses(path);
         CREATE TABLE IF NOT EXISTS globals (path TEXT, name TEXT, target TEXT, line INTEGER);
         CREATE INDEX IF NOT EXISTS tags_path ON tags(path);
         CREATE INDEX IF NOT EXISTS globals_path ON globals(path);
@@ -193,7 +196,7 @@ def connect(project, write=True):
     if _meta(con, "schema") not in (None, str(SCHEMA)):
         con.executescript("DELETE FROM files; DELETE FROM symbols; DELETE FROM imports; DELETE FROM calls; "
                          "DELETE FROM nodes; DELETE FROM edges; DELETE FROM bindings; DELETE FROM tags; "
-                         "DELETE FROM globals; DELETE FROM refs; DELETE FROM meta;")
+                         "DELETE FROM globals; DELETE FROM refs; DELETE FROM tag_uses; DELETE FROM meta;")
     _set_meta(con, "schema", SCHEMA)
     return con
 
@@ -375,7 +378,7 @@ def _update(project, full, only=None):
     if full:
         con.executescript("DELETE FROM files; DELETE FROM symbols; DELETE FROM imports; DELETE FROM calls; "
                           "DELETE FROM nodes; DELETE FROM edges; DELETE FROM bindings; DELETE FROM tags; "
-                          "DELETE FROM globals; DELETE FROM refs;")
+                          "DELETE FROM globals; DELETE FROM refs; DELETE FROM tag_uses;")
     known = {r[0]: (r[1], r[2], r[3]) for r in con.execute("SELECT path, size, mtime, hash FROM files")}
     if only is not None:
         only = {p.replace(os.sep, "/") for p in only if lang_of(p.replace(os.sep, "/"))}
@@ -416,7 +419,7 @@ def _update(project, full, only=None):
         to_parse.append((rel, st, h, text))
 
     # symbol sources, best first: tree-sitter (optional) -> universal-ctags -> regex
-    ast, tpl_tags = {}, {}
+    ast, tpl_tags, tpl_uses = {}, {}, {}
     for rel, _, _, text in to_parse:
         lang = lang_of(rel)
         res = ts_parse.parse(_script_part(text, lang), rel, lang)
@@ -426,8 +429,10 @@ def _update(project, full, only=None):
                 if tpl:
                     stem = PurePosixPath(rel).stem
                     res = (res[:2] + (res[2] + [(stem, n, o, ln) for n, o, ln in tpl.calls],) + res[3:8]
-                           + (res[8] + [(stem, o, pr, ln) for o, pr, ln in tpl.reads],))
+                           + (res[8] + [(stem, o, pr, ln) for o, pr, ln in tpl.reads],)
+                           + (res[9] + [(stem, ev, ln) for ev, ln in tpl.emits],))
                     tpl_tags[rel] = tpl.tags
+                    tpl_uses[rel] = tpl.uses
             ast[rel] = res
     need_ctags = [r for r, _, _, _ in to_parse if r not in ast]
     tagged = ctags_symbols(exe, root, need_ctags) if exe and need_ctags else {}
@@ -453,7 +458,8 @@ def _update(project, full, only=None):
                 syms, precision = regex_symbols(text, lang), "approx"
             raws = raw_imports(text, lang, ilines)
         stem = PurePosixPath(rel).stem
-        rows = [((n if n is not None else stem), k, rel, ln, sc, precision) for n, k, ln, sc in syms]
+        rows = [((n if n is not None else stem), k, rel, ln, (stem if sc is None and k in ("prop", "emit") else sc),
+                 precision) for n, k, ln, sc in syms]
         con.executemany("INSERT INTO symbols VALUES (?,?,?,?,?,?)", rows)
         imps = [(rel, raw, resolver.resolve(rel, raw, lang), ilines.get(raw)) for raw in raws]
         con.executemany("INSERT INTO imports VALUES (?,?,?,?)", imps)
@@ -461,7 +467,8 @@ def _update(project, full, only=None):
         con.execute("INSERT INTO files VALUES (?,?,?,?,?,?,?)",
                     (rel, lang, st.st_size, st.st_mtime, h, int(is_test(rel)), len(rows)))
         _write_graph(con, rel, lang, rows, imps, call_rows, resolver, text, herit_rows, tag_rows, ref_rows,
-                     {(m[0], m[1]): m[2] for m in ast[rel][6]} if rel in ast else {})
+                     {(m[0], m[1]): m[2] for m in ast[rel][6]} if rel in ast else {},
+                     ast[rel][9] if rel in ast else (), tpl_uses.get(rel, ()))
     if to_parse or removed or full:
         _through_barrels(con)
         _derive_all(con)
@@ -511,7 +518,7 @@ def _resolve_heritage(rel, lang, parsed, resolver):
     syms, binds, heritage = parsed[0], parsed[3], parsed[5]
     if not heritage:
         return []
-    local = {n for n, _, _, _ in syms if n}
+    local = {n for n, k, _, _ in syms if n and k not in ("prop", "emit", "store_member")}
     bound, pkg = _bind_map(rel, lang, binds, resolver)
     rows = []
     for cls, base, kind, line in heritage:
@@ -586,9 +593,11 @@ def _resolve_calls(rel, lang, parsed, resolver):
     name itself (and for `this.x()` / `self.x()`). Anything else keeps callee_path NULL
     ("unresolved"): a lead to verify by reading, not a fact."""
     syms, calls, binds = parsed[0], parsed[2], parsed[3]
-    local = {n for n, _, _, _ in syms if n}
+    local = {n for n, k, _, _ in syms if n and k not in ("prop", "emit", "store_member")}
     bound, pkg = _bind_map(rel, lang, binds, resolver)
     var_of, destructured, refs = _var_origins(rel, parsed, bound, local)
+    emit_vars = {"emit"} | {nm for _, _, callee, _, names, _ in (parsed[7] if len(parsed) > 7 else ())
+                            if callee == "defineEmits" for nm, _ in names}
     rows = []
     for caller, name, obj, line in calls:
         path, callee = None, name
@@ -604,7 +613,8 @@ def _resolve_calls(rel, lang, parsed, resolver):
             rows.append((rel, caller, name, None, line, False, True))
             continue
         ext = ((name in pkg) if obj is None else (obj in pkg)) or (
-            _builtin(lang, name, obj) and name not in local and name not in bound)
+            _builtin(lang, name, obj) and name not in local and name not in bound) or (
+            obj is None and name in emit_vars and name not in local and name not in bound)
         if obj is None:
             if name in bound and bound[name][0]:
                 path = bound[name][0]
@@ -755,6 +765,7 @@ def _derive_all(con):
     """Edges that depend on other files' contents, recomputed from scratch (`via` starts with '~')."""
     con.execute("DELETE FROM edges WHERE via LIKE '~%'")
     _derive_components(con)
+    _derive_links(con)
     _derive_members(con)
     _derive_uses(con)
 
@@ -774,6 +785,32 @@ def _base_chain(con, class_id, depth=5):
         out += nxt
         cur = nxt
     return out
+
+
+def _derive_links(con):
+    """passes_prop / listens: what a parent hands to a component tag (`:title=`, `@toggle-theme=`),
+    tied to the prop / emit the child declares. Needs the final `renders` edges, so it runs after
+    them. Attributes the child does not declare (class, native events, fallthrough) add nothing."""
+    declared = {}
+    new = []
+    for path, tag, tline, kind, name, aline in con.execute(
+            "SELECT path, tag, line, kind, name, attr_line FROM tag_uses").fetchall():
+        r = con.execute("SELECT src_id, dst_path FROM edges WHERE kind='renders' AND src_path=? AND detail=? AND "
+                        "line=? AND dst_path IS NOT NULL ORDER BY confidence='extracted' DESC LIMIT 1",
+                        (path, tag, tline)).fetchone()
+        if not r:
+            continue
+        src, dst = r
+        if dst not in declared:
+            declared[dst] = {}
+            for nid, nkind, nname in con.execute("SELECT id, kind, name FROM nodes WHERE path=? AND kind IN "
+                                                 "('prop','emit')", (dst,)):
+                declared[dst][(nkind, vue_template.norm(nname))] = nid
+        hit = declared[dst].get(("prop" if kind == "prop" else "emit", vue_template.norm(name)))
+        if hit:
+            new.append((src, hit, "passes_prop" if kind == "prop" else "listens", aline, "extracted", name, path,
+                        dst, "~link"))
+    con.executemany("INSERT INTO edges VALUES (?,?,?,?,?,?,?,?,?)", new)
 
 
 def _derive_members(con):
@@ -869,8 +906,11 @@ def _derive_components(con):
     con.executemany("INSERT INTO edges VALUES (?,?,?,?,?,?,?,?,?)", new)
 
 
-def _sym_id(path, name, scope):
-    return "%s#%s%s" % (path, (scope + ".") if scope else "", name)
+def _sym_id(path, name, scope, kind=None):
+    """Stable node id. Props and emits get a kind prefix so `title` the prop and `title` the event
+    (or a method) never collide."""
+    pre = kind + ":" if kind in ("prop", "emit") else ""
+    return "%s#%s%s%s" % (path, (scope + ".") if scope else "", pre, name)
 
 
 def _caller_id(rel, caller, own):
@@ -919,7 +959,7 @@ def _resolve_tags(rel, lang, parsed, tags, resolver):
 
 
 def _write_graph(con, rel, lang, sym_rows, imps, call_rows, resolver, text="", herit_rows=(), tag_rows=(),
-                 ref_rows=(), member_kinds=None):
+                 ref_rows=(), member_kinds=None, emit_rows=(), use_rows=()):
     """Mirror one parsed file into the unified graph: nodes (file + symbols) and edges.
 
     Node ids are stable (`path` for a file, `path#Scope.name` for a symbol) so edges from other
@@ -928,7 +968,7 @@ def _write_graph(con, rel, lang, sym_rows, imps, call_rows, resolver, text="", h
     member_kinds = member_kinds or {}
     nodes = [(rel, "file", PurePosixPath(rel).name, rel, 1, None, None, None, None)]
     for n, k, _, ln, sc, pr in sym_rows:
-        nodes.append((_sym_id(rel, n, sc), k.replace("-", "_"), n, rel, ln, None, sc, pr,
+        nodes.append((_sym_id(rel, n, sc, k), k.replace("-", "_"), n, rel, ln, None, sc, pr,
                       member_kinds.get((sc, n)) if k == "store_member" else None))
     con.executemany("INSERT OR IGNORE INTO nodes VALUES (?,?,?,?,?,?,?,?,?)", nodes)
     edges = []
@@ -966,6 +1006,12 @@ def _write_graph(con, rel, lang, sym_rows, imps, call_rows, resolver, text="", h
             edges.append((sid, None, kind, line, "unresolved", name, rel, None, None))
     comp = _sym_id(rel, PurePosixPath(rel).stem, None)
     comp = comp if comp in own_ids else rel
+    emit_ids = {vue_template.norm(nd[2]): nd[0] for nd in nodes if nd[1] == "emit"}
+    for caller, event, line in emit_rows:  # emit('save') / $emit('save') -> the declared emit
+        dst = emit_ids.get(vue_template.norm(event))
+        edges.append((_caller_id(rel, caller, own), dst, "emits", line, "extracted" if dst else "unresolved", event,
+                      rel, rel if dst else None, None))
+    con.executemany("INSERT INTO tag_uses VALUES (?,?,?,?,?,?)", [(rel,) + tuple(u) for u in use_rows])
     con.executemany("INSERT INTO refs VALUES (?,?,?,?,?,?,?)",
                     [(_caller_id(rel, c, own), rel, k, m, ln, op, on) for c, k, m, ln, op, on in ref_rows])
     for tag, line, status, cpath, name in tag_rows:
@@ -1014,6 +1060,7 @@ def _drop(con, rel):
     con.execute("DELETE FROM tags WHERE path=?", (rel,))
     con.execute("DELETE FROM globals WHERE path=?", (rel,))
     con.execute("DELETE FROM refs WHERE src_path=?", (rel,))
+    con.execute("DELETE FROM tag_uses WHERE path=?", (rel,))
     con.execute("DELETE FROM nodes WHERE path=?", (rel,))
     con.execute("DELETE FROM edges WHERE src_path=?", (rel,))
     con.execute("DELETE FROM files WHERE path=?", (rel,))
@@ -1154,7 +1201,7 @@ def _relations(con, defs, budget, cap=5):
     who extends/implements it, and which test files call it."""
     if budget < 3 or not defs:
         return []
-    ids = [_sym_id(p, n, sc) for n, _, p, _, sc, _ in defs]
+    ids = [_sym_id(p, n, sc, k) for n, k, p, _, sc, _ in defs]
     mark = _in(ids)
     up = con.execute("SELECT kind, detail, dst_path, src_path, line FROM edges WHERE src_id IN %s AND kind IN "
                      "('extends','implements','extends_ext','implements_ext') ORDER BY line" % mark, ids).fetchall()
@@ -1163,7 +1210,8 @@ def _relations(con, defs, budget, cap=5):
     renders = con.execute("SELECT detail, dst_path, confidence, line FROM edges WHERE src_id IN %s AND kind IN "
                           "('renders','renders_ext') ORDER BY line" % mark, ids).fetchall()
     used = con.execute("SELECT DISTINCT src_id, src_path, line, kind FROM edges WHERE dst_id IN %s AND kind IN "
-                       "('reads_state','uses_store','uses_composable') ORDER BY src_path, line" % mark,
+                       "('reads_state','uses_store','uses_composable','passes_prop','listens','emits') "
+                       "ORDER BY src_path, line" % mark,
                        ids).fetchall()
     rendered = con.execute("SELECT DISTINCT src_id, src_path, line, confidence FROM edges WHERE dst_id IN %s AND "
                            "kind='renders' ORDER BY src_path, line" % mark, ids).fetchall()

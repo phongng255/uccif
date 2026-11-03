@@ -1,5 +1,29 @@
 # Changelog
 
+## 3.0.0-dev.18
+
+- **Props and emits** (phase 2, step 7a; `SCHEMA` 9, an older index is rebuilt automatically).
+  - `prop` / `emit` nodes for every form: `defineProps` / `defineEmits` with a type argument (inline
+    object type, call signatures `(e: 'save', x: T): void`, a named `interface`/`type` of the same
+    file) or runtime arguments (string array, object), `withDefaults(...)`, and the options-API
+    `props:` / `emits:` of `export default {}` / `defineComponent({})`. Ids carry a kind prefix
+    (`AppHeader.vue#AppHeader.prop:title`, `...emit:toggle-theme`) so a prop and an event of the
+    same name never collide; both are `contains` children of their component and show up in
+    `--symbol`.
+  - `emits` edges: `emit('save', ...)` in the script and `$emit('save')` in the template, from the
+    calling function (or the component) to the declared emit; an undeclared event is an
+    `unresolved` lead. These calls are no longer counted as unresolved function calls.
+  - `passes_prop` / `listens` (derived, `via` `~link`): for each component tag, `:title=`,
+    `v-bind:title=`, `title="..."`, `v-model`, `@toggle-theme=` become edges from the parent to the
+    prop / emit the child declares, matched across `kebab-case` / `camelCase`. Attributes the child
+    does not declare (`class`, `:key`, native events) add nothing. Works through global
+    registration and name-matched components, and is recomputed with the `renders` edges.
+  - `--symbol <prop or event>` shows `Used by (n)`: who passes it, who listens, who emits.
+- Measured: one-file update 7 ms on the fixture (budget 300 ms); DB +8%. Unresolved share: fixture
+  16% (was 21%), this repo 66%.
+- Not yet: slots, `provide`/`inject`, `v-bind="obj"`, Svelte, props read in the script
+  (`props.title`).
+
 ## 3.0.0-dev.17
 
 - **Pinia stores, composables and variables of known origin** (phase 2, step 6; `SCHEMA` 8, an
