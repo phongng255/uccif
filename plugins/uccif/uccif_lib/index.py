@@ -26,7 +26,7 @@ from uccif_lib import styles, ts_parse, vue_template
 from uccif_lib.resolve import JS_RESOLVE_EXT, Resolver  # noqa: F401 (re-exported)
 from uccif_lib.paths import LockTimeout, file_lock, now_iso
 
-SCHEMA = 12
+SCHEMA = 13
 MAX_BYTES = 1000000
 QUERY_LINES = 30
 
@@ -438,7 +438,8 @@ def _update(project, full, only=None, force=()):
                     res = (res[:2] + (res[2] + [(stem, n, o, ln) for n, o, ln in tpl.calls],) + res[3:8]
                            + (res[8] + [(stem, o, pr, ln) for o, pr, ln in tpl.reads],)
                            + (res[9] + [(stem, ev, ln) for ev, ln in tpl.emits],)
-                           + (res[10] + [(stem, k, v, d, ln) for k, v, d, ln in tpl.navs],) + res[11:])
+                           + (res[10] + [(stem, k, v, d, ln) for k, v, d, ln in tpl.navs],) + res[11:13]
+                           + (res[13] + [(stem, n, rw, ln) for n, rw, ln in tpl.idents],) + res[14:])
                     tpl_tags[rel] = tpl.tags
                     tpl_uses[rel] = tpl.uses
                     tpl_classes[rel] = tpl.classes
@@ -685,6 +686,30 @@ def _resolve_calls(rel, lang, parsed, resolver):
         origin = _pick(var_of.get(obj), caller)
         if origin:
             refs.append((caller, "read", prop, line, origin[1], origin[2]))
+    seen_refs = set()
+    local_vars = {n for n, k, _, sc in syms if n and k in ("variable", "ref", "constant") and sc is None}
+    local_types = {n for n, k, _, sc in syms if n and k in ("interface", "type", "class", "enum")}
+    for caller, name, rw, line in (parsed[13] if len(parsed) > 13 else ()):  # module variables / refs used
+        kind = "vwrite" if rw == "w" else "vread"
+        if name in local_vars and name not in bound:
+            target = (rel, name)
+        elif name in bound and bound[name][0] and bound[name][1] not in ("default", "*"):
+            target = (bound[name][0], bound[name][1])
+        else:
+            continue
+        if (caller, kind, target) not in seen_refs:
+            seen_refs.add((caller, kind, target))
+            refs.append((caller, kind, target[1], line, target[0], target[1]))
+    for caller, name, line in (parsed[14] if len(parsed) > 14 else ()):  # type references
+        if name in local_types and name not in bound:
+            target = (rel, name)
+        elif name in bound and bound[name][0] and bound[name][1] not in ("default", "*"):
+            target = (bound[name][0], bound[name][1])
+        else:
+            continue
+        if (caller, "type", target) not in seen_refs:
+            seen_refs.add((caller, "type", target))
+            refs.append((caller, "type", target[1], line, target[0], target[1]))
     for caller, name, how, line in (parsed[12] if len(parsed) > 12 else ()):  # f(handler): maybe a function
         if how == "this" or (name in local and name not in bound):
             refs.append((caller, "callback", name, line, rel, name))
@@ -830,7 +855,47 @@ def _derive_all(con):
     _derive_callbacks(con)
     _derive_builtins(con)
     _derive_css(con)
+    _derive_vars(con)
     _derive_uses(con)
+
+
+def _find_def(con, path, name, kinds, cache, depth=0):
+    """(node id, file) defining top-level `name` of one of `kinds` in `path`, following re-exports
+    (barrels) a few levels; None if not found."""
+    key = (path, name, kinds)
+    if key in cache:
+        return cache[key]
+    hit = con.execute("SELECT id, path FROM nodes WHERE path=? AND name=? AND kind IN %s AND scope IS NULL "
+                      "LIMIT 1" % _in(kinds), (path, name) + tuple(kinds)).fetchone()
+    if hit is None and depth < 4:
+        for dst, detail in con.execute("SELECT dst_path, detail FROM edges WHERE kind='re_exports' AND src_path=? "
+                                       "AND dst_path IS NOT NULL", (path,)).fetchall():
+            orig, _, alias = detail.partition(" as ")
+            if alias == name or (orig == "*" and alias == "*"):
+                hit = _find_def(con, dst, name if orig == "*" else orig, kinds, cache, depth + 1)
+                if hit:
+                    break
+    cache[key] = hit
+    return hit
+
+
+def _derive_vars(con):
+    """references_type (a type used in a signature, annotation or generic: extracted), reads / writes of
+    module-level variables and top-level refs of <script setup> (inferred: names are matched without
+    scope analysis, so a local that shadows them would count). One edge per user and target."""
+    new, seen, cache = [], set(), {}
+    spec = {"type": ("references_type", ("interface", "type", "class", "enum"), "extracted"),
+            "vread": ("reads", ("variable", "ref", "constant"), "inferred"),
+            "vwrite": ("writes", ("variable", "ref", "constant"), "inferred")}
+    for sid, sp, kind, member, line, op in con.execute(
+            "SELECT src_id, src_path, kind, member, line, origin_path FROM refs WHERE kind IN ('type','vread','vwrite') "
+            "ORDER BY src_path, line").fetchall():
+        ekind, kinds, conf = spec[kind]
+        hit = _find_def(con, op, member, kinds, cache)
+        if hit and (sid, hit[0], ekind) not in seen and hit[0] != sid:
+            seen.add((sid, hit[0], ekind))
+            new.append((sid, hit[0], ekind, line, conf, member, sp, hit[1], "~var"))
+    con.executemany("INSERT INTO edges VALUES (?,?,?,?,?,?,?,?,?)", new)
 
 
 def _derive_css(con):
@@ -1421,7 +1486,7 @@ def _relations(con, defs, budget, cap=5):
                           "('renders','renders_ext') ORDER BY line" % mark, ids).fetchall()
     used = con.execute("SELECT DISTINCT src_id, src_path, line, kind FROM edges WHERE dst_id IN %s AND kind IN "
                        "('reads_state','uses_store','uses_composable','passes_prop','listens','emits','navigates_to',"
-                       "'passes_callback','uses_css_var','defines_css_var','uses_class') "
+                       "'passes_callback','uses_css_var','defines_css_var','uses_class','references_type','reads','writes') "
                        "ORDER BY src_path, line" % mark,
                        ids).fetchall()
     rendered = con.execute("SELECT DISTINCT src_id, src_path, line, confidence FROM edges WHERE dst_id IN %s AND "
@@ -1533,7 +1598,8 @@ def _edge_text(con, src, dst):
                     ("uses_store", "uses store"), ("uses_composable", "uses composable"),
                     ("routes_to", "routes to"), ("navigates_to", "navigates to"),
                     ("passes_callback", "passes callback"), ("uses_css_var", "uses CSS variable"),
-                    ("defines_css_var", "sets CSS variable"), ("uses_class", "uses class")):
+                    ("defines_css_var", "sets CSS variable"), ("uses_class", "uses class"),
+                    ("references_type", "uses type"), ("writes", "writes"), ("reads", "reads")):
         e = con.execute("SELECT line, detail FROM edges WHERE kind=? AND src_path=? AND dst_path=? "
                         "ORDER BY line LIMIT 1", (k, src, dst)).fetchone()
         if e:
@@ -1549,7 +1615,8 @@ def _edge_text(con, src, dst):
 
 
 DEFAULT_KINDS = ("imports", "calls", "renders", "calls_action", "reads_state", "uses_store", "uses_composable",
-                 "routes_to", "navigates_to", "passes_callback", "uses_css_var", "defines_css_var", "uses_class")
+                 "routes_to", "navigates_to", "passes_callback", "uses_css_var", "defines_css_var", "uses_class",
+                 "references_type", "reads", "writes")
 
 
 def _users_of(con, rel, kinds=DEFAULT_KINDS, min_confidence=None):

@@ -14,7 +14,7 @@ from collections import namedtuple
 
 from uccif_lib import ts_parse
 
-Template = namedtuple("Template", "tags calls elements reads uses emits navs classes")
+Template = namedtuple("Template", "tags calls elements reads uses emits navs classes idents")
 
 HTML_TAGS = frozenset("""a abbr address area article aside audio b base bdi bdo blockquote body br button canvas
 caption cite code col colgroup data datalist dd del details dfn dialog div dl dt em embed fieldset figcaption
@@ -75,7 +75,7 @@ def _expr_target(value):
     return ts_parse.route_target(stmt.children[0]) if stmt is not None and stmt.children else None
 
 
-def _expr_calls(expr, line, handler, out, reads=None, emits=None, navs=None):
+def _expr_calls(expr, line, handler, out, reads=None, emits=None, navs=None, idents=None):
     """Functions called in a template expression. `handler`: an event handler, where a bare
     identifier (`@remove="remove"`) or member (`@x="a.b"`) is itself a call."""
     expr = expr.strip()
@@ -91,6 +91,10 @@ def _expr_calls(expr, line, handler, out, reads=None, emits=None, navs=None):
     tree = parser.parse(src.encode("utf-8"))
     sink = []
     for n in ts_parse._walk(tree.root_node):
+        if n.type == "identifier" and idents is not None:
+            rw = ts_parse._ident_use(n)
+            if rw and not _txt(n).startswith("$"):
+                idents.append((_txt(n), rw, line + n.start_point[0]))
         if n.type in ("call_expression", "new_expression"):
             ts_parse._js_call(n, sink)
             fn = n.child_by_field_name("function")
@@ -134,7 +138,7 @@ def parse(text):
     for a in _attrs(tpl.children[0]):
         if a[0] == "lang" and a[1] not in ("html", ""):
             return None
-    tags, calls, elements, reads, uses, emits, navs, classes = [], [], [], [], [], [], [], []
+    tags, calls, elements, reads, uses, emits, navs, classes, idents = [], [], [], [], [], [], [], [], []
     stack = list(reversed(tpl.children[1:]))
     while stack:
         n = stack.pop()
@@ -145,6 +149,8 @@ def parse(text):
                 line = head.start_point[0] + 1
                 elements.append((tag, line, attrs))
                 for an, av, al in attrs:
+                    if an.startswith("v-model") and av and _IDENT.match(av.strip()):
+                        idents.append((av.strip(), "w", al))
                     if an == "class" and av:
                         classes += [(c, al) for c in av.split() if re.match(r"^-?[_a-zA-Z][\w-]*$", c)]
                     elif an in (":class", "v-bind:class") and av:
@@ -164,20 +170,20 @@ def parse(text):
                     if value is None:
                         continue
                     if name.startswith(("@", "v-on:")):
-                        _expr_calls(value, aline, True, calls, reads, emits, navs)
+                        _expr_calls(value, aline, True, calls, reads, emits, navs, idents)
                     elif name.startswith((":", "v-bind", "v-if", "v-else-if", "v-show", "v-model", "v-html",
                                           "v-text", "v-memo")) or name.startswith("v-slot"):
-                        _expr_calls(value, aline, False, calls, reads, emits, navs)
+                        _expr_calls(value, aline, False, calls, reads, emits, navs, idents)
                     elif name == "v-for":
                         m = _FOR.match(value)
-                        _expr_calls(m.group(1) if m else value, aline, False, calls, reads, emits, navs)
+                        _expr_calls(m.group(1) if m else value, aline, False, calls, reads, emits, navs, idents)
             stack.extend(reversed(n.children[1:]))
         elif n.type == "text":
             base = n.start_point[0] + 1
             body = _txt(n)
             for m in _INTERP.finditer(body):
-                _expr_calls(m.group(1), base + body.count("\n", 0, m.start(1)), False, calls, reads, emits, navs)
-    return Template(tags, calls, elements, reads, uses, emits, navs, classes)
+                _expr_calls(m.group(1), base + body.count("\n", 0, m.start(1)), False, calls, reads, emits, navs, idents)
+    return Template(tags, calls, elements, reads, uses, emits, navs, classes, idents)
 
 
 _NOT_PROPS = frozenset(("class", "style", "key", "ref", "is", "slot", "v-slot", "id"))
