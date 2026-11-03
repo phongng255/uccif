@@ -14,7 +14,7 @@ from collections import namedtuple
 
 from uccif_lib import ts_parse
 
-Template = namedtuple("Template", "tags calls elements")
+Template = namedtuple("Template", "tags calls elements reads")
 
 HTML_TAGS = frozenset("""a abbr address area article aside audio b base bdi bdo blockquote body br button canvas
 caption cite code col colgroup data datalist dd del details dfn dialog div dl dt em embed fieldset figcaption
@@ -46,7 +46,7 @@ def _txt(n):
     return n.text.decode("utf-8", errors="replace") if n is not None else ""
 
 
-def _expr_calls(expr, line, handler, out):
+def _expr_calls(expr, line, handler, out, reads=None):
     """Functions called in a template expression. `handler`: an event handler, where a bare
     identifier (`@remove="remove"`) or member (`@x="a.b"`) is itself a call."""
     expr = expr.strip()
@@ -64,6 +64,11 @@ def _expr_calls(expr, line, handler, out):
     for n in ts_parse._walk(tree.root_node):
         if n.type in ("call_expression", "new_expression"):
             ts_parse._js_call(n, sink)
+        elif n.type == "member_expression" and reads is not None:  # obj.prop that is not a call
+            o, prop, par = n.child_by_field_name("object"), n.child_by_field_name("property"), n.parent
+            if o is not None and o.type == "identifier" and prop is not None and not (
+                    par is not None and par.type == "call_expression" and par.child_by_field_name("function") == n):
+                reads.append((_txt(o), _txt(prop), line + n.start_point[0]))
     for _caller, name, obj, ln in sink:
         if not name.startswith("$"):  # $emit, $router ...: Vue's own, not repo functions
             out.append((name, obj, line + ln - 1))
@@ -84,7 +89,7 @@ def parse(text):
     for a in _attrs(tpl.children[0]):
         if a[0] == "lang" and a[1] not in ("html", ""):
             return None
-    tags, calls, elements = [], [], []
+    tags, calls, elements, reads = [], [], [], []
     stack = list(reversed(tpl.children[1:]))
     while stack:
         n = stack.pop()
@@ -100,20 +105,20 @@ def parse(text):
                     if value is None:
                         continue
                     if name.startswith(("@", "v-on:")):
-                        _expr_calls(value, aline, True, calls)
+                        _expr_calls(value, aline, True, calls, reads)
                     elif name.startswith((":", "v-bind", "v-if", "v-else-if", "v-show", "v-model", "v-html",
                                           "v-text", "v-memo")) or name.startswith("v-slot"):
-                        _expr_calls(value, aline, False, calls)
+                        _expr_calls(value, aline, False, calls, reads)
                     elif name == "v-for":
                         m = _FOR.match(value)
-                        _expr_calls(m.group(1) if m else value, aline, False, calls)
+                        _expr_calls(m.group(1) if m else value, aline, False, calls, reads)
             stack.extend(reversed(n.children[1:]))
         elif n.type == "text":
             base = n.start_point[0] + 1
             body = _txt(n)
             for m in _INTERP.finditer(body):
-                _expr_calls(m.group(1), base + body.count("\n", 0, m.start(1)), False, calls)
-    return Template(tags, calls, elements)
+                _expr_calls(m.group(1), base + body.count("\n", 0, m.start(1)), False, calls, reads)
+    return Template(tags, calls, elements, reads)
 
 
 def _tag(node):

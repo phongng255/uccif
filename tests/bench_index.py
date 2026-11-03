@@ -70,7 +70,7 @@ def bench(target, repeat):
             counts["edges"] = con.execute("SELECT count(*) FROM edges").fetchone()[0]
             # edges that point at the repo or at a package are fully known; "unresolved" are leads
             un = con.execute("SELECT count(*) FROM edges WHERE confidence='unresolved'").fetchone()[0]
-            ours = con.execute("SELECT count(*) FROM edges WHERE kind NOT IN ('imports_ext', 'calls_ext', 'extends_ext', 'implements_ext', 'renders_ext', 'contains', 'tests')").fetchone()[0]
+            ours = con.execute("SELECT count(*) FROM edges WHERE kind NOT IN ('imports_ext', 'calls_ext', 'extends_ext', 'implements_ext', 'renders_ext', 'contains', 'tests', 'uses_store', 'uses_composable', 'reads_state', 'calls_action')").fetchone()[0]
             counts["unresolved_pct"] = round(100.0 * un / ours) if ours else 0
         except Exception:
             counts.update(nodes=0, edges=0, unresolved_pct=0)

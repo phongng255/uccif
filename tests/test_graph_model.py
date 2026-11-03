@@ -57,8 +57,10 @@ def test_call_edges_point_at_symbol_nodes(project, vue_app, monkeypatch):
     e = [x for x in _edges(con, kind="calls", src_path="src/composables/useSync.ts") if x[5] == "saveTrip"]
     assert e and e[0][4] == "extracted" and e[0][1] == "src/utils/firebase.ts#saveTrip"
     assert e[0][0] == "src/composables/useSync.ts#sync"  # caller is the enclosing function's node
-    unres = _edges(con, kind="calls", src_path="src/components/ExpenseList.vue", confidence="unresolved")
-    assert {x[5] for x in unres} >= {"addExpense", "removeExpense"} and all(x[1] is None for x in unres)
+    # `store.addExpense()` is no longer a lead: it is tied to the store action (roadmap B4)
+    assert not _edges(con, kind="calls", src_path="src/components/ExpenseList.vue", confidence="unresolved")
+    act = _edges(con, kind="calls_action", src_path="src/components/ExpenseList.vue")
+    assert {x[5] for x in act} == {"addExpense", "removeExpense"} and all(x[4] == "extracted" for x in act)
 
 
 def test_confidence_filter(project, vue_app, monkeypatch):
@@ -138,7 +140,7 @@ def test_package_calls_are_external_not_unresolved(project, vue_app, monkeypatch
     assert {"ref", "onMounted"} <= ext  # imported from 'vue'
     assert all(e[4] == "extracted" and e[1] is None for e in _edges(con, kind="calls_ext"))
     unres = {e[5] for e in _edges(con, confidence="unresolved")}
-    assert "ref" not in unres and "addExpense" in unres
+    assert "ref" not in unres and "emit" in unres
     # package calls never show up as "possibly called by"
     assert "Possibly called by" not in "\n".join(index.query_symbol(project, "ref"))
 
