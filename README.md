@@ -107,8 +107,24 @@ codegraph install --target=claude --location=global --yes
 codegraph init --yes
 ```
 
-then adds `.codegraph/` to `.gitignore` and checks `codegraph status`. Restart Claude Code once
+then keeps `.codegraph/` out of git and checks `codegraph status`. Restart Claude Code once
 afterwards so the `codegraph_explore` MCP tool loads. `uccif codegraph` prints the current state.
+
+**Automatic from then on** (option `auto_setup`, default on): when the `codegraph` CLI is on the
+machine, opening any project indexes it in the background (`codegraph init --yes`, project-local;
+`.codegraph/` goes into `.git/info/exclude`, your `.gitignore` is not touched) and writes
+**project skills** from the graph:
+
+| Skill | Content |
+|---|---|
+| `.claude/skills/<project>-map` | modules (dir, size, role), entry points, routes, most-used symbols, commands, how to look code up |
+| `.claude/skills/<project>-bugfix` | shortest path from a symptom to a tested fix: `codegraph explore` → callers → impact → smallest fix → `codegraph affected` → the project's own test commands (sub-packages included) |
+| `.claude/skills/<project>-mod-*` | one per sizeable module: key files and symbols with `file:line`, routes, the modules it depends on / is used by, tests and how to run one |
+
+They are rewritten only when the project's structure changes, and only files UCCIF wrote and
+nobody edited (a sha marker tells); text inside the `<!-- uccif:notes -->` block survives every
+rewrite, a file without the marker is never touched. By hand: `uccif skills generate [--force]
+[--dry-run]`, `uccif skills list`. Commit them to share with your team.
 
 Do not use `npx codegraph`: the unscoped npm package `codegraph` is an unrelated project with no
 CLI. The real one is `@colbymchenry/codegraph` (`npx -y @colbymchenry/codegraph` runs its installer).
@@ -121,4 +137,5 @@ CLI. The real one is `@colbymchenry/codegraph` (`npx -y @colbymchenry/codegraph`
 | 3.1 | `[src:]` doc-claims check |
 | 3.0-dev.11+ | code graph: optional tree-sitter parsing (done), call edges (done), multi-level `--impact` and `--path` queries (done), HTML graph view `uccif index graph` (done); phase 2 (nodes/edges model, Vue/Pinia/router edges, deeper resolution) in progress, step 0 fixture + benchmark done, nodes/edges model with confidence done, config-driven aliases + barrels + Python roots done, extends/implements + contains + function-level tests done, Vue template edges (`renders`, template calls) done, Pinia stores + composables + variable origins done, props/emits + vue-router done, callbacks + late resolution + built-in methods done, CSS variables + classes done, type references + variable reads/writes done, git co-change done, new graph queries done, graph view with kind filters / component tree / function level done, Go / Rust / Java (layer E) done; framework layer (Vue templates, Pinia, vue-router, CSS links) removed in dev.31: UCCIF is one framework-neutral core, project-specific knowledge goes in your own rules / skills / agents |
 | 3.0-dev.33 | own code index and graph removed; CodeGraph setup skill + hooks that route code lookups to it |
+| 3.0-dev.34 | automatic CodeGraph indexing + project skills (map, bugfix, modules) generated from the graph |
 | 3.3 | `uccif-strict` (blocking gates), only if needed |

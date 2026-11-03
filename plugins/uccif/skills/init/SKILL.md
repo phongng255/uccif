@@ -11,10 +11,10 @@ at the lowest token cost. Read little, write short, mark every claim.
 
 ## Steps
 
-1. **Mechanical survey.** Run `uccif detect` (JSON). If `detect.codegraph.indexed` is false,
-   run the `uccif:codegraph` skill first. Use `codegraph explore "<entry> dependencies"` /
-   `codegraph files` to map the code instead of opening files. Do not re-derive what it reports
-   (languages, manifests, scripts, test dirs, entry candidates, LSP status, v2 traces).
+1. **Mechanical survey.** `uccif detect` (JSON); `detect.codegraph.indexed` false → run the
+   `uccif:codegraph` skill first. Then read the generated `<project>-map` skill (modules, routes,
+   entry points, commands) and map the rest with `codegraph explore` / `codegraph files`, not by
+   opening files. Do not re-derive what these report.
 2. **Choose the reader.**
    - `large_repo: false` → survey yourself.
    - `large_repo: true` → delegate to the `uccif:project-analyst` agent, one call per top-level

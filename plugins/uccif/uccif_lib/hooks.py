@@ -19,7 +19,7 @@ import sys
 import time
 from pathlib import Path
 
-from uccif_lib import codegraph, detect, drift, log, task, usage
+from uccif_lib import codegraph, detect, drift, log, skillgen, task, usage
 from uccif_lib.paths import CORE_MARKER, data_root, read_json, resolve_project, write_json
 from uccif_lib.rules import core_rules, user_rules
 
@@ -51,7 +51,8 @@ def options():
     cached = read_json(data_root() / CORE_MARKER, {})
     lang = os.environ.get("CLAUDE_PLUGIN_OPTION_REPLY_LANGUAGE") or cached.get("reply_language") or "vi"
     report = _bool(os.environ.get("CLAUDE_PLUGIN_OPTION_TOKEN_REPORT"), cached.get("token_report", True))
-    return {"reply_language": lang, "token_report": report}
+    setup = _bool(os.environ.get("CLAUDE_PLUGIN_OPTION_AUTO_SETUP"), cached.get("auto_setup", True))
+    return {"reply_language": lang, "token_report": report, "auto_setup": setup}
 
 
 def project_config(project):
@@ -149,8 +150,15 @@ def on_session_start(data, project):
         if extra:
             parts.append(extra)
             n_user = extra.count("USER RULES (")
-    spawn(["maintain"], project)  # drift check in the background
+    spawn(["maintain"], project)  # drift check, CodeGraph index + project skills in the background
     parts.append(codegraph.context_line(project))
+    mine = skillgen.generated(project)
+    if mine:
+        maps = [n for n in mine if n.endswith("-map")]
+        fixes = [n for n in mine if n.endswith("-bugfix")]
+        parts.append("Project skills generated from CodeGraph in .claude/skills/: %s%s, %d module skills. "
+                     "Use the map skill to know where code lives and the bugfix skill for any reported bug."
+                     % (", ".join(maps + fixes), "" if maps else " (no map)", len(mine) - len(maps) - len(fixes)))
     offer = lsp_offer(project)
     if offer:
         parts.append(offer)

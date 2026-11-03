@@ -34,10 +34,14 @@ npm package `codegraph` is an unrelated project with no CLI.
    machine-specific data; never commit it).
 6. **Check.** `codegraph status` must show files and symbols. Then try one real lookup:
    `codegraph explore "<main entry point or a module name>"`.
+7. **Project skills.** `uccif skills generate` writes `.claude/skills/<project>-map`,
+   `<project>-bugfix` and one `<project>-mod-*` per sizeable module from the graph. Hooks
+   refresh them by themselves when the project's structure changes (option `auto_setup`).
 
 ## Output to the user (in their language)
 
-- What was installed / wired / indexed, with the `codegraph status` numbers.
+- What was installed / wired / indexed, with the `codegraph status` numbers, and the skills
+  written (they can be committed to share with the team).
 - If step 3 ran: **restart Claude Code** (or start a new session) so the `codegraph_explore`
   tool loads; until then use `codegraph explore "<question>"` in Bash.
 - Undo: `codegraph uninit` (this project), `codegraph uninstall` (everything).

@@ -217,7 +217,7 @@ def test_session_start_offers_codegraph_when_missing(base, project, monkeypatch)
 def test_session_start_cli_without_index(base, project, monkeypatch):
     _cg_env(monkeypatch, project, cli=True)
     _, out = run_hook("session-start", dict(base, source="startup"))
-    assert "no index yet" in ctx(out) and "codegraph init --yes" in ctx(out)
+    assert "indexed in the background" in ctx(out) and "codegraph init --yes" in ctx(out)
 
 
 def test_session_start_codegraph_active(base, project, monkeypatch):

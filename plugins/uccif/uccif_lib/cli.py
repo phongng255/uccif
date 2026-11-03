@@ -38,6 +38,11 @@ def build_parser():
     cl.add_argument("--no-findings", action="store_true")
 
     sub.add_parser("codegraph", help="CodeGraph state for this project as JSON (cli, indexed, mcp)")
+    sk = sub.add_parser("skills", help="project skills generated from the CodeGraph index").add_subparsers(dest="action")
+    sg = sk.add_parser("generate", help="write/refresh .claude/skills/<project>-map, -bugfix, -mod-*")
+    sg.add_argument("--force", action="store_true", help="also overwrite generated files you edited")
+    sg.add_argument("--dry-run", action="store_true", help="show what would change, write nothing")
+    sk.add_parser("list", help="generated skills present in .claude/skills/")
 
     dr = sub.add_parser("drift", help="structural changes that make docs stale").add_subparsers(dest="action")
     dr.add_parser("check")
@@ -99,8 +104,31 @@ def _drift_cmd(args):
 
 
 def maintain():
-    """Background upkeep run by hooks: check drift (CodeGraph keeps its own index in sync)."""
-    drift.check(resolve_project())
+    """Background upkeep run by hooks: drift check; with auto_setup on, index the project with
+    CodeGraph when its CLI is installed and refresh the generated project skills when the
+    project's shape changed. CodeGraph keeps its own index in sync after that."""
+    proj = resolve_project()
+    drift.check(proj)
+    if hooks.options()["auto_setup"]:
+        from uccif_lib import skillgen
+        codegraph.auto_init(proj)
+        skillgen.auto(proj)
+    return 0
+
+
+def _skills_cmd(args):
+    from uccif_lib import skillgen
+    proj = resolve_project()
+    if args.action == "list":
+        names = skillgen.generated(proj)
+        print("\n".join(names) if names else "No generated project skills yet (`uccif skills generate`).")
+        return 0
+    try:
+        res = skillgen.generate(proj, force=args.force, dry_run=args.dry_run)
+    except skillgen.NoIndex as e:
+        print("Cannot generate skills: %s. Run the uccif:codegraph skill first." % e)
+        return 1
+    print("\n".join(skillgen.report(res)))
     return 0
 
 
@@ -171,6 +199,8 @@ def main(argv=None):
             return 0
         if args.cmd == "log" and args.action:
             return _log_cmd(args)
+        if args.cmd == "skills" and args.action:
+            return _skills_cmd(args)
         if args.cmd == "codegraph":
             proj = resolve_project()
             st = dict(codegraph.state(proj), gitignored=codegraph.gitignored(proj), package=codegraph.PACKAGE)

@@ -1,5 +1,27 @@
 # Changelog
 
+## 3.0.0-dev.34
+
+- **Project skills from the CodeGraph graph** (`skillgen.py`, `uccif skills generate|list`), for any
+  language and framework: `.claude/skills/<project>-map` (modules with size and role, entry points,
+  routes, most-used symbols, commands), `<project>-bugfix` (shortest path from a symptom to a tested
+  fix with CodeGraph and the project's own test commands) and `<project>-mod-*` (one per sizeable
+  module: key files / symbols with `file:line`, routes, neighbours, tests). Modules come from the
+  directory tree (container dirs such as `src/`, `packages/`, `internal/` are opened up, large dirs
+  split); facts from `.codegraph/codegraph.db`, opened read-only. Dot-dirs and non-code files
+  (yaml, json, markdown ...) are not modules.
+- Safe regeneration: a sha marker per file; only unedited generated files are rewritten (`--force`
+  overrides), the `<!-- uccif:notes -->` block is kept, files without the marker are never touched,
+  skills of modules that disappeared are removed when unedited and without notes.
+- **Automatic setup** (new option `auto_setup`, default on): `uccif maintain` (SessionStart / Stop,
+  in the background) runs `codegraph init --yes` when the CLI is installed and the project has no
+  index (one run at a time, a failure retried after a day), keeps `.codegraph/` out of git through
+  `.git/info/exclude`, and regenerates the project skills when the project's shape changes.
+  SessionStart names the generated skills.
+- `stack.py`: test runners and commands per package of a monorepo (`cd backend && python -m pytest
+  -q`, `cd web && npx vitest run <file>`), Makefile / justfile targets, go / cargo / maven / gradle /
+  rspec / phpunit / flutter / mix / dotnet defaults.
+
 ## 3.0.0-dev.33
 
 - **Own code index and graph removed** (`index.py`, `graph.py`, `queries.py`, the tree-sitter
