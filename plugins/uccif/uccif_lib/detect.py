@@ -33,14 +33,17 @@ MANIFESTS = ("package.json", "pyproject.toml", "requirements.txt", "setup.py", "
              "tsconfig.json", "Makefile", "Dockerfile", "docker-compose.yml")
 ENTRY_NAMES = ("main.ts", "main.js", "index.ts", "index.js", "App.vue", "main.py",
                "app.py", "__main__.py", "manage.py", "main.go", "main.rs", "server.js", "server.ts")
+# Plugin names are the official ones listed in the Claude Code plugins reference
+# (checked 2026-11). None = no official plugin confirmed: check /plugin Discover.
 LSP_BINARIES = {
     "typescript": ("typescript-language-server", "typescript-lsp"),
     "javascript": ("typescript-language-server", "typescript-lsp"),
-    "vue": ("vue-language-server", "(no official plugin; see docs)"),
+    "vue": ("vue-language-server", None),
     "python": ("pyright-langserver", "pyright-lsp"),
-    "go": ("gopls", "gopls-lsp"),
+    "go": ("gopls", None),
     "rust": ("rust-analyzer", "rust-analyzer-lsp"),
 }
+NO_PLUGIN = "none confirmed; search 'lsp' in /plugin Discover"
 LARGE_REPO = 300
 
 
@@ -137,7 +140,8 @@ def _lsp_status(langs):
     for lang in langs:
         if lang in LSP_BINARIES:
             binary, plugin = LSP_BINARIES[lang]
-            out[lang] = {"binary": binary, "installed": bool(shutil.which(binary)), "plugin": plugin}
+            out[lang] = {"binary": binary, "installed": bool(shutil.which(binary)),
+                         "plugin": plugin or NO_PLUGIN}
     return out
 
 

@@ -93,6 +93,8 @@ def summarize(transcript_path, context_window="auto"):
 
 
 def fmt(n):
+    if n >= 1000000000:
+        return "%.2fB" % (n / 1e9)
     if n >= 1000000:
         return "%.2fM" % (n / 1e6)
     if n >= 1000:

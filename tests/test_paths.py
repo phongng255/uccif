@@ -1,3 +1,4 @@
+import os
 import shutil
 
 from conftest import git
@@ -62,3 +63,30 @@ def test_non_git_dir_works(tmp_path, monkeypatch):
     p = paths.resolve_project()
     assert p.root == d.resolve() and p.root_commit is None
     assert p.data_dir.is_dir()
+
+
+def test_fallback_data_dir_ignores_sibling_plugins(tmp_path, monkeypatch):
+    monkeypatch.delenv("UCCIF_DATA_DIR")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    base = tmp_path / ".claude" / "plugins" / "data"
+    core = base / "uccif-mymarket"
+    sibling = base / "uccif-strict-uccif"
+    for d in (core, sibling):
+        (d / "projects").mkdir(parents=True)
+    (core / paths.CORE_MARKER).write_text("{}")
+    os.utime(str(core), (1, 1))  # the sibling is the most recently used dir
+    assert paths.data_root_source() == (core, "fallback-marker")
+    exact = base / paths.CORE_DATA_NAME
+    exact.mkdir()
+    (exact / paths.CORE_MARKER).write_text("{}")
+    assert paths.data_root_source() == (exact, "fallback-exact")
+
+
+def test_root_commit_is_cached_after_first_resolve(project, repo, monkeypatch):
+    calls = []
+    real = paths.root_commit
+    monkeypatch.setattr(paths, "root_commit", lambda root: calls.append(root) or real(root))
+    again = paths.resolve_project()
+    assert again.root_commit == project.root_commit
+    assert calls == []

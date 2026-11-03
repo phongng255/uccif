@@ -13,10 +13,16 @@ import json
 import os
 import shutil
 import subprocess
+import time
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
 DOCS_SUBDIR = Path(".claude") / "uccif"
+# Data dir id of the core plugin installed as uccif@uccif, and the file only the
+# core plugin writes there (SessionStart caches userConfig in it).
+CORE_DATA_NAME = "uccif-uccif"
+CORE_MARKER = "options.json"
 
 
 def now_iso():
@@ -29,6 +35,47 @@ def write_text_atomic(path, text):
     tmp = path.with_name(path.name + ".tmp")
     tmp.write_text(text, encoding="utf-8")
     os.replace(str(tmp), str(path))
+
+
+class LockTimeout(Exception):
+    pass
+
+
+@contextmanager
+def file_lock(path, timeout=3.0, stale=30.0):
+    """Cross-process lock via an O_EXCL lock file (stdlib, works on Windows).
+
+    Two sessions on one project share its task state; this keeps their
+    read-modify-write cycles from interleaving. A lock older than `stale`
+    seconds is assumed to belong to a crashed process and is taken over.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    deadline = time.time() + timeout
+    while True:
+        try:
+            fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            try:
+                if time.time() - path.stat().st_mtime > stale:
+                    path.unlink()
+                    continue
+            except OSError:
+                continue  # released (or taken over) between the two calls
+            if time.time() >= deadline:
+                raise LockTimeout("%s is held by another process" % path)
+            time.sleep(0.05)
+            continue
+        os.write(fd, str(os.getpid()).encode("ascii"))
+        os.close(fd)
+        break
+    try:
+        yield
+    finally:
+        try:
+            path.unlink()
+        except OSError:
+            pass
 
 
 def read_json(path, default=None):
@@ -67,16 +114,24 @@ def data_root_source():
 
     Hooks receive CLAUDE_PLUGIN_DATA; commands run through Claude's Bash tool do
     not, so SessionStart exports UCCIF_DATA_DIR via CLAUDE_ENV_FILE. As a last
-    resort pick the most recently used ~/.claude/plugins/data/uccif-* dir.
+    resort use the core plugin's data dir under ~/.claude/plugins/data/: the
+    one installed from this marketplace (uccif-uccif), else the most recently
+    used dir holding the core marker. A bare uccif-* glob is not enough: sibling
+    plugins (uccif-strict, uccif-codeintel) get data dirs with the same prefix.
     """
     for var in ("UCCIF_DATA_DIR", "CLAUDE_PLUGIN_DATA"):
         val = os.environ.get(var)
         if val:
             return Path(val), var
     base = Path.home() / ".claude" / "plugins" / "data"
-    cands = [p for p in base.glob("uccif-*") if p.is_dir()]
+    exact = base / CORE_DATA_NAME
+    if (exact / CORE_MARKER).exists():
+        return exact, "fallback-exact"
+    cands = [p for p in base.glob("uccif-*") if (p / CORE_MARKER).is_file()]
     if cands:
-        return max(cands, key=lambda p: p.stat().st_mtime), "fallback-glob"
+        return max(cands, key=lambda p: (p / CORE_MARKER).stat().st_mtime), "fallback-marker"
+    if exact.is_dir():
+        return exact, "fallback-exact"
     return Path.home() / ".uccif", "fallback-home"
 
 
@@ -132,7 +187,13 @@ def resolve_project(cwd=None, create=True):
     projects_dir = data_root() / "projects"
     data_dir = projects_dir / path_key(root)
     meta_path = data_dir / "meta.json"
-    commit = root_commit(root)
+    meta = read_json(meta_path, {}) or {}
+    # `git rev-list --max-parents=0` walks the whole history, and this runs on
+    # every hook: reuse the commit cached in meta.json for a known path.
+    if meta.get("path") == str(root) and meta.get("root_commit"):
+        commit = meta["root_commit"]
+    else:
+        commit = root_commit(root)
     renamed_from = None
 
     if not data_dir.exists() and create:
@@ -144,7 +205,7 @@ def resolve_project(cwd=None, create=True):
 
     if create:
         data_dir.mkdir(parents=True, exist_ok=True)
-        meta = read_json(meta_path, {})
+        meta = read_json(meta_path, {}) or {}
         changed = (
             meta.get("path") != str(root)
             or (commit and meta.get("root_commit") != commit)

@@ -4,7 +4,8 @@ Rules for every handler:
 - the core plugin never blocks: no exit 2, no decision "block", no "deny";
   things a strict mode would stop are logged as decision "would_block";
 - any exception is logged as decision "error" and the process still exits 0;
-- exactly one hooks.jsonl line per invocation;
+- exactly one hooks.jsonl line per invocation, except PreToolUse calls that
+  skip (every main-agent Bash call): logging those would bloat hooks.jsonl;
 - output to Claude goes through hookSpecificOutput.additionalContext, output
   to the user through systemMessage (Stop token line only).
 """
@@ -17,7 +18,7 @@ import time
 from pathlib import Path
 
 from uccif_lib import log, task, usage
-from uccif_lib.paths import data_root, read_json, resolve_project, write_json
+from uccif_lib.paths import CORE_MARKER, data_root, read_json, resolve_project, write_json
 from uccif_lib.rules import core_rules
 
 SLOW_MS = {"session-start": 3000, "user-prompt-submit": 300, "pre-tool-use": 300,
@@ -45,7 +46,7 @@ def _bool(val, default):
 def options():
     """userConfig values. Hooks get CLAUDE_PLUGIN_OPTION_*; Bash-run commands
     don't, so SessionStart caches them in <data_root>/options.json."""
-    cached = read_json(data_root() / "options.json", {})
+    cached = read_json(data_root() / CORE_MARKER, {})
     lang = os.environ.get("CLAUDE_PLUGIN_OPTION_REPLY_LANGUAGE") or cached.get("reply_language") or "vi"
     report = _bool(os.environ.get("CLAUDE_PLUGIN_OPTION_TOKEN_REPORT"), cached.get("token_report", True))
     return {"reply_language": lang, "token_report": report}
@@ -82,7 +83,7 @@ def on_session_start(data, project):
     log.session(project, session=sid, type="start", source=source,
                 task=cur["id"] if cur and cur.get("status") != "done" else None)
 
-    write_json(data_root() / "options.json", opts)
+    write_json(data_root() / CORE_MARKER, opts)
     env_file = os.environ.get("CLAUDE_ENV_FILE")
     if env_file:
         quoted = "'" + str(data_root()).replace("'", "'\\''") + "'"
@@ -262,10 +263,12 @@ def run(event, stdin=None, stdout=None):
     fields.update(event=event, ms=ms)
     if ms > SLOW_MS.get(event, 1000):
         fields["slow"] = True
+    quiet = event == "pre-tool-use" and fields.get("decision") == "skip" and not fields.get("slow")
     try:
         if project is None:
             project = resolve_project()
-        log.hook(project, **fields)
+        if not quiet:
+            log.hook(project, **fields)
     except Exception:
         pass
     if out:

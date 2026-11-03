@@ -50,12 +50,15 @@ def test_doctor_warns_on_fresh_project(project):
 
 
 def run_cli(*args, cwd, stdin=None):
-    return subprocess.run([str(LAUNCHER)] + list(args), cwd=str(cwd), input=stdin,
+    # On Windows the launcher is a sh script run by Git Bash, as Claude Code does.
+    cmd = (["bash", LAUNCHER.as_posix()] if os.name == "nt" else [str(LAUNCHER)]) + list(args)
+    return subprocess.run(cmd, cwd=str(cwd), input=stdin,
                           capture_output=True, text=True, env=dict(os.environ))
 
 
 def test_launcher_is_executable_and_runs(repo):
-    assert os.access(str(LAUNCHER), os.X_OK)
+    if os.name != "nt":
+        assert os.access(str(LAUNCHER), os.X_OK)
     r = run_cli("version", cwd=repo)
     assert r.returncode == 0 and r.stdout.startswith("uccif 3.")
 

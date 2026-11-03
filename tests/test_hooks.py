@@ -18,7 +18,11 @@ def ctx(out):
 
 @pytest.mark.parametrize("event", sorted(hooks.HANDLERS))
 def test_every_hook_exits_0_and_logs_one_line(event, base, project):
-    code, _ = run_hook(event, dict(base))
+    data = dict(base)
+    if event == "pre-tool-use":  # a main-agent PreToolUse skips and is not logged
+        data.update(tool_name="Bash", agent_id="a1", agent_type="uccif:change-reviewer",
+                    tool_input={"command": "git status"})
+    code, _ = run_hook(event, data)
     assert code == 0
     rows = hook_log(project)
     assert len(rows) == 1 and rows[0]["event"] == event and "ms" in rows[0]
@@ -102,7 +106,11 @@ def test_pre_tool_use_agent_bash(agent, cmd, decision, base, project):
         data.update(agent_id="a1", agent_type=agent)
     code, out = run_hook("pre-tool-use", data)
     assert code == 0 and out is None
-    assert hook_log(project)[0]["decision"] == decision
+    rows = hook_log(project)
+    if decision == "skip":
+        assert rows == []  # skipped PreToolUse calls are not logged
+    else:
+        assert rows[0]["decision"] == decision
 
 
 def test_post_tool_use_records_file(base, project):

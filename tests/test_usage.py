@@ -50,3 +50,7 @@ def test_fmt():
     assert usage.fmt(999) == "999"
     assert usage.fmt(12400) == "12.4k"
     assert usage.fmt(5690000) == "5.69M"
+
+
+def test_fmt_billions():
+    assert usage.fmt(2401440000) == "2.40B"

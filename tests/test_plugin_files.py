@@ -34,16 +34,23 @@ def test_manifests_parse_and_versions_match():
     assert plugin["name"] == "uccif" and plugin["version"] == __version__
 
 
-def test_hooks_json_uses_exec_form_and_known_handlers():
+def test_hooks_json_uses_quoted_shell_form_and_known_handlers():
+    # Shell form, not exec form: exec-form `args` are dropped on some Windows builds.
     cfg = json.loads((PLUGIN / "hooks" / "hooks.json").read_text())["hooks"]
     assert set(cfg) == set(EVENT_TO_HANDLER)
     for event, groups in cfg.items():
         for g in groups:
             for h in g["hooks"]:
-                assert h["command"] == "${CLAUDE_PLUGIN_ROOT}/bin/uccif"
-                assert h["args"] == ["hook", EVENT_TO_HANDLER[event]]
-                assert h["args"][1] in hooks.HANDLERS
+                assert "args" not in h
+                assert h["command"] == '"${CLAUDE_PLUGIN_ROOT}/bin/uccif" hook %s' % EVENT_TO_HANDLER[event]
+                assert EVENT_TO_HANDLER[event] in hooks.HANDLERS
                 assert 0 < h["timeout"] <= 10
+
+
+def test_launcher_sets_no_pythonpath():
+    text = (PLUGIN / "bin" / "uccif").read_text()
+    assert "PYTHONPATH" not in text.replace("No PYTHONPATH", "")
+    assert (PLUGIN / "scripts" / "uccif_main.py").exists()
 
 
 SKILLS = sorted((PLUGIN / "skills").glob("*/SKILL.md"))

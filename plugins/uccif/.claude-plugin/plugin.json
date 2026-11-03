@@ -1,7 +1,7 @@
 {
   "name": "uccif",
   "displayName": "UCCIF",
-  "version": "3.0.0-dev.1",
+  "version": "3.0.0-dev.2",
   "description": "Task memory, token reporting, project docs and a code-change workflow for any repository. Hooks inject CORE RULES; the core plugin never blocks.",
   "author": {
     "name": "phongng255",

@@ -71,3 +71,48 @@ def test_summary_lines(project):
     task.start(project, "Fix login", "bug")
     task.checkpoint(project, next="repro")
     assert task.summary_lines(project) == ["Open task T-001 (bug): Fix login", "Next step: repro"]
+
+
+def test_concurrent_starts_get_distinct_ids(project):
+    import threading
+    from uccif_lib import paths as P
+    ids, errors = [], []
+
+    def worker(i):
+        try:
+            t = task.start(project, "t%d" % i, "ui")
+            ids.append(t["id"])
+            task.close(project, no_findings=True)
+        except task.TaskError as e:
+            errors.append(str(e))
+
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert len(ids) == len(set(ids))  # never two tasks with one id
+    state = P.read_json(project.data_dir / "tasks" / "state.json")
+    assert state["next_id"] == len(ids) + 1
+
+
+def test_busy_lock_gives_clear_error_and_hook_stays_silent(project, monkeypatch):
+    from uccif_lib import paths as P
+    monkeypatch.setattr(task, "LOCK_TIMEOUT", 0.2)
+    task.start(project, "a", "ui")
+    lock = project.data_dir / "tasks" / ".lock"
+    with P.file_lock(lock):
+        with pytest.raises(task.TaskError, match="busy"):
+            task.checkpoint(project, next="x")
+        assert task.add_modified(project, "src/a.ts") is False
+    assert task.add_modified(project, "src/a.ts") is True
+    assert not lock.exists()
+
+
+def test_stale_lock_is_taken_over(project):
+    import os
+    lock = project.data_dir / "tasks" / ".lock"
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    lock.write_text("12345")
+    os.utime(str(lock), (1, 1))  # left behind by a crashed process
+    assert task.start(project, "a", "ui")["id"] == "T-001"

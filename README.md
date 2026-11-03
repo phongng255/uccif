@@ -23,8 +23,9 @@ optional `uccif-strict` plugin.
 Then open a project and ask for anything; the first session suggests `/uccif:init`.
 Options (`/config`): `reply_language` (default `vi`), `token_report` (default on).
 
-Requirements: Python 3.8+ (`python3`, `python` or `py -3`), git. macOS, Linux, or Windows
-with Git Bash. Language servers and MCP servers are never installed automatically;
+Requirements: Python 3.8+ (`python3`, `python` or `py -3`), git. macOS and Linux are tested
+in CI; Windows (Git Bash, which Claude Code uses to run hooks) runs in CI as experimental and
+has not yet been verified in a real session. Language servers and MCP servers are never installed automatically;
 `uccif doctor` reports what is missing.
 
 ## Where data lives
@@ -47,6 +48,14 @@ claude plugin validate plugins/uccif --strict
 claude --plugin-dir plugins/uccif          # try it in a session
 tests/smoke.sh                             # headless end-to-end check (uses the API)
 ```
+
+The smoke test also runs in GitHub Actions by hand (*Actions → smoke → Run workflow*); it
+needs an `ANTHROPIC_API_KEY` repository secret.
+
+**Versions.** `plugin.json` pins `version`, so an installed copy only updates when the version
+is bumped (`plugins/uccif/.claude-plugin/plugin.json` and `uccif_lib/__init__.py` must match;
+a test checks it). While developing, load the working tree with `claude --plugin-dir` instead
+of reinstalling.
 
 ## Roadmap
 

@@ -5,15 +5,17 @@ is rendered from it for Claude and humans. Decisions and issues are also
 appended to the committed docs in <project>/.claude/uccif/.
 """
 
+import functools
 import json
 from datetime import date
 
-from uccif_lib.paths import now_iso, read_json, write_json, write_text_atomic
+from uccif_lib.paths import LockTimeout, file_lock, now_iso, read_json, write_json, write_text_atomic
 
 TYPES = ("bug", "feature", "refactor", "review", "test", "explore", "ui")
 LIST_FIELDS = ("files", "decisions", "tests", "issues")
 SCALAR_FIELDS = ("goal", "modules", "next")
 HISTORY_KEEP = 20
+LOCK_TIMEOUT = 3.0  # seconds a CLI call waits for another session's write
 
 
 class TaskError(Exception):
@@ -24,6 +26,7 @@ def _paths(project):
     tdir = project.data_dir / "tasks"
     return {
         "dir": tdir,
+        "lock": tdir / ".lock",
         "state": tdir / "state.json",
         "current": tdir / "current.json",
         "md": project.data_dir / "current-task.md",
@@ -56,6 +59,19 @@ def render(task):
     return "\n".join(lines) + "\n"
 
 
+def _locked(fn):
+    """Serialize task-state changes across sessions on the same project."""
+    @functools.wraps(fn)
+    def wrapper(project, *args, **kwargs):
+        try:
+            with file_lock(_paths(project)["lock"], timeout=LOCK_TIMEOUT):
+                return fn(project, *args, **kwargs)
+        except LockTimeout:
+            raise TaskError("Task state is busy (another Claude session on this project is "
+                            "writing it). Retry in a moment.")
+    return wrapper
+
+
 def _save(project, task):
     p = _paths(project)
     task["updated"] = now_iso()
@@ -81,6 +97,7 @@ def _record_findings(project, task, decisions, issues):
         _append_doc(project, "known-issues.md", "Known issues", task["id"], i)
 
 
+@_locked
 def start(project, title, ttype, goal="", rewrite=False):
     if ttype not in TYPES:
         raise TaskError("type must be one of: %s" % ", ".join(TYPES))
@@ -112,6 +129,7 @@ def _require_open(project):
     return task
 
 
+@_locked
 def checkpoint(project, decisions=None, issues=None, tests=None, files=None,
                sets=None, **scalars):
     task = _require_open(project)
@@ -137,7 +155,16 @@ def checkpoint(project, decisions=None, issues=None, tests=None, files=None,
 
 
 def add_modified(project, path):
-    """Called by hooks after Edit/Write; silent no-op without an open task."""
+    """Called by hooks after Edit/Write; silent no-op without an open task or
+    when another session holds the lock (hooks must never fail or wait long)."""
+    try:
+        return _add_modified(project, path)
+    except TaskError:
+        return False
+
+
+@_locked
+def _add_modified(project, path):
     task = load_current(project)
     if not task or task.get("status") == "done" or path in task["files"]:
         return False
@@ -146,6 +173,7 @@ def add_modified(project, path):
     return True
 
 
+@_locked
 def close(project, decisions=None, issues=None, no_findings=False):
     task = _require_open(project)
     if not (decisions or issues or no_findings):
