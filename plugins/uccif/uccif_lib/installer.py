@@ -136,7 +136,14 @@ def uninstall(target="auto"):
 
 def status():
     """Print installation status of UCCIF across Antigravity and Claude Code."""
+    from uccif_lib.paths import get_current_agent
+    current = get_current_agent()
+
     print("=== UCCIF Status ===")
+    print("Active Host Engine    : %s" % ("Antigravity (Gemini)" if current == "antigravity" else "Claude Code"))
+    print("Default Docs Folder   : %s" % (".gemini/uccif/" if current == "antigravity" else ".claude/uccif/"))
+    print("Default Rules File    : %s" % ("GEMINI.md" if current == "antigravity" else "CLAUDE.md"))
+    print("----------------------------------------")
     
     # Antigravity status
     agy = find_agy()

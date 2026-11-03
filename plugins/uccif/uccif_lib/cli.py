@@ -186,6 +186,7 @@ def main(argv=None):
             return 0
         if args.cmd == "where":
             proj = resolve_project()
+            print("agent:    %s" % proj.agent)
             print("project:  %s" % proj.root)
             print("key:      %s" % proj.key)
             print("data:     %s" % proj.data_dir)
