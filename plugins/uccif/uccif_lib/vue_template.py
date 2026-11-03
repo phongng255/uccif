@@ -14,7 +14,7 @@ from collections import namedtuple
 
 from uccif_lib import ts_parse
 
-Template = namedtuple("Template", "tags calls elements reads uses emits navs")
+Template = namedtuple("Template", "tags calls elements reads uses emits navs classes")
 
 HTML_TAGS = frozenset("""a abbr address area article aside audio b base bdi bdo blockquote body br button canvas
 caption cite code col colgroup data datalist dd del details dfn dialog div dl dt em embed fieldset figcaption
@@ -44,6 +44,25 @@ def is_component_tag(tag):
 
 def _txt(n):
     return n.text.decode("utf-8", errors="replace") if n is not None else ""
+
+
+def _expr_classes(value):
+    """Class names a `:class` expression can produce: string literals, object keys, array items."""
+    parser = ts_parse._parser("tsx")
+    if parser is None:
+        return []
+    root = parser.parse(("(" + value + ")").encode("utf-8")).root_node
+    out = []
+    for n in ts_parse._walk(root):
+        if n.type == "string_fragment":
+            out += n.text.decode("utf-8", errors="replace").split()
+        elif n.type == "pair":
+            k = n.child_by_field_name("key")
+            if k is not None and k.type == "property_identifier":
+                out.append(_txt(k))
+        elif n.type == "shorthand_property_identifier" and n.parent is not None and n.parent.type == "object":
+            out.append(_txt(n))
+    return [c for c in out if re.match(r"^-?[_a-zA-Z][\w-]*$", c)]
 
 
 def _expr_target(value):
@@ -115,7 +134,7 @@ def parse(text):
     for a in _attrs(tpl.children[0]):
         if a[0] == "lang" and a[1] not in ("html", ""):
             return None
-    tags, calls, elements, reads, uses, emits, navs = [], [], [], [], [], [], []
+    tags, calls, elements, reads, uses, emits, navs, classes = [], [], [], [], [], [], [], []
     stack = list(reversed(tpl.children[1:]))
     while stack:
         n = stack.pop()
@@ -125,6 +144,11 @@ def parse(text):
                 tag, attrs = _tag(head), _attrs(head)
                 line = head.start_point[0] + 1
                 elements.append((tag, line, attrs))
+                for an, av, al in attrs:
+                    if an == "class" and av:
+                        classes += [(c, al) for c in av.split() if re.match(r"^-?[_a-zA-Z][\w-]*$", c)]
+                    elif an in (":class", "v-bind:class") and av:
+                        classes += [(c, al) for c in _expr_classes(av)]
                 if is_component_tag(tag):
                     tags.append((tag, line))
                     uses += [(tag, line, k, nm, al) for k, nm, al in _tag_uses(attrs)]
@@ -153,7 +177,7 @@ def parse(text):
             body = _txt(n)
             for m in _INTERP.finditer(body):
                 _expr_calls(m.group(1), base + body.count("\n", 0, m.start(1)), False, calls, reads, emits, navs)
-    return Template(tags, calls, elements, reads, uses, emits, navs)
+    return Template(tags, calls, elements, reads, uses, emits, navs, classes)
 
 
 _NOT_PROPS = frozenset(("class", "style", "key", "ref", "is", "slot", "v-slot", "id"))

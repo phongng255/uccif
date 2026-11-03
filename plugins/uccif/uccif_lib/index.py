@@ -22,11 +22,11 @@ import time
 from collections import Counter
 from pathlib import Path, PurePosixPath
 
-from uccif_lib import ts_parse, vue_template
+from uccif_lib import styles, ts_parse, vue_template
 from uccif_lib.resolve import JS_RESOLVE_EXT, Resolver  # noqa: F401 (re-exported)
 from uccif_lib.paths import LockTimeout, file_lock, now_iso
 
-SCHEMA = 11
+SCHEMA = 12
 MAX_BYTES = 1000000
 QUERY_LINES = 30
 
@@ -179,6 +179,8 @@ def connect(project, write=True):
         CREATE TABLE IF NOT EXISTS navs (src_id TEXT, src_path TEXT, line INTEGER, kind TEXT, value TEXT,
             dynamic INTEGER);
         CREATE INDEX IF NOT EXISTS navs_path ON navs(src_path);
+        CREATE TABLE IF NOT EXISTS css_uses (path TEXT, src_id TEXT, kind TEXT, name TEXT, line INTEGER);
+        CREATE INDEX IF NOT EXISTS css_uses_path ON css_uses(path);
         CREATE TABLE IF NOT EXISTS globals (path TEXT, name TEXT, target TEXT, line INTEGER);
         CREATE INDEX IF NOT EXISTS tags_path ON tags(path);
         CREATE INDEX IF NOT EXISTS globals_path ON globals(path);
@@ -200,7 +202,7 @@ def connect(project, write=True):
     if _meta(con, "schema") not in (None, str(SCHEMA)):
         con.executescript("DELETE FROM files; DELETE FROM symbols; DELETE FROM imports; DELETE FROM calls; "
                          "DELETE FROM nodes; DELETE FROM edges; DELETE FROM bindings; DELETE FROM tags; "
-                         "DELETE FROM globals; DELETE FROM refs; DELETE FROM tag_uses; DELETE FROM navs; DELETE FROM meta;")
+                         "DELETE FROM globals; DELETE FROM refs; DELETE FROM tag_uses; DELETE FROM navs; DELETE FROM css_uses; DELETE FROM meta;")
     _set_meta(con, "schema", SCHEMA)
     return con
 
@@ -382,7 +384,8 @@ def _update(project, full, only=None, force=()):
     if full:
         con.executescript("DELETE FROM files; DELETE FROM symbols; DELETE FROM imports; DELETE FROM calls; "
                           "DELETE FROM nodes; DELETE FROM edges; DELETE FROM bindings; DELETE FROM tags; "
-                          "DELETE FROM globals; DELETE FROM refs; DELETE FROM tag_uses; DELETE FROM navs;")
+                          "DELETE FROM globals; DELETE FROM refs; DELETE FROM tag_uses; DELETE FROM navs; "
+                          "DELETE FROM css_uses;")
     known = {r[0]: (r[1], r[2], r[3]) for r in con.execute("SELECT path, size, mtime, hash FROM files")}
     if only is not None:
         only = {p.replace(os.sep, "/") for p in only if lang_of(p.replace(os.sep, "/"))}
@@ -423,7 +426,7 @@ def _update(project, full, only=None, force=()):
         to_parse.append((rel, st, h, text))
 
     # symbol sources, best first: tree-sitter (optional) -> universal-ctags -> regex
-    ast, tpl_tags, tpl_uses = {}, {}, {}
+    ast, tpl_tags, tpl_uses, tpl_classes = {}, {}, {}, {}
     for rel, _, _, text in to_parse:
         lang = lang_of(rel)
         res = ts_parse.parse(_script_part(text, lang), rel, lang)
@@ -438,6 +441,7 @@ def _update(project, full, only=None, force=()):
                            + (res[10] + [(stem, k, v, d, ln) for k, v, d, ln in tpl.navs],) + res[11:])
                     tpl_tags[rel] = tpl.tags
                     tpl_uses[rel] = tpl.uses
+                    tpl_classes[rel] = tpl.classes
             ast[rel] = res
     need_ctags = [r for r, _, _, _ in to_parse if r not in ast]
     tagged = ctags_symbols(exe, root, need_ctags) if exe and need_ctags else {}
@@ -463,6 +467,10 @@ def _update(project, full, only=None, force=()):
                 syms, precision = regex_symbols(text, lang), "approx"
             raws = raw_imports(text, lang, ilines)
         stem = PurePosixPath(rel).stem
+        scoped_classes = set()
+        if lang in styles.STYLE_LANGS or lang in ("vue", "svelte"):  # CSS vars / classes (regex, always)
+            css_syms, scoped_classes = styles.symbols(text, lang)
+            syms = list(syms) + css_syms
         rows = [((n if n is not None else stem), k, rel, ln, (stem if sc is None and k in ("prop", "emit") else sc),
                  precision) for n, k, ln, sc in syms]
         con.executemany("INSERT INTO symbols VALUES (?,?,?,?,?,?)", rows)
@@ -475,7 +483,9 @@ def _update(project, full, only=None, force=()):
                      {(m[0], m[1]): m[2] for m in ast[rel][6]} if rel in ast else {},
                      ast[rel][9] if rel in ast else (), tpl_uses.get(rel, ()),
                      ast[rel][10] if rel in ast else (),
-                     _resolve_routes(rel, lang, ast[rel], resolver) if rel in ast else ())
+                     _resolve_routes(rel, lang, ast[rel], resolver) if rel in ast else (),
+                     styles.uses(text, lang) + [("class", c, ln) for c, ln in tpl_classes.get(rel, ())],
+                     scoped_classes)
     if to_parse or removed or full:
         _through_barrels(con)
         _derive_all(con)
@@ -819,7 +829,42 @@ def _derive_all(con):
     _derive_members(con)
     _derive_callbacks(con)
     _derive_builtins(con)
+    _derive_css(con)
     _derive_uses(con)
+
+
+def _derive_css(con):
+    """uses_css_var / defines_css_var (`var(--x)`, `setProperty('--x')`) to every definition of the
+    variable (extracted; none found: an unresolved lead), and uses_class (a template class to a
+    selector of the same name, inferred): the component's own <style> first, otherwise selectors in
+    stylesheets and unscoped <style> blocks. Classes with no selector (utility CSS) add nothing."""
+    uses_ = con.execute("SELECT path, src_id, kind, name, line FROM css_uses").fetchall()
+    if not uses_:
+        return
+    var_defs, cls_defs = {}, {}
+    for nid, name, path in con.execute("SELECT id, name, path FROM nodes WHERE kind='css_var'"):
+        var_defs.setdefault(name, []).append((nid, path))
+    for nid, name, path, det in con.execute("SELECT id, name, path, detail FROM nodes WHERE kind='css_class'"):
+        cls_defs.setdefault(name, []).append((nid, path, det))
+    new, seen = [], set()
+    for path, sid, kind, name, line in uses_:
+        if kind == "class":
+            defs = cls_defs.get(name, [])
+            own = [d for d in defs if d[1] == path]
+            for nid, dpath, _ in (own or [d for d in defs if d[2] != "scoped"])[:3]:
+                if (sid, nid, line) not in seen:
+                    seen.add((sid, nid, line))
+                    new.append((sid, nid, "uses_class", line, "inferred", name, path, dpath, "~css"))
+            continue
+        ekind = "defines_css_var" if kind == "define" else "uses_css_var"
+        defs = sorted(var_defs.get(name, []), key=lambda d: d[1] != path)
+        if not defs:
+            new.append((sid, None, ekind, line, "unresolved", name, path, None, "~css"))
+        for nid, dpath in defs[:5]:
+            if (sid, nid, line, ekind) not in seen:
+                seen.add((sid, nid, line, ekind))
+                new.append((sid, nid, ekind, line, "extracted", name, path, dpath, "~css"))
+    con.executemany("INSERT INTO edges VALUES (?,?,?,?,?,?,?,?,?)", new)
 
 
 def _derive_callbacks(con):
@@ -1059,7 +1104,7 @@ def _derive_components(con):
 def _sym_id(path, name, scope, kind=None):
     """Stable node id. Props and emits get a kind prefix so `title` the prop and `title` the event
     (or a method) never collide."""
-    pre = kind + ":" if kind in ("prop", "emit", "route") else ""
+    pre = kind + ":" if kind in ("prop", "emit", "route", "css-class") else ""
     return "%s#%s%s%s" % (path, (scope + ".") if scope else "", pre, name)
 
 
@@ -1109,7 +1154,8 @@ def _resolve_tags(rel, lang, parsed, tags, resolver):
 
 
 def _write_graph(con, rel, lang, sym_rows, imps, call_rows, resolver, text="", herit_rows=(), tag_rows=(),
-                 ref_rows=(), member_kinds=None, emit_rows=(), use_rows=(), nav_rows=(), route_rows=()):
+                 ref_rows=(), member_kinds=None, emit_rows=(), use_rows=(), nav_rows=(), route_rows=(),
+                 css_rows=(), scoped_classes=()):
     """Mirror one parsed file into the unified graph: nodes (file + symbols) and edges.
 
     Node ids are stable (`path` for a file, `path#Scope.name` for a symbol) so edges from other
@@ -1119,7 +1165,8 @@ def _write_graph(con, rel, lang, sym_rows, imps, call_rows, resolver, text="", h
     nodes = [(rel, "file", PurePosixPath(rel).name, rel, 1, None, None, None, None)]
     for n, k, _, ln, sc, pr in sym_rows:
         nodes.append((_sym_id(rel, n, sc, k), k.replace("-", "_"), n, rel, ln, None, sc, pr,
-                      member_kinds.get((sc, n)) if k in ("store_member", "route") else None))
+                      member_kinds.get((sc, n)) if k in ("store_member", "route") else
+                      ("scoped" if n in scoped_classes else None) if k == "css-class" else None))
     con.executemany("INSERT OR IGNORE INTO nodes VALUES (?,?,?,?,?,?,?,?,?)", nodes)
     edges = []
     own_ids = {nd[0] for nd in nodes}
@@ -1162,6 +1209,7 @@ def _write_graph(con, rel, lang, sym_rows, imps, call_rows, resolver, text="", h
         edges.append((_caller_id(rel, caller, own), dst, "emits", line, "extracted" if dst else "unresolved", event,
                       rel, rel if dst else None, None))
     con.executemany("INSERT INTO tag_uses VALUES (?,?,?,?,?,?)", [(rel,) + tuple(u) for u in use_rows])
+    con.executemany("INSERT INTO css_uses VALUES (?,?,?,?,?)", [(rel, comp, k, n, ln) for k, n, ln in css_rows])
     con.executemany("INSERT INTO navs VALUES (?,?,?,?,?,?)",
                     [(_caller_id(rel, c, own), rel, ln, k, v, int(d)) for c, k, v, d, ln in nav_rows])
     for full, line, cpath, has_comp, cname in route_rows:  # route -> the component it shows
@@ -1222,6 +1270,7 @@ def _drop(con, rel):
     con.execute("DELETE FROM refs WHERE src_path=?", (rel,))
     con.execute("DELETE FROM tag_uses WHERE path=?", (rel,))
     con.execute("DELETE FROM navs WHERE src_path=?", (rel,))
+    con.execute("DELETE FROM css_uses WHERE path=?", (rel,))
     con.execute("DELETE FROM nodes WHERE path=?", (rel,))
     con.execute("DELETE FROM edges WHERE src_path=?", (rel,))
     con.execute("DELETE FROM files WHERE path=?", (rel,))
@@ -1372,7 +1421,7 @@ def _relations(con, defs, budget, cap=5):
                           "('renders','renders_ext') ORDER BY line" % mark, ids).fetchall()
     used = con.execute("SELECT DISTINCT src_id, src_path, line, kind FROM edges WHERE dst_id IN %s AND kind IN "
                        "('reads_state','uses_store','uses_composable','passes_prop','listens','emits','navigates_to',"
-                       "'passes_callback') "
+                       "'passes_callback','uses_css_var','defines_css_var','uses_class') "
                        "ORDER BY src_path, line" % mark,
                        ids).fetchall()
     rendered = con.execute("SELECT DISTINCT src_id, src_path, line, confidence FROM edges WHERE dst_id IN %s AND "
@@ -1483,7 +1532,8 @@ def _edge_text(con, src, dst):
     for k, verb in (("calls_action", "calls store action"), ("reads_state", "reads store state"),
                     ("uses_store", "uses store"), ("uses_composable", "uses composable"),
                     ("routes_to", "routes to"), ("navigates_to", "navigates to"),
-                    ("passes_callback", "passes callback")):
+                    ("passes_callback", "passes callback"), ("uses_css_var", "uses CSS variable"),
+                    ("defines_css_var", "sets CSS variable"), ("uses_class", "uses class")):
         e = con.execute("SELECT line, detail FROM edges WHERE kind=? AND src_path=? AND dst_path=? "
                         "ORDER BY line LIMIT 1", (k, src, dst)).fetchone()
         if e:
@@ -1499,7 +1549,7 @@ def _edge_text(con, src, dst):
 
 
 DEFAULT_KINDS = ("imports", "calls", "renders", "calls_action", "reads_state", "uses_store", "uses_composable",
-                 "routes_to", "navigates_to", "passes_callback")
+                 "routes_to", "navigates_to", "passes_callback", "uses_css_var", "defines_css_var", "uses_class")
 
 
 def _users_of(con, rel, kinds=DEFAULT_KINDS, min_confidence=None):
