@@ -53,15 +53,21 @@ at the lowest token cost. Read little, write short, mark every claim.
    - Suggest, not perform, removing `.claude/scripts/uccif.py` and `.claude/data/` afterwards.
 8. **Baseline.** After writing the docs run `uccif drift ack`, so later structural changes
    (new module, new dependency) are reported to you automatically.
-9. **Check.** Run `uccif doctor`; report its WARN lines. Missing LSP → name the binary and
-   plugin from `detect.lsp` and ask whether the user wants to install them; never install.
+9. **Check.** Run `uccif doctor`; report its WARN lines only (INFO lines need nothing).
+   LSP: only a language in `detect.lsp` with `installed: false` is worth one question —
+   offer its `install` command; never install unasked. Languages in `detect.no_lsp` (e.g. vue)
+   have no LSP in this plugin and are covered by the code index: do not mention or ask.
 
 ## Output to the user (in their language)
 
 - Files written/updated, each with one line on its role.
 - Stack and commands found.
 - Claims tagged `inferred`/`unknown` that the user could confirm.
-- What still needs the user: CLAUDE.md approval, v2 settings lines, LSP install choice.
+- Files to commit: `.claude/uccif/` docs and `.claude/uccif/.gitignore` (UCCIF's own; it keeps
+  `.local/` out of git). State this in one line; do not ask about them, and commit only if the
+  user asks. Unrelated untracked files are not init's business: leave them alone.
+- What still needs the user: CLAUDE.md approval, v2 settings lines, and an LSP install only
+  when a configured language server is missing.
 
 ## Never
 

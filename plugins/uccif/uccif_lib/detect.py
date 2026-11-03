@@ -33,17 +33,6 @@ MANIFESTS = ("package.json", "pyproject.toml", "requirements.txt", "setup.py", "
              "tsconfig.json", "Makefile", "Dockerfile", "docker-compose.yml")
 ENTRY_NAMES = ("main.ts", "main.js", "index.ts", "index.js", "App.vue", "main.py",
                "app.py", "__main__.py", "manage.py", "main.go", "main.rs", "server.js", "server.ts")
-# Plugin names are the official ones listed in the Claude Code plugins reference
-# (checked 2026-11). None = no official plugin confirmed: check /plugin Discover.
-LSP_BINARIES = {
-    "typescript": ("typescript-language-server", "typescript-lsp"),
-    "javascript": ("typescript-language-server", "typescript-lsp"),
-    "vue": ("vue-language-server", None),
-    "python": ("pyright-langserver", "pyright-lsp"),
-    "go": ("gopls", None),
-    "rust": ("rust-analyzer", "rust-analyzer-lsp"),
-}
-NO_PLUGIN = "none confirmed; search 'lsp' in /plugin Discover"
 LARGE_REPO = 300
 
 
@@ -99,6 +88,8 @@ def detect(project):
         "claude_md_block": _has_block(root / "CLAUDE.md"),
         "uccif_v2": _v2_traces(root),
         "lsp": _lsp_status(langs),
+        "no_lsp": sorted(l for l in langs if l not in _lsp_status(langs)
+                         and l not in ("css", "scss", "less")),
     }
     return result
 
@@ -136,12 +127,14 @@ def _v2_traces(root):
 
 
 def _lsp_status(langs):
+    """Only languages this plugin configures an LSP for (.lsp.json). Others are listed
+    under `no_lsp`: the code index covers them and there is nothing to install."""
+    from uccif_lib.hooks import LSP_BUNDLED
     out = {}
     for lang in langs:
-        if lang in LSP_BINARIES:
-            binary, plugin = LSP_BINARIES[lang]
-            out[lang] = {"binary": binary, "installed": bool(shutil.which(binary)),
-                         "plugin": plugin or NO_PLUGIN}
+        if lang in LSP_BUNDLED:
+            binary, cmd = LSP_BUNDLED[lang]
+            out[lang] = {"binary": binary, "installed": bool(shutil.which(binary)), "install": cmd}
     return out
 
 
@@ -204,12 +197,11 @@ def doctor(project):
     check(d["claude_md_block"], "CLAUDE.md has UCCIF block", "CLAUDE.md has no UCCIF block (run uccif:init)")
     check(d["docs"]["summary.md"], "project docs present", "no .claude/uccif/summary.md (run uccif:init)")
     check(not d["uccif_v2"], "no UCCIF v2 leftovers", "UCCIF v2 still installed: %s" % ", ".join(d["uccif_v2"]))
-    from uccif_lib.hooks import LSP_BUNDLED
     for lang, s in d["lsp"].items():
-        if lang not in LSP_BUNDLED:
-            info("no LSP configured for %s; the code index covers these files" % lang)
-            continue
         check(s["installed"], "LSP for %s: %s" % (lang, s["binary"]),
               "LSP for %s missing: install %s with `%s`, then /reload-plugins"
-              % (lang, s["binary"], LSP_BUNDLED[lang][1]))
+              % (lang, s["binary"], s["install"]))
+    if d["no_lsp"]:
+        info("no LSP configured for %s; the code index covers these files (nothing to install)"
+             % ", ".join(d["no_lsp"]))
     return ok, lines

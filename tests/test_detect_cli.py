@@ -31,7 +31,8 @@ def test_detect_web_app(project, repo):
     assert "src/main.ts" in d["entry_candidates"] and "src/App.vue" in d["entry_candidates"]
     assert d["node"]["scripts"]["test"] == "vitest"
     assert not d["large_repo"] and d["uccif_v2"] == [] and not d["claude_md_block"]
-    assert set(d["lsp"]) == {"typescript", "vue"}
+    assert set(d["lsp"]) == {"typescript"} and d["lsp"]["typescript"]["install"].startswith("npm")
+    assert d["no_lsp"] == ["vue"]  # no LSP configured: covered by the index, nothing to ask
 
 
 def test_detect_finds_uccif_v2(project, repo):

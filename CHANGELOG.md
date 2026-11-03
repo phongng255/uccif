@@ -1,5 +1,13 @@
 # Changelog
 
+## 3.0.0-dev.5
+
+- `uccif detect` reports LSP status only for languages the plugin configures (TS/JS, Python);
+  others (e.g. Vue) go to `no_lsp`, covered by the code index. `/uccif:init` no longer asks
+  about installing a server the plugin would not use.
+- `/uccif:init` states that `.claude/uccif/` docs and `.gitignore` are meant to be committed
+  instead of asking, and leaves unrelated untracked files alone.
+
 ## 3.0.0-dev.4
 
 - Works inside Claude Code's Bash sandbox, which denies writes under `~/.claude`:
