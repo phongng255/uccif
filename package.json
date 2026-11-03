@@ -1,0 +1,33 @@
+{
+  "name": "@phongng255/uccif",
+  "version": "1.1.0",
+  "description": "UCCIF plugin and CLI for Claude Code and Antigravity CLI",
+  "main": "bin/uccif.js",
+  "bin": {
+    "uccif": "./bin/uccif.js"
+  },
+  "scripts": {
+    "install-plugin": "node bin/uccif.js install",
+    "update-plugin": "node bin/uccif.js update",
+    "uninstall-plugin": "node bin/uccif.js uninstall",
+    "status": "node bin/uccif.js status",
+    "doctor": "node bin/uccif.js doctor"
+  },
+  "keywords": [
+    "antigravity",
+    "claude-code",
+    "gemini",
+    "plugin",
+    "codegraph",
+    "context-engineering"
+  ],
+  "author": "phongng255 (https://github.com/phongng255)",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/phongng255/uccif.git"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  }
+}

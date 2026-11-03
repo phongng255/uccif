@@ -2,7 +2,17 @@
 # UCCIF launcher: finds a Python 3.8+ interpreter and runs scripts/uccif_main.py.
 # Tries python3 -> python -> py -3. Never fails a hook: on error, exits 0 when
 # called as `uccif hook ...`, exits 127 otherwise. No PYTHONPATH (see uccif_main.py).
-here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+PRG="$0"
+while [ -h "$PRG" ]; do
+  ls=$(ls -ld "$PRG")
+  link=$(expr "$ls" : '.*-> \(.*\)$')
+  if expr "$link" : '/.*' > /dev/null; then
+    PRG="$link"
+  else
+    PRG="$(dirname "$PRG")/$link"
+  fi
+done
+here=$(CDPATH= cd -- "$(dirname -- "$PRG")" && pwd)
 main="$(dirname -- "$here")/scripts/uccif_main.py"
 
 is_hook=0

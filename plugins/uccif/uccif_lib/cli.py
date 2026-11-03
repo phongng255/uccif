@@ -4,7 +4,7 @@ import argparse
 import json
 import sys
 
-from uccif_lib import SCHEMA_VERSION, __version__, codegraph, detect, drift, hooks, log, task, usage
+from uccif_lib import SCHEMA_VERSION, __version__, codegraph, detect, drift, hooks, installer, log, task, usage
 from uccif_lib.paths import data_root_source, resolve_project
 
 
@@ -15,6 +15,17 @@ def build_parser():
     sub.add_parser("where", help="print project root, data dir and docs dir")
     sub.add_parser("detect", help="mechanical project survey as JSON (read-only)")
     sub.add_parser("doctor", help="check the UCCIF install for this project")
+
+    p_inst = sub.add_parser("install", help="install UCCIF plugin into Antigravity and/or Claude Code")
+    p_inst.add_argument("--target", choices=("auto", "antigravity", "claude", "all"), default="auto")
+
+    p_up = sub.add_parser("update", help="pull latest code from git and update UCCIF plugin")
+    p_up.add_argument("--target", choices=("auto", "antigravity", "claude", "all"), default="auto")
+
+    p_un = sub.add_parser("uninstall", help="uninstall UCCIF plugin from Antigravity and/or Claude Code")
+    p_un.add_argument("--target", choices=("auto", "antigravity", "claude", "all"), default="auto")
+
+    sub.add_parser("status", help="check UCCIF installation status across Antigravity and Claude Code")
 
     t = sub.add_parser("task", help="current-task memory").add_subparsers(dest="action")
     s = t.add_parser("start")
@@ -191,6 +202,14 @@ def main(argv=None):
             ok, lines = detect.doctor(resolve_project())
             print("\n".join(lines))
             return 0 if ok else 1
+        if args.cmd == "install":
+            return installer.install(target=args.target)
+        if args.cmd == "update":
+            return installer.update(target=args.target)
+        if args.cmd == "uninstall":
+            return installer.uninstall(target=args.target)
+        if args.cmd == "status":
+            return installer.status()
         if args.cmd == "task" and args.action:
             return _task_cmd(args)
         if args.cmd == "usage":
