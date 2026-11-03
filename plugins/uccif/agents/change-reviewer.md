@@ -17,7 +17,9 @@ A diff range (default: working tree vs HEAD) and the list of constraints from th
 # Steps
 
 1. `git diff <range>` / `git show` to get the change. Bash only for
-   `git diff`, `git show`, `git log`, `git status`.
+   `git diff`, `git show`, `git log`, `git status` and `uccif index query …`.
+   For each changed symbol, `uccif index query --impact <symbol>` lists callers, props users,
+   store users and tests the diff may have missed.
 2. For each constraint, find the lines in the diff that satisfy or break it.
 3. Read surrounding code where the diff alone is not enough (offset/limit).
 4. Look for logic errors, unhandled cases, security issues, hard-coded values where the

@@ -1703,14 +1703,7 @@ def _uses_of(con, rel, kinds=DEFAULT_KINDS, min_confidence=None):
     return sorted(out)
 
 
-def impact(project, path, depth=3, kinds=DEFAULT_KINDS, min_confidence=None):
-    """Files affected by a change to `path`: BFS over who-imports / who-calls, level by level."""
-    depth = max(1, min(int(depth), MAX_DEPTH))
-    con = connect(project, write=False)
-    rel = _norm(project, path)
-    if not con.execute("SELECT 1 FROM files WHERE path=?", (rel,)).fetchone():
-        con.close()
-        return ["%s is not in the index (not a source file, ignored, or new — retry after saving)." % rel]
+def _impact_levels(con, rel, depth, kinds, min_confidence):
     level_of, parent, levels, truncated = {rel: 0}, {}, [], False
     frontier = [rel]
     for d in range(1, depth + 1):
@@ -1727,6 +1720,27 @@ def impact(project, path, depth=3, kinds=DEFAULT_KINDS, min_confidence=None):
             break
         levels.append(sorted(nxt))
         frontier = nxt
+    return levels, parent, truncated
+
+
+def impact(project, path, depth=3, kinds=DEFAULT_KINDS, min_confidence=None):
+    """Files affected by a change to `path`: BFS over who-imports / who-calls, level by level."""
+    depth = max(1, min(int(depth), MAX_DEPTH))
+    con = connect(project, write=False)
+    rel = _norm(project, path)
+    if not con.execute("SELECT 1 FROM files WHERE path=?", (rel,)).fetchone():
+        con.close()
+        return ["%s is not in the index (not a source file, ignored, or new — retry after saving)." % rel]
+    hidden = 0
+    if min_confidence is None:  # default: extracted edges; inferred ones only when nothing is certain
+        levels, parent, truncated = _impact_levels(con, rel, depth, kinds, "extracted")
+        if levels:
+            loose = _impact_levels(con, rel, depth, kinds, "inferred")[0]
+            hidden = len({f for lv in loose for f in lv} - {f for lv in levels for f in lv})
+        else:
+            levels, parent, truncated = _impact_levels(con, rel, depth, kinds, "inferred")
+    else:
+        levels, parent, truncated = _impact_levels(con, rel, depth, kinds, min_confidence)
     is_t = {r[0] for r in con.execute("SELECT path FROM files WHERE is_test=1")}
     affected = [f for lv in levels for f in lv]
     tests = sorted(({f for f in affected if f in is_t} | set(tests_for(con, rel))) - {rel})
@@ -1734,6 +1748,8 @@ def impact(project, path, depth=3, kinds=DEFAULT_KINDS, min_confidence=None):
     head = "Impact of %s (depth %d): %d files%s" % (rel, depth, n_src,
                                                    ", %d tests" % len(tests) if tests else "")
     lines = [head + (" — truncated at %d files" % MAX_FILES if truncated else "")]
+    if hidden:
+        lines.append("  +%d more files through inferred edges (--min-confidence inferred)" % hidden)
     if not affected:
         lines.append("  nothing imports or calls it (within the index)")
     budget = QUERY_LINES - len(lines) - (1 + min(len(tests), 5) if tests else 0)

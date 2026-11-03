@@ -1,5 +1,23 @@
 # Changelog
 
+## 3.0.0-dev.24
+
+- **Graph queries** (phase 2, step 12), all read-only, at most 30 lines, `file:line` on every row:
+  - `--impact` takes a symbol as well as a file: who uses it through any edge (calls, store actions
+    and state, renders, props, routes, CSS variables, types, variables, callbacks), then who uses
+    those, level by level, with the tests to run. `--kinds` narrows to edge kinds or groups
+    (`code`, `store`, `vue`, `css`, `route`, `types`, `vars`); an unknown kind is reported with the
+    list. By default only `extracted` edges are followed and the head line says how many more files
+    `inferred` edges would add; when nothing is certain, the inferred picture is shown instead.
+    `--min-confidence inferred` follows both. The same default now applies to `--impact <file>`.
+  - `--component <Name>` (kebab-case accepted): rendered by, renders, props with who passes them,
+    emits with who emits and listens, routes that show it, stores and composables it uses.
+  - `--store <name>` (`trip` finds `useTripStore`): actions, state and getters with their users.
+  - `--route <path or name>`: the component shown and every navigation to it.
+  - `--css-var=--x` (or `--css-var x`): definitions and uses. `--cochange <file>`: git pairs.
+- Session hint lists the new queries (one line); `smart-code-search`, `code-impact-analysis`,
+  `code-impact-analyzer`, `project-analyst` and `change-reviewer` use them. README has a query table.
+
 ## 3.0.0-dev.23
 
 - **Files that change together** (phase 2, step 11, roadmap D5; `SCHEMA` 14, an older index is

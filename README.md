@@ -66,12 +66,34 @@ is bumped (`plugins/uccif/.claude-plugin/plugin.json` and `uccif_lib/__init__.py
 a test checks it). While developing, load the working tree with `claude --plugin-dir` instead
 of reinstalling.
 
+## Code graph queries
+
+Claude runs these itself (the session hint and the skills point to them); they refresh changed
+files first, read the index read-only and answer in at most 30 lines, each with `file:line`.
+
+| Query | Answers |
+|---|---|
+| `uccif index query --symbol X` | definitions, callers, subclasses, props/emits/store users, tests |
+| `--file P` | symbols, imports, imported-by, tests, files often changed with it |
+| `--impact P` or `--impact X` | what a change to a file or a symbol reaches, level by level, plus tests to run; `--kinds code,store,vue,css,route,types,vars`, `--min-confidence inferred`, `--depth N` |
+| `--path A B` | shortest dependency chain between two files or symbols |
+| `--component C` | who renders it, what it renders, props (who passes), emits (who listens), routes, stores |
+| `--store S` | each action / state / getter of a Pinia store and its users |
+| `--route R` | the component a route shows and the code that navigates to it |
+| `--css-var=--x` | where a CSS variable is defined and used |
+| `--cochange P` | files git history changes together with P |
+| `uccif index graph` | a self-contained HTML view of the graph |
+
+Edges carry a confidence: `extracted` (found through an explicit import / declaration),
+`inferred` (matched by name or pattern, shown with `~inferred` and hidden by default when certain
+edges exist) and `unresolved` (a name we could not place: a lead to check, never a fact).
+
 ## Roadmap
 
 | Version | Content |
 |---|---|
 | 3.0 | task/resume, token line, logs, `/uccif:init`, CORE RULES via hooks, 3 agents, code index, LSP config, drift detection, tests + CI |
 | 3.1 | `[src:]` doc-claims check |
-| 3.0-dev.11+ | code graph: optional tree-sitter parsing (done), call edges (done), multi-level `--impact` and `--path` queries (done), HTML graph view `uccif index graph` (done); phase 2 (nodes/edges model, Vue/Pinia/router edges, deeper resolution) in progress, step 0 fixture + benchmark done, nodes/edges model with confidence done, config-driven aliases + barrels + Python roots done, extends/implements + contains + function-level tests done, Vue template edges (`renders`, template calls) done, Pinia stores + composables + variable origins done, props/emits + vue-router done, callbacks + late resolution + built-in methods done, CSS variables + classes done, type references + variable reads/writes done, git co-change done |
+| 3.0-dev.11+ | code graph: optional tree-sitter parsing (done), call edges (done), multi-level `--impact` and `--path` queries (done), HTML graph view `uccif index graph` (done); phase 2 (nodes/edges model, Vue/Pinia/router edges, deeper resolution) in progress, step 0 fixture + benchmark done, nodes/edges model with confidence done, config-driven aliases + barrels + Python roots done, extends/implements + contains + function-level tests done, Vue template edges (`renders`, template calls) done, Pinia stores + composables + variable origins done, props/emits + vue-router done, callbacks + late resolution + built-in methods done, CSS variables + classes done, type references + variable reads/writes done, git co-change done, new graph queries done |
 | 3.2 | optional `uccif-codeintel` plugin (Serena, more languages) |
 | 3.3 | `uccif-strict` (blocking gates), only if needed |

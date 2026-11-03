@@ -17,9 +17,11 @@ File, symbol, and the kind of change (rename / signature / behaviour / removal).
 # Steps
 
 1. Read the symbol's definition.
-2. Find usages: start with `uccif index query --impact <file>` (importers and callers by
-   level, with `file:line` and tests), then `--symbol <name>` (callers, mentioning files) and
-   `--path <A> <B>` when a far dependent needs explaining. Then string references (routes,
+2. Find usages: start with `uccif index query --impact <file or symbol>` (importers, callers,
+   renders, store use, props/emits, routes, CSS variables, types, by level, with `file:line`
+   and tests; `--kinds` narrows, `--min-confidence inferred` adds name/pattern matches), then
+   `--component` / `--store` / `--route` for Vue, Pinia and router symbols, `--symbol <name>`
+   (callers, mentioning files) and `--path <A> <B>` when a far dependent needs explaining. Then string references (routes,
    event names, config keys, template usage) with Grep using path/type filters.
    "Possibly called by" and levels beyond 1 are leads: read the cited line before a row.
 3. Read each usage site briefly (offset/limit) to classify how it depends on the symbol.

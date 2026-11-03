@@ -52,9 +52,18 @@ def build_parser():
     g.add_argument("--symbol")
     g.add_argument("--file")
     g.add_argument("--tests-for")
-    g.add_argument("--impact", metavar="FILE", help="files affected by changing FILE, several levels deep")
+    g.add_argument("--impact", metavar="FILE|SYMBOL", help="what a change to FILE or SYMBOL reaches, level by level")
     g.add_argument("--path", nargs=2, metavar=("FROM", "TO"), help="shortest import/call chain between two files or symbols")
+    g.add_argument("--component", metavar="NAME", help="render tree, props, emits, routes and stores of a component")
+    g.add_argument("--store", metavar="NAME", help="Pinia store: actions / state / getters and who uses each")
+    g.add_argument("--route", metavar="PATH|NAME", help="route: the component it shows and the code that opens it")
+    g.add_argument("--css-var", metavar="--NAME", help="where a CSS variable is defined and used (--css-var=--x or --css-var x)")
+    g.add_argument("--cochange", metavar="FILE", help="files that changed together with FILE in git history")
     iq.add_argument("--depth", type=int, default=3, help="levels for --impact (default 3, max %d)" % index.MAX_DEPTH)
+    iq.add_argument("--kinds", help="edge kinds for --impact, comma separated; groups: code, store, vue, css, "
+                                    "route, types, vars")
+    iq.add_argument("--min-confidence", choices=("extracted", "inferred"),
+                    help="for --impact; default: extracted edges, inferred ones only when nothing is certain")
 
     dr = sub.add_parser("drift", help="structural changes that make docs stale").add_subparsers(dest="action")
     dr.add_parser("check")
@@ -149,7 +158,28 @@ def _index_cmd(args):
             elif args.file:
                 lines = index.query_file(proj, args.file)
             elif args.impact:
-                lines = index.impact(proj, args.impact, args.depth)
+                from uccif_lib import queries
+                kinds = queries.parse_kinds(args.kinds) or index.DEFAULT_KINDS
+                con = index.connect(proj, write=False)
+                is_file = con.execute("SELECT 1 FROM files WHERE path=?",
+                                      (index._norm(proj, args.impact),)).fetchone()
+                con.close()
+                if is_file:
+                    lines = index.impact(proj, args.impact, args.depth, kinds, args.min_confidence)
+                else:
+                    lines = queries.impact_symbol(proj, args.impact, args.depth, kinds, args.min_confidence)
+            elif args.component or args.store or args.route or args.css_var or args.cochange:
+                from uccif_lib import queries
+                if args.component:
+                    lines = queries.component(proj, args.component)
+                elif args.store:
+                    lines = queries.store(proj, args.store)
+                elif args.route:
+                    lines = queries.route(proj, args.route)
+                elif args.css_var:
+                    lines = queries.css_var(proj, args.css_var)
+                else:
+                    lines = queries.cochange(proj, args.cochange)
             elif args.path:
                 lines = index.path_between(proj, args.path[0], args.path[1])
             else:
@@ -157,6 +187,8 @@ def _index_cmd(args):
         except index.IndexUnavailable as e:
             lines = ["Code index unavailable (%s). It is built by the session-start hook; "
                      "use bounded Grep/Glob meanwhile." % e]
+        except ValueError as e:  # --kinds with an unknown name
+            lines = [str(e)]
         print("\n".join(lines))
         return 0
     return 2
