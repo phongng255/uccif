@@ -31,9 +31,9 @@ optional `uccif-strict` plugin.
 Then open a project and ask for anything; the first session suggests `/uccif:init`.
 Options (`/config`): `reply_language` (default `vi`), `token_report` (default on).
 
-Requirements: Python 3.8+ (`python3`, `python` or `py -3`), git. macOS and Linux are tested
-in CI; Windows (Git Bash, which Claude Code uses to run hooks) runs in CI as experimental and
-has not yet been verified in a real session. Language servers and MCP servers are never installed automatically;
+Requirements: Python 3.8+ (`python3`, `python` or `py -3`), git. macOS, Linux and Windows (Git
+Bash, which Claude Code uses to run hooks) are all tested in CI; Windows has not yet been
+tried in a real Claude Code session. Language servers and MCP servers are never installed automatically;
 `uccif doctor` reports what is missing.
 
 ## Where data lives
