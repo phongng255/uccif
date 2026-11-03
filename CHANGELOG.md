@@ -1,5 +1,24 @@
 # Changelog
 
+## 3.0.0-dev.28
+
+- **Big-repo benchmark and lazy derived edges.** `tests/bench_index.py --synthetic N` generates a
+  Vue 3 + Pinia + router app with N components (each importing and rendering two others with props
+  and emits, using a store, a composable, a util through a barrel, types, CSS variables and scoped
+  classes; routed views navigating to each other) and benches it next to the other targets.
+  - Measured before this change: one-file update 59 ms at 200 components, **353 ms at 800**, over the
+    300 ms budget: the derived passes (barrels, components, store members, CSS, variables ...) are
+    recomputed from the whole repo after every change.
+  - As the plan prescribes for a layer over budget, they are now **lazy on big repos**: each full
+    pass records its duration; when it exceeded 150 ms, the post-Edit one-file update keeps direct
+    edges current, marks the derived ones stale and the hook starts `uccif maintain` in the
+    background. The next full-scan update (every query runs one first) catches up, so answers are
+    never stale. Small repos are unchanged (still computed inline). `index status` says whether
+    derived edges are current or pending.
+  - Now: 800 components: one-file update **6 ms**, background catch-up 347 ms, no-op 24 ms;
+    200 components: 57 ms inline; the fixture: 8 ms.
+- The benchmark table has a `catch-up ms` column.
+
 ## 3.0.0-dev.27
 
 - **Scope analysis for `reads` / `writes`**: names that shadow a module variable inside a function

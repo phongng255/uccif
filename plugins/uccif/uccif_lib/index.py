@@ -27,6 +27,7 @@ from uccif_lib.resolve import JS_RESOLVE_EXT, Resolver  # noqa: F401 (re-exporte
 from uccif_lib.paths import LockTimeout, file_lock, now_iso
 
 SCHEMA = 14
+DERIVE_BUDGET_MS = 150  # above this, a post-Edit update defers the derived edges (see _update)
 MAX_BYTES = 1000000
 QUERY_LINES = 30
 
@@ -490,9 +491,22 @@ def _update(project, full, only=None, force=()):
                      _resolve_routes(rel, lang, ast[rel], resolver) if rel in ast else (),
                      styles.uses(text, lang) + [("class", c, ln) for c, ln in tpl_classes.get(rel, ())],
                      scoped_classes)
-    if to_parse or removed or full:
-        _through_barrels(con)
-        _derive_all(con)
+    # Derived edges (barrels, components, store members, CSS, variables ...) are recomputed from the
+    # whole repo. On a big repo that would blow the post-Edit budget, so a one-file update (`only`)
+    # skips it when the last run was slow and marks it stale; the next full-scan update (every query
+    # does one first, and the hooks start one in the background) catches up. Direct edges are always
+    # current.
+    stale = False
+    if to_parse or removed or full or _meta(con, "derived_stale") == "1":
+        if only is not None and float(_meta(con, "derive_ms") or 0) > DERIVE_BUDGET_MS:
+            _set_meta(con, "derived_stale", 1)
+            stale = True
+        else:
+            t1 = time.time()
+            _through_barrels(con)
+            _derive_all(con)
+            _set_meta(con, "derive_ms", int((time.time() - t1) * 1000))
+            _set_meta(con, "derived_stale", 0)
         _set_meta(con, "updated_at", now_iso())
         _set_meta(con, "symbol_tool", tool)
         if full or not _meta(con, "built_at"):
@@ -503,7 +517,7 @@ def _update(project, full, only=None, force=()):
         cochanged = _refresh_cochanges(con, root, set(current))
     else:
         cochanged = False
-    if cochanged:  # new history: the derived edges (co_changes among them) are rebuilt once
+    if cochanged and not stale:  # new history: the derived edges (co_changes among them) are rebuilt once
         _derive_all(con)
     # C3: a file that imports a path which did not exist when it was parsed keeps an unresolved import
     # (and calls through it). When new files appear, re-parse exactly the importers whose import now
@@ -521,7 +535,7 @@ def _update(project, full, only=None, force=()):
     if extra:
         to_parse = list(to_parse) + [None] * extra["parsed"]
     return {"files": len(current), "parsed": len(to_parse), "removed": len(removed),
-            "ms": int((time.time() - t0) * 1000), "tool": tool}
+            "ms": int((time.time() - t0) * 1000), "tool": tool, "derived_stale": stale}
 
 # Language built-ins: calls to these are known (not repo code), so they are external, not leads.
 PY_BUILTINS = frozenset(n for n in dir(__import__("builtins")) if not n.startswith("_"))
@@ -1870,6 +1884,9 @@ def status(project):
            "Languages: " + ", ".join("%s %d" % kv for kv in langs.most_common(6)),
            "Symbols from: %s (precision ast > ctags > approx) · built %s · updated %s" % (_meta(con, "symbol_tool"), _meta(con, "built_at"),
                                                        _meta(con, "updated_at")),
+           "Derived edges: %s (last full pass %s ms)" % ("pending, refreshed by the next query" if
+                                                          _meta(con, "derived_stale") == "1" else "current",
+                                                          _meta(con, "derive_ms") or "?"),
            "Path: %s" % db_path(project)]
     con.close()
     return out

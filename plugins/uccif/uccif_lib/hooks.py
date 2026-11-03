@@ -198,6 +198,8 @@ def on_post_tool_use(data, project):
         return None, {"decision": "skip", "target": path}
     added = task.add_modified(project, rel)
     st = index.update(project, wait=0.3, paths=[rel]) if index.exists(project) else None
+    if st and st.get("derived_stale"):
+        spawn(["maintain"], project)  # big repo: derived edges catch up in the background
     return None, {"rule": "task-files" if added else "no-task", "target": rel,
                   "indexed": bool(st and st["parsed"])}
 
