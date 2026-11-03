@@ -26,20 +26,38 @@ CORE_MARKER = "options.json"
 LOCAL_SUBDIR = ".local"
 
 
+def default_agent_preference():
+    """Read global agent preference from ~/.uccif/default_agent or infer from installed plugins."""
+    pref_file = Path.home() / ".uccif" / "default_agent"
+    if pref_file.is_file():
+        try:
+            val = pref_file.read_text(encoding="utf-8").strip().lower()
+            if val in ("antigravity", "claude"):
+                return val
+        except OSError:
+            pass
+    # If Antigravity plugin is installed and Claude marketplace is not
+    if (Path.home() / ".gemini" / "config" / "plugins" / "uccif").is_dir() and not (Path.home() / ".claude" / "plugins" / "marketplaces" / "uccif").is_dir():
+        return "antigravity"
+    return "claude"
+
+
 def get_current_agent(root=None):
     """Detect whether current session/project is 'antigravity' or 'claude'.
     Priority:
     1. UCCIF_AGENT env var ('antigravity' or 'claude')
     2. Antigravity environment variables (ANTIGRAVITY_LS_ADDRESS, ANTIGRAVITY_CSRF_TOKEN)
-    3. Project structure (e.g. .gemini/ or GEMINI.md vs .claude/ or CLAUDE.md)
-    4. CLAUDE_PROJECT_DIR env var
-    5. Default to 'claude'
+    3. CLAUDE_PROJECT_DIR env var
+    4. Project structure (e.g. .gemini/ or GEMINI.md vs .claude/ or CLAUDE.md)
+    5. Global preference (~/.uccif/default_agent or default_agent_preference)
     """
     agent = os.environ.get("UCCIF_AGENT")
     if agent:
         return agent.lower()
     if os.environ.get("ANTIGRAVITY_LS_ADDRESS") or os.environ.get("ANTIGRAVITY_CSRF_TOKEN"):
         return "antigravity"
+    if os.environ.get("CLAUDE_PROJECT_DIR"):
+        return "claude"
     if root:
         try:
             root_path = Path(root)
@@ -51,9 +69,7 @@ def get_current_agent(root=None):
                 return "antigravity"
         except (TypeError, ValueError, OSError):
             pass
-    if os.environ.get("CLAUDE_PROJECT_DIR"):
-        return "claude"
-    return "claude"
+    return default_agent_preference()
 
 
 def now_iso():

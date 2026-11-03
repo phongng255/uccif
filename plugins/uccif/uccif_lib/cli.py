@@ -3,6 +3,7 @@
 import argparse
 import json
 import sys
+from pathlib import Path
 
 from uccif_lib import SCHEMA_VERSION, __version__, codegraph, detect, drift, hooks, installer, log, task, usage
 from uccif_lib.paths import data_root_source, resolve_project
@@ -26,6 +27,8 @@ def build_parser():
     p_un.add_argument("--target", choices=("auto", "antigravity", "claude", "all"), default="auto")
 
     sub.add_parser("status", help="check UCCIF installation status across Antigravity and Claude Code")
+    p_sa = sub.add_parser("set-agent", help="set default host engine (antigravity or claude)")
+    p_sa.add_argument("agent", choices=("antigravity", "claude"))
 
     t = sub.add_parser("task", help="current-task memory").add_subparsers(dest="action")
     s = t.add_parser("start")
@@ -211,6 +214,12 @@ def main(argv=None):
             return installer.uninstall(target=args.target)
         if args.cmd == "status":
             return installer.status()
+        if args.cmd == "set-agent":
+            pref_dir = Path.home() / ".uccif"
+            pref_dir.mkdir(parents=True, exist_ok=True)
+            (pref_dir / "default_agent").write_text(args.agent + "\n", encoding="utf-8")
+            print("✔ Default host engine set to: %s" % ("Antigravity (Gemini)" if args.agent == "antigravity" else "Claude Code"))
+            return 0
         if args.cmd == "task" and args.action:
             return _task_cmd(args)
         if args.cmd == "usage":
