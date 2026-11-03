@@ -128,11 +128,28 @@ def db_path(project):
     return project.data_dir / "index" / "index.db"
 
 
-def connect(project):
+class IndexUnavailable(Exception):
+    pass
+
+
+def connect(project, write=True):
+    """Writers (hooks, `index update`) create/upgrade the schema. Readers open the file
+    read-only: queries run from Claude's Bash, whose sandbox denies writes under ~/.claude.
+    Rollback-journal mode (not WAL) so a read-only open needs no -shm/-wal files."""
     path = db_path(project)
+    if not write:
+        if not path.exists():
+            raise IndexUnavailable("not built yet")
+        uri = "file:%s?mode=ro" % path.as_posix().replace("?", "%3f").replace("#", "%23")
+        if os.name == "nt" and not uri.startswith("file:/"):
+            uri = "file:/" + uri[5:]
+        try:
+            return sqlite3.connect(uri, uri=True, timeout=5)
+        except sqlite3.Error as e:
+            raise IndexUnavailable(str(e))
     path.parent.mkdir(parents=True, exist_ok=True)
     con = sqlite3.connect(str(path), timeout=5)
-    con.execute("PRAGMA journal_mode=WAL")
+    con.execute("PRAGMA journal_mode=DELETE")
     con.executescript("""
         CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
         CREATE TABLE IF NOT EXISTS files (path TEXT PRIMARY KEY, lang TEXT, size INTEGER,
@@ -499,7 +516,7 @@ def tests_for(con, rel):
 
 
 def query_symbol(project, name):
-    con = connect(project)
+    con = connect(project, write=False)
     defs = con.execute("SELECT name, kind, path, line, scope, precision FROM symbols WHERE name=? "
                        "ORDER BY kind='method', path LIMIT 12", (name,)).fetchall()
     note = ""
@@ -525,7 +542,7 @@ def query_symbol(project, name):
 
 
 def query_file(project, path):
-    con = connect(project)
+    con = connect(project, write=False)
     rel = _norm(project, path)
     row = con.execute("SELECT lang, n_symbols, is_test FROM files WHERE path=?", (rel,)).fetchone()
     if not row:
@@ -552,7 +569,7 @@ def query_file(project, path):
 
 
 def query_tests_for(project, path):
-    con = connect(project)
+    con = connect(project, write=False)
     rel = _norm(project, path)
     tests = tests_for(con, rel)
     con.close()
@@ -562,7 +579,7 @@ def query_tests_for(project, path):
 def status(project):
     if not exists(project):
         return ["Index: not built yet (builds in the background at session start, or on first query)."]
-    con = connect(project)
+    con = connect(project, write=False)
     files = con.execute("SELECT count(*) FROM files").fetchone()[0]
     syms = con.execute("SELECT count(*) FROM symbols").fetchone()[0]
     imps = con.execute("SELECT count(*), count(target) FROM imports").fetchone()
@@ -578,9 +595,10 @@ def status(project):
 
 def languages(project):
     """{lang: file count} from the index, or {} if it isn't built."""
-    if not exists(project):
+    try:
+        con = connect(project, write=False)
+    except IndexUnavailable:
         return {}
-    con = connect(project)
     out = dict(con.execute("SELECT lang, count(*) FROM files GROUP BY lang").fetchall())
     con.close()
     return out

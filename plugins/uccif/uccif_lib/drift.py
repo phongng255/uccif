@@ -1,8 +1,8 @@
 """Drift: notice structural changes that make the project docs stale.
 
 A fingerprint of the repo's shape (source dirs to depth 2, manifest hashes,
-declared dependencies) is kept in <project data>/drift.json, outside the repo
-so branches and teammates never conflict over it. `check` compares it with the
+declared dependencies) is kept in <project>/.claude/uccif/.local/drift.json,
+git-ignored so branches and teammates never conflict over it. `check` compares it with the
 current repo and records pending items naming the doc to update; the next
 UserPromptSubmit hook hands them to Claude. Changes inside a function never
 count as drift. `ack` stores the current fingerprint once docs are updated.
@@ -13,7 +13,7 @@ import json
 import re
 from pathlib import PurePosixPath
 
-from uccif_lib.paths import now_iso, read_json, write_json
+from uccif_lib.paths import ensure_local, now_iso, read_json, write_json
 
 MANIFESTS = ("package.json", "pyproject.toml", "requirements.txt", "go.mod", "Cargo.toml",
              "pom.xml", "build.gradle", "build.gradle.kts", "composer.json", "Gemfile",
@@ -23,7 +23,12 @@ MAX_PENDING = 5
 
 
 def _file(project):
-    return project.data_dir / "drift.json"
+    return project.local_dir / "drift.json"
+
+
+def _save(project, state):
+    ensure_local(project)
+    write_json(_file(project), state)
 
 
 def _deps(root):
@@ -93,17 +98,17 @@ def check(project, files=None):
     state = read_json(_file(project), {}) or {}
     new = fingerprint(project, files)
     if "fingerprint" not in state:
-        write_json(_file(project), {"fingerprint": new, "pending": [], "updated": now_iso()})
+        _save(project, {"fingerprint": new, "pending": [], "updated": now_iso()})
         return []
     items = diff(state["fingerprint"], new)
     if not (project.docs_dir / "summary.md").exists():
         # nothing to keep in sync yet: init will describe the current shape
-        write_json(_file(project), {"fingerprint": new, "pending": [], "updated": now_iso()})
+        _save(project, {"fingerprint": new, "pending": [], "updated": now_iso()})
         return []
     pending = ["%s -> update %s" % it for it in items][:MAX_PENDING]
     if pending != state.get("pending", []):  # new drift, or a change was reverted
         state.update(pending=pending, updated=now_iso())
-        write_json(_file(project), state)
+        _save(project, state)
     return pending
 
 
@@ -112,4 +117,4 @@ def pending(project):
 
 
 def ack(project):
-    write_json(_file(project), {"fingerprint": fingerprint(project), "pending": [], "updated": now_iso()})
+    _save(project, {"fingerprint": fingerprint(project), "pending": [], "updated": now_iso()})

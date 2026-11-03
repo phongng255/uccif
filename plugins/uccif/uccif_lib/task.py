@@ -1,7 +1,8 @@
 """Current-task memory: start / show / checkpoint / close.
 
-Canonical state is tasks/current.json in the project data dir; current-task.md
-is rendered from it for Claude and humans. Decisions and issues are also
+Canonical state is tasks/current.json in <project>/.claude/uccif/.local/ (git-ignored;
+inside the working dir so `uccif task …` works in Claude Code's Bash sandbox, which
+denies writes under ~/.claude); current-task.md is rendered from it. Decisions and issues are also
 appended to the committed docs in <project>/.claude/uccif/.
 """
 
@@ -9,7 +10,10 @@ import functools
 import json
 from datetime import date
 
-from uccif_lib.paths import LockTimeout, file_lock, now_iso, read_json, write_json, write_text_atomic
+import shutil
+
+from uccif_lib.paths import (LockTimeout, ensure_local, file_lock, now_iso, read_json, write_json,
+                             write_text_atomic)
 
 TYPES = ("bug", "feature", "refactor", "review", "test", "explore", "ui")
 LIST_FIELDS = ("files", "decisions", "tests", "issues")
@@ -23,15 +27,29 @@ class TaskError(Exception):
 
 
 def _paths(project):
-    tdir = project.data_dir / "tasks"
+    tdir = project.local_dir / "tasks"
     return {
         "dir": tdir,
         "lock": tdir / ".lock",
         "state": tdir / "state.json",
         "current": tdir / "current.json",
-        "md": project.data_dir / "current-task.md",
+        "md": project.local_dir / "current-task.md",
         "history": tdir / "history",
     }
+
+
+def migrate_from_data_dir(project):
+    """Move task state written by 3.0.0-dev.1..3 (plugin data dir) into .local/ once."""
+    old = project.data_dir / "tasks"
+    if not old.is_dir() or _paths(project)["dir"].exists():
+        return False
+    ensure_local(project)
+    shutil.copytree(str(old), str(_paths(project)["dir"]))
+    md = project.data_dir / "current-task.md"
+    if md.exists():
+        shutil.copy2(str(md), str(_paths(project)["md"]))
+    shutil.rmtree(str(old), ignore_errors=True)
+    return True
 
 
 def load_current(project):
@@ -63,6 +81,7 @@ def _locked(fn):
     """Serialize task-state changes across sessions on the same project."""
     @functools.wraps(fn)
     def wrapper(project, *args, **kwargs):
+        ensure_local(project)
         try:
             with file_lock(_paths(project)["lock"], timeout=LOCK_TIMEOUT):
                 return fn(project, *args, **kwargs)

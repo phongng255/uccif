@@ -132,3 +132,37 @@ def test_targeted_update_only_touches_given_files(project, repo):
     assert "none in index" in "\n".join(index.query_symbol(project, "other"))
     (repo / "app" / "models.py").unlink()
     assert index.update(project, paths=["app/models.py"])["removed"] == 1
+
+
+def test_queries_work_when_data_dir_is_read_only(project, repo, monkeypatch, capsys):
+    """Claude Code's Bash sandbox denies writes under ~/.claude: queries must still answer."""
+    import stat
+    from uccif_lib import cli
+    make_app(repo)
+    index.update(project)
+    dirs = [project.data_dir, index.db_path(project).parent]
+    files = list(index.db_path(project).parent.iterdir())
+    try:
+        for f in files:
+            os.chmod(str(f), stat.S_IRUSR)
+        for d in dirs:
+            os.chmod(str(d), stat.S_IRUSR | stat.S_IXUSR)
+        if os.access(str(index.db_path(project).parent), os.W_OK):
+            import pytest
+            pytest.skip("running as a user that ignores file permissions")
+        assert cli.main(["index", "query", "--symbol", "add"]) == 0
+        assert "src/utils/math.ts:1  function add" in capsys.readouterr().out
+        assert cli.main(["index", "status"]) == 0
+        assert cli.main(["index", "update"]) == 0
+        assert "sandbox" in capsys.readouterr().out
+        assert cli.main(["task", "start", "x", "--type", "ui"]) == 0  # task state lives in the repo
+    finally:
+        for d in dirs:
+            os.chmod(str(d), stat.S_IRWXU)
+        for f in files:
+            os.chmod(str(f), stat.S_IRUSR | stat.S_IWUSR)
+
+
+def test_query_before_build_says_so(project, repo, capsys):
+    from uccif_lib import index as I
+    assert "not built yet" in "\n".join(I.status(project))

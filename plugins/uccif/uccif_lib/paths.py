@@ -23,6 +23,7 @@ DOCS_SUBDIR = Path(".claude") / "uccif"
 # core plugin writes there (SessionStart caches userConfig in it).
 CORE_DATA_NAME = "uccif-uccif"
 CORE_MARKER = "options.json"
+LOCAL_SUBDIR = ".local"
 
 
 def now_iso():
@@ -166,6 +167,28 @@ class Project:
     def docs_dir(self):
         return self.root / DOCS_SUBDIR
 
+    @property
+    def local_dir(self):
+        """Per-checkout state the CLI must write from inside Claude Code's Bash sandbox
+        (task memory, drift state). The sandbox never lets commands write under ~/.claude,
+        but the working directory is writable; .claude/uccif/.gitignore keeps it out of git."""
+        return self.docs_dir / LOCAL_SUBDIR
+
+
+def ensure_local(project):
+    """Create .claude/uccif/.local/ and make sure git ignores it."""
+    project.local_dir.mkdir(parents=True, exist_ok=True)
+    gi = project.docs_dir / ".gitignore"
+    try:
+        lines = gi.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        lines = []
+    if LOCAL_SUBDIR + "/" not in lines:
+        with open(str(gi), "a", encoding="utf-8") as f:
+            f.write(("\n" if lines and lines[-1] else "") +
+                    "# UCCIF per-checkout state (task memory, drift); never commit\n%s/\n" % LOCAL_SUBDIR)
+    return project.local_dir
+
 
 def _find_moved(projects_dir, commit, new_root):
     """Entries with the same root commit whose recorded path no longer exists."""
@@ -196,28 +219,35 @@ def resolve_project(cwd=None, create=True):
         commit = root_commit(root)
     renamed_from = None
 
-    if not data_dir.exists() and create:
-        moved = _find_moved(projects_dir, commit, root) if commit else None
-        if moved:
-            _, old_dir, renamed_from = moved
-            projects_dir.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(old_dir), str(data_dir))
-
-    if create:
-        data_dir.mkdir(parents=True, exist_ok=True)
-        meta = read_json(meta_path, {}) or {}
-        changed = (
-            meta.get("path") != str(root)
-            or (commit and meta.get("root_commit") != commit)
-            or renamed_from
-        )
-        if changed or not meta:
-            meta.setdefault("created", now_iso())
-            meta["path"] = str(root)
-            meta["root_commit"] = commit or meta.get("root_commit")
-            meta["updated"] = now_iso()
-            if renamed_from:
-                meta.setdefault("renamed_from", []).append(renamed_from)
-            write_json(meta_path, meta)
-
+    try:
+        if not data_dir.exists() and create:
+            moved = _find_moved(projects_dir, commit, root) if commit else None
+            if moved:
+                _, old_dir, renamed_from = moved
+                projects_dir.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(old_dir), str(data_dir))
+        if create:
+            _write_meta(data_dir, meta_path, root, commit, renamed_from)
+    except OSError:
+        # Claude Code's Bash sandbox denies writes under ~/.claude. Commands run there
+        # only read what hooks (which run outside the sandbox) keep current.
+        pass
     return Project(root, data_dir, commit, renamed_from)
+
+
+def _write_meta(data_dir, meta_path, root, commit, renamed_from):
+    data_dir.mkdir(parents=True, exist_ok=True)
+    meta = read_json(meta_path, {}) or {}
+    changed = (
+        meta.get("path") != str(root)
+        or (commit and meta.get("root_commit") != commit)
+        or renamed_from
+    )
+    if changed or not meta:
+        meta.setdefault("created", now_iso())
+        meta["path"] = str(root)
+        meta["root_commit"] = commit or meta.get("root_commit")
+        meta["updated"] = now_iso()
+        if renamed_from:
+            meta.setdefault("renamed_from", []).append(renamed_from)
+        write_json(meta_path, meta)

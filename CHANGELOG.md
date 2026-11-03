@@ -1,5 +1,17 @@
 # Changelog
 
+## 3.0.0-dev.4
+
+- Works inside Claude Code's Bash sandbox, which denies writes under `~/.claude`:
+  - `uccif index query` / `status` open the index read-only (rollback journal instead of
+    WAL); the refresh before a query is skipped there, since hooks keep the index current.
+  - Task memory and drift state moved to `<project>/.claude/uccif/.local/` (writable in the
+    sandbox, git-ignored through `.claude/uccif/.gitignore`). Existing task state is migrated
+    automatically at the next session start.
+  - `uccif doctor` reports a read-only data dir as INFO, not a failure.
+- `doctor` no longer warns about languages the plugin has no LSP config for (e.g. Vue); it
+  notes that the code index covers them. Missing bundled servers show the install command.
+
 ## 3.0.0-dev.3
 
 - **Code index** (`uccif index query --symbol | --file | --tests-for`, `index status|build`):

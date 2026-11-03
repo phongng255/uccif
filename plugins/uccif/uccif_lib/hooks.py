@@ -123,6 +123,7 @@ def on_session_start(data, project):
     sid = data.get("session_id")
     opts = options()
 
+    task.migrate_from_data_dir(project)  # 3.0.0-dev.1..3 kept tasks in the plugin data dir
     prev = log.last_session_unclosed(project)
     if prev and prev != sid:
         log.session(project, session=prev, type="end", reason="unclean")

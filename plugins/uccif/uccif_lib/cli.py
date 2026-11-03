@@ -4,6 +4,8 @@ import argparse
 import json
 import sys
 
+import sqlite3
+
 from uccif_lib import SCHEMA_VERSION, __version__, detect, drift, hooks, index, log, task, usage
 from uccif_lib.paths import data_root_source, resolve_project
 
@@ -94,7 +96,12 @@ def _log_cmd(args):
 def _index_cmd(args):
     proj = resolve_project()
     if args.action in ("build", "update"):
-        st = index.update(proj, full=args.action == "build", wait=60)
+        try:
+            st = index.update(proj, full=args.action == "build", wait=60)
+        except (OSError, sqlite3.Error) as e:
+            print("Cannot write the index from this shell (%s): Claude Code's sandbox denies writes "
+                  "under ~/.claude. Hooks rebuild it automatically; nothing to do." % e)
+            return 0
         if st is None:
             print("Index is being updated by another process; try again shortly.")
             return 0
@@ -106,14 +113,22 @@ def _index_cmd(args):
         print("\n".join(index.status(proj)))
         return 0
     if args.action == "query":
-        # refresh first so edits made outside Claude are never missed
-        index.update(proj, wait=2 if index.exists(proj) else 60)
-        if args.symbol:
-            lines = index.query_symbol(proj, args.symbol)
-        elif args.file:
-            lines = index.query_file(proj, args.file)
-        else:
-            lines = index.query_tests_for(proj, args.tests_for)
+        # Refresh first so edits made outside Claude are never missed. Inside Claude
+        # Code's Bash sandbox this write is denied; hooks keep the index current anyway.
+        try:
+            index.update(proj, wait=2 if index.exists(proj) else 60)
+        except (OSError, sqlite3.Error):
+            pass
+        try:
+            if args.symbol:
+                lines = index.query_symbol(proj, args.symbol)
+            elif args.file:
+                lines = index.query_file(proj, args.file)
+            else:
+                lines = index.query_tests_for(proj, args.tests_for)
+        except index.IndexUnavailable as e:
+            lines = ["Code index unavailable (%s). It is built by the session-start hook; "
+                     "use bounded Grep/Glob meanwhile." % e]
         print("\n".join(lines))
         return 0
     return 2

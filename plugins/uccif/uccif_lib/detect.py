@@ -154,6 +154,9 @@ def doctor(project):
         lines.append(("OK    " if cond else "WARN  ") + (good if cond else bad))
         ok = ok and cond
 
+    def info(text):
+        lines.append("INFO  " + text)
+
     check(sys.version_info >= (3, 8), "python %s" % sys.version.split()[0], "python < 3.8")
     check(True, "uccif %s" % __version__, "")
     dr = data_root()
@@ -163,8 +166,16 @@ def doctor(project):
         probe.write_text("x")
         probe.unlink()
         check(True, "data dir writable: %s" % dr, "")
+    except OSError:
+        # Expected when run from Claude's Bash: the sandbox denies writes under ~/.claude.
+        # Hooks run outside the sandbox and keep the index and logs current.
+        info("data dir read-only in this shell (Claude Code sandbox); hooks write it: %s" % dr)
+    try:
+        from uccif_lib.paths import ensure_local
+        ensure_local(project)
+        check(True, "task state writable: %s" % project.local_dir, "")
     except OSError as e:
-        check(False, "", "data dir not writable: %s (%s)" % (dr, e))
+        check(False, "", "task state not writable: %s (%s)" % (project.local_dir, e))
     check(bool(os.environ.get("UCCIF_DATA_DIR") or os.environ.get("CLAUDE_PLUGIN_DATA")),
           "data dir passed by Claude Code", "UCCIF_DATA_DIR not set: SessionStart has not run in this shell (fallback used)")
 
@@ -193,7 +204,12 @@ def doctor(project):
     check(d["claude_md_block"], "CLAUDE.md has UCCIF block", "CLAUDE.md has no UCCIF block (run uccif:init)")
     check(d["docs"]["summary.md"], "project docs present", "no .claude/uccif/summary.md (run uccif:init)")
     check(not d["uccif_v2"], "no UCCIF v2 leftovers", "UCCIF v2 still installed: %s" % ", ".join(d["uccif_v2"]))
+    from uccif_lib.hooks import LSP_BUNDLED
     for lang, s in d["lsp"].items():
+        if lang not in LSP_BUNDLED:
+            info("no LSP configured for %s; the code index covers these files" % lang)
+            continue
         check(s["installed"], "LSP for %s: %s" % (lang, s["binary"]),
-              "LSP for %s missing: binary %s, plugin %s (not installed automatically)" % (lang, s["binary"], s["plugin"]))
+              "LSP for %s missing: install %s with `%s`, then /reload-plugins"
+              % (lang, s["binary"], LSP_BUNDLED[lang][1]))
     return ok, lines

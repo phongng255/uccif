@@ -38,7 +38,8 @@ has not yet been verified in a real session. Language servers and MCP servers ar
 | Data | Location |
 |---|---|
 | Framework code | `${CLAUDE_PLUGIN_ROOT}` |
-| Code index, task state, history, logs, metrics, drift baseline | `${CLAUDE_PLUGIN_DATA}/projects/<path-hash>/` (outside the repo) |
+| Code index, logs, metrics | `${CLAUDE_PLUGIN_DATA}/projects/<path-hash>/` (outside the repo; written by hooks) |
+| Task memory, history, drift baseline | `<project>/.claude/uccif/.local/` (git-ignored; writable from Claude's sandboxed Bash) |
 | Project docs, decisions, known issues | `<project>/.claude/uccif/` (commit these) |
 
 The per-project key is the repo path; the root commit is stored with it, so a renamed or

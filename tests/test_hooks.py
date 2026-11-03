@@ -174,7 +174,7 @@ def test_compact_and_end_lifecycle(base, project):
     assert types == ["start", "compact", "end"]
     end = log.read(project, "sessions.jsonl")[-1]
     assert end["task"] == "T-001" and end["tokens"] == 42310
-    history = list((project.data_dir / "tasks" / "history").glob("*.md"))
+    history = list((project.local_dir / "tasks" / "history").glob("*.md"))
     assert {p.name.split("_")[-1] for p in history} == {"precompact.md", "sessionend.md"}
 
 
