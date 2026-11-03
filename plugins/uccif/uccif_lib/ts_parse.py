@@ -74,7 +74,9 @@ def _walk(root):
 
 
 def parse(text, rel, lang):
-    """-> (symbols, imports, calls, bindings, import_lines) or None.
+    """-> (symbols, imports, calls, bindings, import_lines, heritage) or None.
+    heritage: [(class or interface name, base name as written, "extends"|"implements", line)];
+    a dotted base keeps its dots (`mod.Base`), generic arguments are dropped.
     symbols: [(name, kind, line, scope)]; imports: [raw module strings];
     calls: [(caller, callee, object, line)] where caller is the enclosing function/method
     ("Class.method", or None at top level) and object is the receiver identifier ("this",
@@ -137,8 +139,43 @@ def _js_call(n, calls):
         calls.append((_js_caller(n), name, obj, n.start_point[0] + 1))
 
 
+def _base_name(c):
+    """Written name of a base class / interface node, or None when it is not a plain name."""
+    t = c.type
+    if t in ("identifier", "type_identifier", "member_expression", "nested_type_identifier",
+             "attribute"):
+        return _txt(c) or None
+    if t == "generic_type":
+        first = c.children[0] if c.children else None
+        return _base_name(first) if first is not None else None
+    if t == "subscript":  # python Generic[T], Base[int]
+        v = c.child_by_field_name("value")
+        return _base_name(v) if v is not None else None
+    if t == "parenthesized_expression":
+        inner = [x for x in c.children if x.type not in ("(", ")")]
+        return _base_name(inner[0]) if inner else None
+    return None
+
+
+def _js_heritage(n, cname, out):
+    line = n.start_point[0] + 1
+    for c in n.children:
+        if c.type == "class_heritage":
+            for clause in c.children:
+                kind = "implements" if clause.type == "implements_clause" else "extends"
+                for b in clause.children:
+                    name = _base_name(b)
+                    if name:
+                        out.append((cname, name, kind, line))
+        elif c.type == "extends_type_clause":  # interface X extends Y, Z
+            for b in c.children:
+                name = _base_name(b)
+                if name:
+                    out.append((cname, name, "extends", line))
+
+
 def _js(root):
-    syms, imps, calls, binds, ilines = [], [], [], {}, {}
+    syms, imps, calls, binds, ilines, heritage = [], [], [], {}, {}, []
 
     def add_import(raw, line):
         if raw and raw not in imps:
@@ -157,6 +194,7 @@ def _js(root):
             if name is not None:
                 cname = _txt(name)
                 syms.append((cname, "class", line, None))
+                _js_heritage(n, cname, heritage)
                 body = n.child_by_field_name("body")
                 for m in (body.children if body is not None else []):
                     mname = m.child_by_field_name("name")
@@ -170,6 +208,7 @@ def _js(root):
                             syms.append((_txt(mname), "method", m.start_point[0] + 1, cname))
         elif t == "interface_declaration":
             syms.append((_txt(n.child_by_field_name("name")), "interface", line, None))
+            _js_heritage(n, _txt(n.child_by_field_name("name")), heritage)
         elif t == "type_alias_declaration":
             syms.append((_txt(n.child_by_field_name("name")), "type", line, None))
         elif t == "enum_declaration":
@@ -215,7 +254,7 @@ def _js(root):
                     add_import(_txt(first).strip("'\"`"), line)
     syms = [s for s in syms if s[0]]
     syms.sort(key=lambda s: s[2])
-    return syms, imps[:200], calls, binds, ilines
+    return syms, imps[:200], calls, binds, ilines, heritage
 
 
 def _js_bindings(stmt, raw, binds):
@@ -242,7 +281,7 @@ def _js_bindings(stmt, raw, binds):
 # ---- Python ------------------------------------------------------------------------
 
 def _python(root):
-    syms, imps, calls, binds, ilines = [], [], [], {}, {}
+    syms, imps, calls, binds, ilines, heritage = [], [], [], {}, {}, []
 
     def add_import(raw, line):
         if raw and raw not in imps:
@@ -260,6 +299,11 @@ def _python(root):
             if name is not None:
                 syms.append((_txt(name), "class", n.start_point[0] + 1, cls))
                 nxt_cls, nxt_top = _txt(name), False
+                bases = n.child_by_field_name("superclasses")
+                for b in (bases.children if bases is not None else []):
+                    base = _base_name(b)
+                    if base:
+                        heritage.append((_txt(name), base, "extends", n.start_point[0] + 1))
         elif t == "function_definition":
             name = n.child_by_field_name("name")
             if name is not None:
@@ -306,4 +350,4 @@ def _python(root):
         for c in reversed(n.children):
             stack.append((c, nxt_cls, nxt_top, nxt_caller))
     syms.sort(key=lambda s: s[2])
-    return syms, imps[:200], calls, binds, ilines
+    return syms, imps[:200], calls, binds, ilines, heritage

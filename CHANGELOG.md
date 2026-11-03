@@ -1,5 +1,29 @@
 # Changelog
 
+## 3.0.0-dev.15
+
+- **Structural edges** (phase 2, step 4; `SCHEMA` 6, an older index is rebuilt automatically):
+  - `extends` / `implements` (A1): JS/TS classes (`extends`, `implements`, generics dropped,
+    `Ns.Base`), TS `interface X extends Y, Z`, and Python `class X(Base, mod.Base)`. The base is
+    resolved through the file's imports, the same file, or `import mod` namespaces; bases from
+    packages or the language (`Vue`, `Error`, `ValueError`, `Generic`) are `extends_ext` /
+    `implements_ext` (known, not repo code); anything else is `unresolved`. Bases imported
+    through a barrel get a derived edge (`via`) straight to the defining file, like calls.
+    Mixin calls (`extends Mix(Base)`) are skipped.
+  - `contains` (A3): file -> top-level symbol and class -> method, so the graph can be walked
+    from a file down to its functions. Impact and the graph view still follow only
+    imports/calls, so containment never makes a file "depend" on itself.
+  - `tests` (A4): for a test file, each resolved call is also a `tests` edge from the test
+    (or its enclosing function) to the symbol it exercises, with `file:line`.
+    `tests_for` (and so `--impact` "tests to run") also uses them, which catches tests that
+    reach the code through a barrel.
+- `--symbol` shows, within the 30-line limit: `Extends / implements`, `Subclasses /
+  implementations (n)` and `Tested by (n)` with `file:line`.
+- The benchmark's unresolved share ignores `contains`/`tests`/`*_ext` edges (they cannot be
+  unresolved). Measured: one-file update 5-6 ms, DB +20% (this repo 1.5 -> 1.8 MB).
+- Not yet: method calls on expressions (`new Base().run()`) stay unresolved (roadmap C1), so
+  tests that only call methods show the class, not the method.
+
 ## 3.0.0-dev.14
 
 - **Import resolution rewritten** (phase 2, step 3), now in `uccif_lib/resolve.py`

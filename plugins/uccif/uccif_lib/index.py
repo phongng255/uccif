@@ -26,7 +26,7 @@ from uccif_lib import ts_parse
 from uccif_lib.resolve import JS_RESOLVE_EXT, Resolver  # noqa: F401 (re-exported)
 from uccif_lib.paths import LockTimeout, file_lock, now_iso
 
-SCHEMA = 5
+SCHEMA = 6
 MAX_BYTES = 1000000
 QUERY_LINES = 30
 
@@ -428,8 +428,9 @@ def _update(project, full, only=None):
                 syms.append((None, "component", 1, None))
             raws, ilines = ast[rel][1], ast[rel][4]
             call_rows = _resolve_calls(rel, lang, ast[rel], resolver)
+            herit_rows = _resolve_heritage(rel, lang, ast[rel], resolver)
         else:
-            call_rows, ilines = [], {}
+            call_rows, ilines, herit_rows = [], {}, []
             syms, precision = tagged.get(rel), "ctags"
             if not syms:
                 syms, precision = regex_symbols(text, lang), "approx"
@@ -442,7 +443,7 @@ def _update(project, full, only=None):
         con.executemany("INSERT INTO calls VALUES (?,?,?,?,?)", [r[:5] for r in call_rows])
         con.execute("INSERT INTO files VALUES (?,?,?,?,?,?,?)",
                     (rel, lang, st.st_size, st.st_mtime, h, int(is_test(rel)), len(rows)))
-        _write_graph(con, rel, lang, rows, imps, call_rows, resolver, text)
+        _write_graph(con, rel, lang, rows, imps, call_rows, resolver, text, herit_rows)
     if to_parse or removed or full:
         _through_barrels(con)
         _set_meta(con, "updated_at", now_iso())
@@ -471,13 +472,8 @@ def _builtin(lang, name, obj):
     return (obj if obj is not None else name) in JS_GLOBALS
 
 
-def _resolve_calls(rel, lang, parsed, resolver):
-    """Best-effort: attach each call to the repo file defining its callee.
-    Resolved through the file's own import bindings, or to this file when it defines the
-    name itself (and for `this.x()` / `self.x()`). Anything else keeps callee_path NULL
-    ("unresolved"): a lead to verify by reading, not a fact."""
-    syms, calls, binds = parsed[0], parsed[2], parsed[3]
-    local = {n for n, _, _, _ in syms if n}
+def _bind_map(rel, lang, binds, resolver):
+    """({local name: (repo file or None, name in that file)}, {names imported from packages})."""
     bound, pkg = {}, set()
     for name, (raw, orig) in binds.items():
         if not resolver.internal(raw, lang, rel):
@@ -488,6 +484,47 @@ def _resolve_calls(rel, lang, parsed, resolver):
         if target is None:
             target = resolver.resolve(rel, raw, lang)
         bound[name] = (target, orig)
+    return bound, pkg
+
+
+def _resolve_heritage(rel, lang, parsed, resolver):
+    """[(class, base, kind, line, base file or None, external)] for extends / implements."""
+    syms, binds, heritage = parsed[0], parsed[3], parsed[5]
+    if not heritage:
+        return []
+    local = {n for n, _, _, _ in syms if n}
+    bound, pkg = _bind_map(rel, lang, binds, resolver)
+    rows = []
+    for cls, base, kind, line in heritage:
+        path, name, ext = None, base, False
+        if "." in base:
+            obj, _, rest = base.partition(".")
+            name = rest.rsplit(".", 1)[-1]
+            if obj in bound and bound[obj][1] == "*":
+                path = bound[obj][0]
+            ext = obj in pkg and path is None
+        elif base in bound and bound[base][0]:
+            path = bound[base][0]
+            if bound[base][1] not in ("default", "*"):
+                name = bound[base][1]
+        elif base in local:
+            path = rel
+        elif base in pkg:
+            ext = True
+        elif _builtin(lang, base, None):
+            ext = True
+        rows.append((cls, name, kind, line, path, ext))
+    return rows
+
+
+def _resolve_calls(rel, lang, parsed, resolver):
+    """Best-effort: attach each call to the repo file defining its callee.
+    Resolved through the file's own import bindings, or to this file when it defines the
+    name itself (and for `this.x()` / `self.x()`). Anything else keeps callee_path NULL
+    ("unresolved"): a lead to verify by reading, not a fact."""
+    syms, calls, binds = parsed[0], parsed[2], parsed[3]
+    local = {n for n, _, _, _ in syms if n}
+    bound, pkg = _bind_map(rel, lang, binds, resolver)
     rows = []
     for caller, name, obj, line in calls:
         path, callee = None, name
@@ -619,15 +656,19 @@ def _through_barrels(con):
                 if hit and hit[0] not in (barrel, f) and (f, hit[0]) not in seen_pairs:
                     seen_pairs.add((f, hit[0]))
                     new.append((f, hit[0], "imports", line, "extracted", raw, f, hit[0], barrel))
-        for sid, line, name, f in con.execute("SELECT src_id, line, detail, src_path FROM edges WHERE kind='calls' "
-                                             "AND dst_path=? AND via IS NULL", (barrel,)).fetchall():
+        for sid, line, name, f, kind in con.execute(
+                "SELECT src_id, line, detail, src_path, kind FROM edges WHERE kind IN ('calls','extends','implements') "
+                "AND dst_path=? AND via IS NULL", (barrel,)).fetchall():
             if name in names_in(barrel):
                 continue
             hit = find(barrel, name, set())
             if hit and hit[0] != barrel:
                 r = con.execute("SELECT id FROM nodes WHERE path=? AND name=? AND kind<>'file' LIMIT 1",
                                 hit).fetchone()
-                new.append((sid, r[0] if r else hit[0], "calls", line, "extracted", hit[1], f, hit[0], barrel))
+                dst = r[0] if r else hit[0]
+                new.append((sid, dst, kind, line, "extracted", hit[1], f, hit[0], barrel))
+                if kind == "calls" and is_test(f):
+                    new.append((sid, dst, "tests", line, "extracted", hit[1], f, hit[0], barrel))
     con.executemany("INSERT INTO edges VALUES (?,?,?,?,?,?,?,?,?)", new)
 
 
@@ -635,7 +676,18 @@ def _sym_id(path, name, scope):
     return "%s#%s%s" % (path, (scope + ".") if scope else "", name)
 
 
-def _write_graph(con, rel, lang, sym_rows, imps, call_rows, resolver, text=""):
+def _dst_node(con, cpath, name):
+    """Node a reference to `name` in file `cpath` should point at (see _write_graph)."""
+    hit = con.execute("SELECT id FROM nodes WHERE path=? AND name=? AND kind<>'file' LIMIT 1",
+                      (cpath, name)).fetchone()
+    if hit:
+        return hit[0]
+    if con.execute("SELECT 1 FROM nodes WHERE id=?", (cpath,)).fetchone():
+        return cpath  # target already parsed and has no such symbol
+    return _sym_id(cpath, name, None)  # target not parsed yet; corrected when it is
+
+
+def _write_graph(con, rel, lang, sym_rows, imps, call_rows, resolver, text="", herit_rows=()):
     """Mirror one parsed file into the unified graph: nodes (file + symbols) and edges.
 
     Node ids are stable (`path` for a file, `path#Scope.name` for a symbol) so edges from other
@@ -646,6 +698,11 @@ def _write_graph(con, rel, lang, sym_rows, imps, call_rows, resolver, text=""):
         nodes.append((_sym_id(rel, n, sc), k.replace("-", "_"), n, rel, ln, None, sc, pr))
     con.executemany("INSERT OR IGNORE INTO nodes VALUES (?,?,?,?,?,?,?,?)", nodes)
     edges = []
+    own_ids = {nd[0] for nd in nodes}
+    for nd in nodes[1:]:  # contains: file -> top-level symbol, class -> method
+        scope = nd[6]
+        box = _sym_id(rel, scope, None) if scope else rel
+        edges.append((box if box in own_ids else rel, nd[0], "contains", nd[4], "extracted", nd[2], rel, rel, None))
     for src, raw, target, line in imps:
         if target:
             edges.append((rel, target, "imports", line, "extracted", raw, rel, target, None))
@@ -662,19 +719,23 @@ def _write_graph(con, rel, lang, sym_rows, imps, call_rows, resolver, text=""):
         if sid not in own:
             sid = rel
         if cpath:
-            hit = con.execute("SELECT id FROM nodes WHERE path=? AND name=? AND kind<>'file' LIMIT 1",
-                              (cpath, callee)).fetchone()
-            if hit:
-                dst = hit[0]
-            elif con.execute("SELECT 1 FROM nodes WHERE id=?", (cpath,)).fetchone():
-                dst = cpath  # target already parsed and has no such symbol
-            else:
-                dst = _sym_id(cpath, callee, None)  # target not parsed yet; corrected when it is
-            edges.append((sid, dst, "calls", line, "extracted", callee, rel, cpath, None))
+            edges.append((sid, _dst_node(con, cpath, callee), "calls", line, "extracted", callee, rel, cpath, None))
         elif ext:  # a function from an installed package: fully known, just not in the repo
             edges.append((sid, None, "calls_ext", line, "extracted", callee, rel, None, None))
         else:
             edges.append((sid, None, "calls", line, "unresolved", callee, rel, None, None))
+    for cls, name, kind, line, cpath, ext in herit_rows:
+        sid = _sym_id(rel, cls, None)
+        sid = sid if sid in own_ids else rel
+        if cpath:
+            edges.append((sid, _dst_node(con, cpath, name), kind, line, "extracted", name, rel, cpath, None))
+        elif ext:
+            edges.append((sid, None, kind + "_ext", line, "extracted", name, rel, None, None))
+        else:
+            edges.append((sid, None, kind, line, "unresolved", name, rel, None, None))
+    if is_test(rel):  # tests: the symbols a test file calls, at function level
+        edges += [(e[0], e[1], "tests", e[3], "extracted", e[5], rel, e[7], None)
+                  for e in edges if e[2] == "calls" and e[7]]
     binds, rexports = bindings_of(text, lang, rel)
     con.executemany("INSERT INTO bindings VALUES (?,?,?,?,?)", [(rel,) + b for b in binds])
     for raw, orig, name, line in rexports:
@@ -765,6 +826,8 @@ def tests_for(con, rel):
     direct = [r[0] for r in con.execute(
         "SELECT DISTINCT e.src_path FROM edges e JOIN files f ON f.path=e.src_path "
         "WHERE e.kind='imports' AND e.dst_path=? AND f.is_test=1", (rel,))]
+    direct += [r[0] for r in con.execute("SELECT DISTINCT src_path FROM edges WHERE kind='tests' AND dst_path=?",
+                                         (rel,))]
     stem = PurePosixPath(rel).stem
     names = {stem + ".test", stem + ".spec", "test_" + stem, stem + "_test", stem}
     by_name = [r[0] for r in con.execute("SELECT path FROM files WHERE is_test=1 AND path<>?", (rel,))
@@ -791,6 +854,7 @@ def query_symbol(project, name):
                                               "  [%d dependents]" % dep if dep else "",
                                               "  ~approx" if pr == "approx" else ""))
     lines.extend(_called_by(con, defs, QUERY_LINES - len(lines) - 2))
+    lines.extend(_relations(con, defs, QUERY_LINES - len(lines) - 2))
     total, top = _refs(project, name)
     room = QUERY_LINES - len(lines) - 1  # header line
     if total and room >= 1:
@@ -825,6 +889,41 @@ def _called_by(con, defs, budget, cap=8):
         shown = items[:min(cap, room)]
         out.append("%s (%d):" % (label, len(items)))
         out.extend("  %s:%d%s" % (sp, ln, (" in " + ss) if ss else "") for sp, ss, ln in shown)
+        if len(items) > len(shown) and len(out) < budget:
+            out.append("  ... +%d more" % (len(items) - len(shown)))
+    return out
+
+
+def _relations(con, defs, budget, cap=5):
+    """Inheritance and test lines for the definitions found: what a class extends/implements,
+    who extends/implements it, and which test files call it."""
+    if budget < 3 or not defs:
+        return []
+    ids = [_sym_id(p, n, sc) for n, _, p, _, sc, _ in defs]
+    mark = _in(ids)
+    up = con.execute("SELECT kind, detail, dst_path, src_path, line FROM edges WHERE src_id IN %s AND kind IN "
+                     "('extends','implements','extends_ext','implements_ext') ORDER BY line" % mark, ids).fetchall()
+    down = con.execute("SELECT DISTINCT src_id, kind, src_path, line FROM edges WHERE dst_id IN %s AND kind IN "
+                       "('extends','implements') ORDER BY src_path, line" % mark, ids).fetchall()
+    tested = con.execute("SELECT DISTINCT src_path, line FROM edges WHERE dst_id IN %s AND kind='tests' "
+                         "ORDER BY src_path, line" % mark, ids).fetchall()
+    sections = []
+    if up:
+        sections.append(("Extends / implements", [
+            "%s %s%s" % (k.split("_")[0], d, "  (%s)" % (dp if dp else "external")) for k, d, dp, _, _ in up]))
+    if down:
+        sections.append(("Subclasses / implementations (%d)" % len(down), [
+            "%s:%d  %s (%s)" % (sp, ln, sid.split("#", 1)[-1], k) for sid, k, sp, ln in down]))
+    if tested:
+        sections.append(("Tested by (%d)" % len(tested), ["%s:%d" % (sp, ln) for sp, ln in tested]))
+    out = []
+    for title, items in sections:
+        room = budget - len(out) - 1
+        if room < 1:
+            break
+        shown = items[:min(cap, room)]
+        out.append(title + ":")
+        out.extend("  " + x for x in shown)
         if len(items) > len(shown) and len(out) < budget:
             out.append("  ... +%d more" % (len(items) - len(shown)))
     return out
