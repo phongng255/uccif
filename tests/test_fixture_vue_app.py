@@ -68,7 +68,7 @@ def test_calls_with_tree_sitter(project, vue_app, monkeypatch):
     rows = con.execute("SELECT callee_name, callee_path FROM calls WHERE src_path='src/composables/useSync.ts'").fetchall()
     # `store.$state` / `saveTrip` come through imports; `sync` is local
     assert ("saveTrip", "src/utils/firebase.ts") in rows
-    # known gap (roadmap B4/C1): calls on a store variable stay unresolved
+    # the legacy `calls` table keeps them unresolved; the edges tie them to the store (test_pinia)
     unresolved = con.execute("SELECT count(*) FROM calls WHERE src_path='src/components/ExpenseList.vue' "
                              "AND callee_path IS NULL").fetchone()[0]
     assert unresolved >= 2  # store.addExpense, store.removeExpense

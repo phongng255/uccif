@@ -85,7 +85,7 @@ def test_template_calls_use_script_bindings(project, vue_app, monkeypatch):
     assert sel[1] == "src/App.vue#select"  # function declared in <script setup>
     rm = calls[("src/components/ExpenseList.vue", "remove", 3)]  # @remove="remove": bare handler is a call
     assert rm[1] == "src/components/ExpenseList.vue#remove"
-    assert calls[("src/App.vue", "toggle", 3)][4] == "unresolved"  # ui.toggle(): store variable (roadmap B4)
+    assert ("src/App.vue", "toggle", 3) not in calls  # `ui.toggle()` is a store action now (see test_pinia)
 
 
 def test_impact_sees_global_components_and_barrel_users(project, vue_app, monkeypatch):

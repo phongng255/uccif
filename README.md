@@ -72,6 +72,6 @@ of reinstalling.
 |---|---|
 | 3.0 | task/resume, token line, logs, `/uccif:init`, CORE RULES via hooks, 3 agents, code index, LSP config, drift detection, tests + CI |
 | 3.1 | `[src:]` doc-claims check |
-| 3.0-dev.11+ | code graph: optional tree-sitter parsing (done), call edges (done), multi-level `--impact` and `--path` queries (done), HTML graph view `uccif index graph` (done); phase 2 (nodes/edges model, Vue/Pinia/router edges, deeper resolution) in progress, step 0 fixture + benchmark done, nodes/edges model with confidence done, config-driven aliases + barrels + Python roots done, extends/implements + contains + function-level tests done, Vue template edges (`renders`, template calls) done |
+| 3.0-dev.11+ | code graph: optional tree-sitter parsing (done), call edges (done), multi-level `--impact` and `--path` queries (done), HTML graph view `uccif index graph` (done); phase 2 (nodes/edges model, Vue/Pinia/router edges, deeper resolution) in progress, step 0 fixture + benchmark done, nodes/edges model with confidence done, config-driven aliases + barrels + Python roots done, extends/implements + contains + function-level tests done, Vue template edges (`renders`, template calls) done, Pinia stores + composables + variable origins done |
 | 3.2 | optional `uccif-codeintel` plugin (Serena, more languages) |
 | 3.3 | `uccif-strict` (blocking gates), only if needed |

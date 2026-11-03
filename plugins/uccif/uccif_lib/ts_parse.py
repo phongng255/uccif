@@ -82,7 +82,13 @@ def _walk(root):
 
 
 def parse(text, rel, lang):
-    """-> (symbols, imports, calls, bindings, import_lines, heritage) or None.
+    """-> (symbols, imports, calls, bindings, import_lines, heritage, members, origins, reads) or None.
+    members: [(store variable, member, "state"|"getter"|"action")] of Pinia stores (also in
+    symbols as kind store_member with scope = the store variable); origins: where local variables
+    come from, [(enclosing function, "call"|"new", callee, aliased variable, [(local, member or
+    None)], line)] for `const s = useStore()`, `const {a, b: c} = useStore()`, `const x = new Foo()`,
+    `const {a} = storeToRefs(s)`; reads: [(enclosing function, object variable, property, line)]
+    for `obj.prop` that is not a call.
     heritage: [(class or interface name, base name as written, "extends"|"implements", line)];
     a dotted base keeps its dots (`mod.Base`), generic arguments are dropped.
     symbols: [(name, kind, line, scope)]; imports: [raw module strings];
@@ -147,6 +153,130 @@ def _js_call(n, calls):
         calls.append((_js_caller(n), name, obj, n.start_point[0] + 1))
 
 
+def _obj_keys(obj):
+    """[(name, line)] of an object literal's keys / methods / shorthand properties."""
+    keys = []
+    for c in (obj.children if obj is not None else []):
+        if c.type == "pair":
+            k = c.child_by_field_name("key")
+            name = _txt(k).strip("'\"`") if k is not None else ""
+        elif c.type == "method_definition":
+            name = _txt(c.child_by_field_name("name"))
+        elif c.type == "shorthand_property_identifier":
+            name = _txt(c)
+        else:
+            continue
+        if name:
+            keys.append((name, c.start_point[0] + 1))
+    return keys
+
+
+def _returned_object(fn):
+    """The object a function / arrow returns, if it is a literal (`() => ({...})`, `return {...}`)."""
+    if fn is None:
+        return None
+    body = fn.child_by_field_name("body")
+    if body is None:
+        return None
+    if body.type == "parenthesized_expression":
+        return next((c for c in body.children if c.type == "object"), None)
+    if body.type == "statement_block":
+        for c in body.children:
+            if c.type == "return_statement":
+                return next((x for x in c.children if x.type == "object"), None)
+    return None
+
+
+def _pinia_members(call, store, syms, members):
+    """Members of `defineStore(id, options | setup)`: state / getters / actions, or the names a setup
+    store returns, classified by how each is declared (ref -> state, computed -> getter, function -> action)."""
+    args = call.child_by_field_name("arguments")
+    if args is None:
+        return
+    rest = [c for c in args.children if c.type not in ("(", ")", ",")][1:]
+    if not rest:
+        return
+    spec = rest[0]
+    found = []
+    if spec.type == "object":
+        for c in spec.children:
+            key = (_txt(c.child_by_field_name("key" if c.type == "pair" else "name")).strip("'\"")
+                   if c.type in ("pair", "method_definition") else "")
+            val = c.child_by_field_name("value") if c.type == "pair" else c
+            if key == "state":
+                found += [(n, "state", ln) for n, ln in _obj_keys(_returned_object(val))]
+            elif key in ("getters", "actions") and val is not None and val.type == "object":
+                found += [(n, key[:-1] if key == "getters" else "action", ln) for n, ln in _obj_keys(val)]
+                found = [(n, "getter" if k == "getter" else k, ln) for n, k, ln in found]
+    elif spec.type in ("arrow_function", "function_expression", "function"):
+        body = spec.child_by_field_name("body")
+        kinds = {}
+        for c in (body.children if body is not None and body.type == "statement_block" else []):
+            if c.type == "function_declaration":
+                kinds[_txt(c.child_by_field_name("name"))] = "action"
+            elif c.type == "lexical_declaration":
+                for d in c.children:
+                    if d.type != "variable_declarator":
+                        continue
+                    v = d.child_by_field_name("value")
+                    if v is None:
+                        continue
+                    callee = _txt(v.child_by_field_name("function")) if v.type == "call_expression" else ""
+                    kinds[_txt(d.child_by_field_name("name"))] = (
+                        "getter" if callee in ("computed",) else "action" if v.type in _FN_VALUES else "state")
+        for c in (_returned_object(spec).children if _returned_object(spec) is not None else []):
+            if c.type == "shorthand_property_identifier":
+                name, ref = _txt(c), _txt(c)
+            elif c.type == "pair":
+                name, v = _txt(c.child_by_field_name("key")), c.child_by_field_name("value")
+                ref = _txt(v) if v is not None and v.type == "identifier" else ""
+            else:
+                continue
+            found.append((name, kinds.get(ref, "state"), c.start_point[0] + 1))
+    for name, kind, line in found:
+        syms.append((name, "store_member", line, store))
+        members.append((store, name, kind))
+
+
+def _js_origin(d, out):
+    """Record where the variable(s) declared by a `variable_declarator` come from."""
+    name, val = d.child_by_field_name("name"), d.child_by_field_name("value")
+    if name is None or val is None or len(out) >= 500:
+        return
+    if val.type == "await_expression" and val.children:
+        val = val.children[-1]
+    if val.type == "new_expression":
+        kind, fn = "new", val.child_by_field_name("constructor")
+    elif val.type == "call_expression":
+        kind, fn = "call", val.child_by_field_name("function")
+    else:
+        return
+    if fn is None or fn.type != "identifier":
+        return
+    callee, alias = _txt(fn), None
+    if callee == "storeToRefs":
+        a = val.child_by_field_name("arguments")
+        first = next((c for c in (a.children if a is not None else []) if c.type == "identifier"), None)
+        if first is None:
+            return
+        callee, alias = None, _txt(first)
+    elif callee in KEYWORD_CALLS:
+        return
+    names = []
+    if name.type == "identifier":
+        names = [(_txt(name), None)]
+    elif name.type == "object_pattern":
+        for c in name.children:
+            if c.type == "shorthand_property_identifier_pattern":
+                names.append((_txt(c), _txt(c)))
+            elif c.type == "pair_pattern":
+                k, v = c.child_by_field_name("key"), c.child_by_field_name("value")
+                if k is not None and v is not None and v.type == "identifier":
+                    names.append((_txt(v), _txt(k)))
+    if names:
+        out.append((_js_caller(d), kind, callee, alias, names, d.start_point[0] + 1))
+
+
 def _base_name(c):
     """Written name of a base class / interface node, or None when it is not a plain name."""
     t = c.type
@@ -184,6 +314,7 @@ def _js_heritage(n, cname, out):
 
 def _js(root):
     syms, imps, calls, binds, ilines, heritage = [], [], [], {}, {}, []
+    members, origins, reads = [], [], []
 
     def add_import(raw, line):
         if raw and raw not in imps:
@@ -193,6 +324,13 @@ def _js(root):
     for n in _walk(root):
         t = n.type
         line = n.start_point[0] + 1
+        if t == "variable_declarator":
+            _js_origin(n, origins)
+        elif t == "member_expression" and len(reads) < _MAX_CALLS:
+            o, prop, par = n.child_by_field_name("object"), n.child_by_field_name("property"), n.parent
+            if o is not None and o.type == "identifier" and prop is not None and not (
+                    par is not None and par.type == "call_expression" and par.child_by_field_name("function") == n):
+                reads.append((_js_caller(n), _txt(o), _txt(prop), line))
         if t in ("function_declaration", "generator_function_declaration"):
             name = n.child_by_field_name("name")
             if name is not None:
@@ -241,6 +379,7 @@ def _js(root):
                 elif val is not None and val.type == "call_expression" \
                         and _txt(val.child_by_field_name("function")) == "defineStore":
                     syms.append((_txt(name), "store", dline, None))
+                    _pinia_members(val, _txt(name), syms, members)
                 elif exported:
                     syms.append((_txt(name), "variable", dline, None))
         elif t in ("import_statement", "export_statement"):
@@ -262,7 +401,7 @@ def _js(root):
                     add_import(_txt(first).strip("'\"`"), line)
     syms = [s for s in syms if s[0]]
     syms.sort(key=lambda s: s[2])
-    return syms, imps[:200], calls, binds, ilines, heritage
+    return syms, imps[:200], calls, binds, ilines, heritage, members, origins, reads
 
 
 def _js_bindings(stmt, raw, binds):
@@ -290,6 +429,7 @@ def _js_bindings(stmt, raw, binds):
 
 def _python(root):
     syms, imps, calls, binds, ilines, heritage = [], [], [], {}, {}, []
+    origins = []
 
     def add_import(raw, line):
         if raw and raw not in imps:
@@ -302,6 +442,11 @@ def _python(root):
         n, cls, top, caller = stack.pop()
         t = n.type
         nxt_cls, nxt_top, nxt_caller = cls, top, caller
+        if t == "assignment" and len(origins) < 500:  # x = Foo(...)
+            left, right = n.child_by_field_name("left"), n.child_by_field_name("right")
+            fn = right.child_by_field_name("function") if right is not None and right.type == "call" else None
+            if left is not None and left.type == "identifier" and fn is not None and fn.type == "identifier":
+                origins.append((caller, "call", _txt(fn), None, [(_txt(left), None)], n.start_point[0] + 1))
         if t == "class_definition":
             name = n.child_by_field_name("name")
             if name is not None:
@@ -358,4 +503,4 @@ def _python(root):
         for c in reversed(n.children):
             stack.append((c, nxt_cls, nxt_top, nxt_caller))
     syms.sort(key=lambda s: s[2])
-    return syms, imps[:200], calls, binds, ilines, heritage
+    return syms, imps[:200], calls, binds, ilines, heritage, [], origins, []

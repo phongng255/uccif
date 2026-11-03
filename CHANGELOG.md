@@ -1,5 +1,34 @@
 # Changelog
 
+## 3.0.0-dev.17
+
+- **Pinia stores, composables and variables of known origin** (phase 2, step 6; `SCHEMA` 8, an
+  older index is rebuilt automatically).
+  - **Store members (B4):** `defineStore` in options style (`state` / `getters` / `actions`) and
+    setup style (what the setup function returns: `ref` -> state, `computed` -> getter, function
+    -> action) become `store_member` nodes (`path#useTripStore.addExpense`, `nodes.detail` =
+    state / getter / action), listed by `--symbol` and linked from their store by `contains`.
+  - **Where a variable comes from:** `const s = useTripStore()`, `const { a, b: c } = useX()`,
+    `const { a } = storeToRefs(s)`, `const f = new Foo()` (and Python `x = Foo()`) are recorded.
+    Calls and property reads on such a variable are tied to what they hit, in the script and in
+    the template (`ui.toggle()`, `{{ store.total }}`, `v-for="e in store.expenses"`):
+    `calls_action` (store action), `reads_state` (state / getter), `calls` to a class method
+    (found through `extends` too), all `extracted`; a function a composable returns is `inferred`.
+    Pinia's own API (`$patch`...) is `calls_ext`; an unknown method stays an `unresolved` lead.
+    This replaces the old "store.add() is unresolved" gap and covers the destructuring and
+    `new X()` parts of roadmap C1.
+  - **`uses_store` / `uses_composable` (B3):** a call to a Pinia store or to a `useXxx` function.
+  - `--impact` follows these edges ("calls store action addExpense at :19"), `--symbol` shows them
+    in `Called by`, a new `Used by (n)` for state and stores, and `Tested by`; tests that exercise
+    a store action are `tests` edges.
+  - These edges are derived (`via` starts with `~`) and recomputed from scratch after every update
+    that changed anything, so a renamed action or a deleted store updates its users without
+    re-parsing them; nothing dangles.
+- Measured: one-file update 8 ms on the fixture (budget 300 ms); DB +10%. Unresolved share: fixture
+  21% (was 25%), this repo 66%.
+- Not yet: JS built-in methods on expressions (`items.map()`, `x.toFixed()`) are still counted as
+  unresolved; `emit()` from `defineEmits` (B2); `this.x` inside store actions.
+
 ## 3.0.0-dev.16
 
 - **Vue templates** (phase 2, step 5; `SCHEMA` 7, an older index is rebuilt automatically).
