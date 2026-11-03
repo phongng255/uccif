@@ -1,6 +1,6 @@
 # UCCIF — Universal Claude Code Intelligence Framework
 
-A Claude Code plugin marketplace. Install the core plugin `uccif` once; from then on, in
+A Claude Code plugin marketplace, also usable as an Antigravity CLI (Gemini) plugin. Install the core plugin `uccif` once; from then on, in
 **any** repository, with nothing to run by hand:
 
 - **CodeGraph** ([@colbymchenry/codegraph](https://github.com/colbymchenry/codegraph)) as the
@@ -32,6 +32,40 @@ Requirements: Python 3.8+ (`python3`, `python` or `py -3`), git. macOS, Linux an
 Bash, which Claude Code uses to run hooks) are all tested in CI; Windows has not yet been
 tried in a real Claude Code session. Language servers and the CodeGraph CLI are never installed
 without your agreement; `uccif doctor` reports what is missing.
+
+## Antigravity CLI (Gemini)
+
+Gemini CLI was replaced by **Antigravity CLI** (`agy`) in June 2026. The same plugin folder is also
+an Antigravity plugin (`plugins/uccif/.antigravity-plugin/plugin.json`), following its `.agents/`
+standard. Install it from a clone, because the plugin lives in a subfolder of this repository:
+
+```bash
+git clone https://github.com/phongng255/uccif
+```
+
+```bash
+agy plugin install ./uccif/plugins/uccif
+```
+
+What it brings to `agy`:
+
+| Piece | File | Notes |
+|---|---|---|
+| CodeGraph MCP server | `mcp_config.json` | `codegraph serve --mcp`, same as for Claude |
+| Skills | `skills/<name>/SKILL.md` | the same skills as for Claude (Agent Skills format) |
+| Hooks | `hooks.json` | `SessionStart` injects the CORE RULES, your rules, task memory and the CodeGraph state as an `injectSteps` step; `PostToolUse` records edited files in the task; `Stop` runs the background upkeep |
+| Project skills | `<project>/.agents/skills/` | `<project>-map`, `-bugfix`, `-mod-*` from the graph, written next to `.claude/skills/` |
+
+Project skills go to `.agents/skills/` automatically when a session comes from `agy`, when the
+project already has `.agents/` (or the legacy `.agent/`), or by hand:
+`uccif skills generate --target agents` (`all` = both folders, `claude` = `.claude/skills/` only).
+
+Differences from Claude Code: `uccif` is not on `PATH` in `agy`, so the session context gives
+its full path (`sh <plugin>/bin/uccif …`); there is no per-turn token line (an Antigravity
+transcript is not Claude's) and no per-prompt reminder (Antigravity has no prompt hook); the LSP
+config and the three read-only agents are Claude Code only. Hooks never block: none is
+registered on `PreToolUse`, whose answer must carry a decision. Restart `agy` after installing the
+CodeGraph CLI so the MCP server starts.
 
 ## Update
 

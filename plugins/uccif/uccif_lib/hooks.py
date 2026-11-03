@@ -8,6 +8,11 @@ Rules for every handler:
   skip (every main-agent Bash call): logging those would bloat hooks.jsonl;
 - output to Claude goes through hookSpecificOutput.additionalContext, output
   to the user through systemMessage (Stop token line only).
+
+`uccif hook --agent antigravity <event>` serves the same handlers to Antigravity CLI
+(`agy`, Gemini CLI's successor; plugin hooks in `hooks.json`): its camelCase stdin is
+mapped to the Claude-style fields first (`from_antigravity`), and the answer is mapped
+back (`to_antigravity`): SessionStart context becomes `injectSteps`.
 """
 
 import json
@@ -69,13 +74,24 @@ LSP_BUNDLED = {  # languages the plugin's .lsp.json configures -> (binary, insta
 ENTRY = Path(__file__).resolve().parent.parent / "scripts" / "uccif_main.py"
 
 
-def spawn(args, project):
+def spawn(args, project, agent=None):
     """Run `uccif <args>` detached so a hook returns at once (drift check).
     UCCIF_SYNC=1 runs it inline instead (tests, debugging)."""
     env = dict(os.environ, UCCIF_DATA_DIR=str(data_root()), CLAUDE_PROJECT_DIR=str(project.root))
+    if agent:
+        env["UCCIF_AGENT"] = agent  # maintain also writes project skills to .agents/skills/
     if os.environ.get("UCCIF_SYNC") == "1":
         from uccif_lib import cli
-        cli.main(list(args))
+        old = os.environ.get("UCCIF_AGENT")
+        if agent:
+            os.environ["UCCIF_AGENT"] = agent
+        try:
+            cli.main(list(args))
+        finally:
+            if agent and old is None:
+                os.environ.pop("UCCIF_AGENT", None)
+            elif agent:
+                os.environ["UCCIF_AGENT"] = old
         return
     kw = {"stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL,
           "cwd": str(project.root), "env": env}
@@ -150,7 +166,7 @@ def on_session_start(data, project):
         if extra:
             parts.append(extra)
             n_user = extra.count("USER RULES (")
-    spawn(["maintain"], project)  # drift check, CodeGraph index + project skills in the background
+    spawn(["maintain"], project, data.get("_agent"))  # drift check, CodeGraph index + project skills in the background
     parts.append(codegraph.context_line(project))
     mine = skillgen.generated(project)
     if mine:
@@ -159,9 +175,12 @@ def on_session_start(data, project):
         parts.append("Project skills generated from CodeGraph in .claude/skills/: %s%s, %d module skills. "
                      "Use the map skill to know where code lives and the bugfix skill for any reported bug."
                      % (", ".join(maps + fixes), "" if maps else " (no map)", len(mine) - len(maps) - len(fixes)))
-    offer = lsp_offer(project)
-    if offer:
-        parts.append(offer)
+    if data.get("_agent") == ANTIGRAVITY:
+        parts.append(antigravity_line())
+    else:
+        offer = lsp_offer(project)  # .lsp.json is a Claude Code plugin feature
+        if offer:
+            parts.append(offer)
     docs = project.docs_dir
     if (docs / "summary.md").exists():
         parts.append("Project docs: .claude/uccif/ (summary.md, architecture.md). Read only the section you need.")
@@ -245,7 +264,9 @@ def on_stop(data, project):
     if data.get("stop_hook_active"):
         return None, {"decision": "skip", "rule": "rerun"}
     # structural changes made by Bash, by the user, or by git pull/checkout this turn
-    spawn(["maintain"], project)
+    spawn(["maintain"], project, data.get("_agent"))
+    if data.get("_agent") == ANTIGRAVITY:  # its transcript is not Claude's: no real token count to report
+        return None, {"rule": "maintain"}
     cfg = project_config(project)
     window = cfg["context_window"] if isinstance(cfg["context_window"], int) else "auto"
     s = usage.summarize(data.get("transcript_path"), window)
@@ -302,6 +323,70 @@ def on_instructions_loaded(data, project):
     return None, {"rule": "claude-md-block", "target": "present" if has_block else "missing"}
 
 
+# ---- Antigravity CLI (agy) -------------------------------------------------------
+
+ANTIGRAVITY = "antigravity"
+AGENTS = ("claude", ANTIGRAVITY)
+# Antigravity tool names -> the Claude tool names the handlers know
+AG_TOOLS = {"run_command": "Bash", "write_to_file": "Write", "replace_file_content": "Edit",
+            "multi_replace_file_content": "MultiEdit", "grep_search": "Grep", "find_by_name": "Glob",
+            "view_file": "Read"}
+AG_PATH_KEYS = ("TargetFile", "targetFile", "target_file", "file_path", "filePath", "AbsolutePath",
+                "absolutePath", "path")
+AG_CMD_KEYS = ("CommandLine", "commandLine", "command", "cmd")
+LAUNCHER = Path(__file__).resolve().parent.parent / "bin" / "uccif"
+
+
+def _first(d, keys):
+    for k in keys:
+        v = d.get(k)
+        if isinstance(v, str) and v:
+            return v
+    return None
+
+
+def from_antigravity(data):
+    """Antigravity hook stdin (camelCase: conversationId, workspacePaths, transcriptPath, toolCall
+    {name, args}, error, ...) -> the Claude-style fields the handlers read."""
+    call = data.get("toolCall") or {}
+    args = call.get("args") if isinstance(call.get("args"), dict) else {}
+    ws = data.get("workspacePaths") or []
+    out = {"_agent": ANTIGRAVITY, "session_id": data.get("conversationId"),
+           "transcript_path": data.get("transcriptPath"),
+           "cwd": ws[0] if isinstance(ws, list) and ws else None,
+           "source": "startup"}
+    if call:
+        out["tool_name"] = AG_TOOLS.get(call.get("name"), call.get("name"))
+        ti = {}
+        path, cmd = _first(args, AG_PATH_KEYS), _first(args, AG_CMD_KEYS)
+        if path:
+            if out["cwd"] and not os.path.isabs(path):
+                path = os.path.join(out["cwd"], path)
+            ti["file_path"] = path
+        if cmd:
+            ti["command"] = cmd
+        out["tool_input"] = ti
+    if data.get("error"):
+        out["error"] = str(data["error"])
+    return out
+
+
+def to_antigravity(event, out):
+    """Handler output -> Antigravity stdout. Context is injected as a step at SessionStart; other
+    events have no context channel, and the core never blocks, so they answer nothing."""
+    text = ((out or {}).get("hookSpecificOutput") or {}).get("additionalContext")
+    if event == "session-start" and text:
+        return {"injectSteps": [{"userMessage": text}]}
+    return None
+
+
+def antigravity_line():
+    return ("Antigravity CLI: UCCIF's `uccif` command is not on PATH here; run it by its full path "
+            "`sh \"%s\" <args>` wherever a skill says `uccif <args>`. Project skills generated from "
+            "CodeGraph are also written to .agents/skills/. Claude-only steps (restart Claude Code, "
+            "/reload-plugins, Claude subagents) do not apply: restart `agy` instead." % LAUNCHER.as_posix())
+
+
 HANDLERS = {
     "session-start": on_session_start,
     "user-prompt-submit": on_user_prompt_submit,
@@ -318,8 +403,8 @@ HANDLERS = {
 }
 
 
-def run(event, stdin=None, stdout=None):
-    """Entry for `uccif hook <event>`. Always returns 0."""
+def run(event, stdin=None, stdout=None, agent="claude"):
+    """Entry for `uccif hook [--agent claude|antigravity] <event>`. Always returns 0."""
     stdin = stdin or sys.stdin
     stdout = stdout or sys.stdout
     t0 = time.time()
@@ -327,6 +412,8 @@ def run(event, stdin=None, stdout=None):
     try:
         raw = stdin.read()
         data = json.loads(raw) if raw.strip() else {}
+        if agent == ANTIGRAVITY:
+            data = from_antigravity(data if isinstance(data, dict) else {})
         handler = HANDLERS.get(event)
         if handler is None:
             raise ValueError("unknown hook event: %s" % event)
@@ -337,6 +424,8 @@ def run(event, stdin=None, stdout=None):
                       task=(task.load_current(project) or {}).get("id"))
         if data.get("agent_id") and "agent_id" not in fields:
             fields["agent_id"] = data.get("agent_id")
+        if agent != "claude":
+            fields["agent"] = agent
     except Exception as e:  # never break the session
         fields = {"decision": "error", "error": "%s: %s" % (type(e).__name__, str(e)[:200])}
         out = None
@@ -352,6 +441,8 @@ def run(event, stdin=None, stdout=None):
             log.hook(project, **fields)
     except Exception:
         pass
+    if agent == ANTIGRAVITY:
+        out = to_antigravity(event, out)
     if out:
         try:
             # ASCII-escaped JSON: valid for Claude Code whatever the stream encoding is

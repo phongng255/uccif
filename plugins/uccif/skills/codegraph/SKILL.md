@@ -48,6 +48,8 @@ npm package `codegraph` is an unrelated project with no CLI.
 - If the CLI was installed in this session: **restart Claude Code** (or start a new session) so
   the plugin's MCP server starts and `codegraph_explore` loads; until then use
   `codegraph explore "<question>"` in Bash.
+- Antigravity CLI (`agy`): the plugin's `mcp_config.json` declares the same server; restart `agy`
+  instead of Claude Code. Run `uccif` by the full path the session context gives.
 - Undo: `codegraph uninit` (this project), `codegraph uninstall` (everything).
 
 ## After setup: how to look up code

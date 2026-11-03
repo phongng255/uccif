@@ -42,6 +42,9 @@ def build_parser():
     sg = sk.add_parser("generate", help="write/refresh .claude/skills/<project>-map, -bugfix, -mod-*")
     sg.add_argument("--force", action="store_true", help="also overwrite generated files you edited")
     sg.add_argument("--dry-run", action="store_true", help="show what would change, write nothing")
+    sg.add_argument("--target", choices=("auto", "claude", "agents", "all"), default="auto",
+                    help="claude = .claude/skills/, agents = .agents/skills/ (Antigravity / Agent Skills), "
+                         "auto = .claude/skills/ plus .agents/skills/ when the project or host uses it")
     sk.add_parser("list", help="generated skills present in .claude/skills/")
 
     dr = sub.add_parser("drift", help="structural changes that make docs stale").add_subparsers(dest="action")
@@ -52,6 +55,8 @@ def build_parser():
     sub.add_parser("maintain", help="background upkeep: drift check")
 
     h = sub.add_parser("hook", help="run a hook handler (reads hook JSON on stdin)")
+    h.add_argument("--agent", default="claude", choices=hooks.AGENTS,
+                   help="which host sent the hook JSON (antigravity = Antigravity CLI / agy)")
     h.add_argument("event")
 
     u = sub.add_parser("usage", help="real token usage from a transcript")
@@ -124,7 +129,7 @@ def _skills_cmd(args):
         print("\n".join(names) if names else "No generated project skills yet (`uccif skills generate`).")
         return 0
     try:
-        res = skillgen.generate(proj, force=args.force, dry_run=args.dry_run)
+        res = skillgen.generate(proj, force=args.force, dry_run=args.dry_run, target=args.target)
     except skillgen.NoIndex as e:
         print("Cannot generate skills: %s. Run the uccif:codegraph skill first." % e)
         return 1
@@ -163,7 +168,7 @@ def main(argv=None):
     parser = build_parser()
     args = parser.parse_args(argv)
     if args.cmd == "hook":
-        return hooks.run(args.event)  # never raises, always 0
+        return hooks.run(args.event, agent=args.agent)  # never raises, always 0
     try:
         if args.cmd == "version":
             print("uccif %s (schema %d)" % (__version__, SCHEMA_VERSION))

@@ -1,5 +1,10 @@
 """Write project skills (.claude/skills/<slug>-*/SKILL.md) from the CodeGraph index.
 
+The same SKILL.md files are also written to `.agents/skills/` (the Agent Skills folder that
+Antigravity CLI, Gemini CLI's successor, reads; `.agent/skills/` is its legacy name) when the
+project already has `.agents/` or `.agent/`, when the hook came from Antigravity, or on request
+(`--target agents|all`).
+
 Any language, any framework: modules come from the directory tree, facts from
 CodeGraph's graph (`.codegraph/codegraph.db`, opened read-only): the most-used
 symbols and files of each module, which modules depend on which, routes, and
@@ -28,6 +33,9 @@ from uccif_lib import __version__, codegraph, stack
 from uccif_lib.paths import ensure_local, now_iso, read_json, write_json, write_text_atomic
 
 SKILLS_DIR = Path(".claude") / "skills"
+AGENTS_SKILLS_DIR = Path(".agents") / "skills"
+LEGACY_AGENT_SKILLS_DIR = Path(".agent") / "skills"
+TARGETS = ("auto", "claude", "agents", "all")
 TARGET_MODULES = 10
 MAX_MODULES = 24
 MAX_MODULE_SKILLS = 10
@@ -407,16 +415,50 @@ def skills_root(project):
     return Path(project.root) / SKILLS_DIR
 
 
+def agents_root(project):
+    """.agents/skills/, or the legacy .agent/skills/ when only that one exists."""
+    root = Path(project.root)
+    if not (root / ".agents").is_dir() and (root / ".agent").is_dir():
+        return root / LEGACY_AGENT_SKILLS_DIR
+    return root / AGENTS_SKILLS_DIR
+
+
+def wants_agents(project):
+    """auto: the project already uses the .agents/ (or legacy .agent/) standard, or the host is
+    Antigravity (UCCIF_AGENT, set by its hooks)."""
+    root = Path(project.root)
+    return ((root / ".agents").is_dir() or (root / ".agent").is_dir()
+            or os.environ.get("UCCIF_AGENT") == "antigravity")
+
+
+def target_roots(project, target="auto"):
+    if target not in TARGETS:
+        raise ValueError("unknown skills target: %s" % target)
+    roots = []
+    if target in ("auto", "claude", "all"):
+        roots.append(skills_root(project))
+    if target in ("agents", "all") or (target == "auto" and wants_agents(project)):
+        roots.append(agents_root(project))
+    return roots
+
+
+def _rel_dir(project, root):
+    return Path(root).relative_to(project.root).as_posix() + "/"
+
+
 def generated(project):
-    """Names of skill dirs that hold a UCCIF-generated SKILL.md."""
-    root = skills_root(project)
-    if not root.is_dir():
-        return []
-    return sorted(p.parent.name for p in root.glob("*/SKILL.md") if _existing(p)[0] in ("ours", "edited"))
+    """Names of skill dirs that hold a UCCIF-generated SKILL.md (.claude/skills/, else .agents/skills/)."""
+    for root in (skills_root(project), agents_root(project)):
+        if root.is_dir():
+            names = sorted(p.parent.name for p in root.glob("*/SKILL.md") if _existing(p)[0] in ("ours", "edited"))
+            if names:
+                return names
+    return []
 
 
-def generate(project, force=False, dry_run=False):
-    """Returns {'written': [...], 'unchanged': [...], 'skipped': [(name, why)], 'removed': [...]}."""
+def generate(project, force=False, dry_run=False, target="auto"):
+    """Returns {'written': [...], 'unchanged': [...], 'skipped': [(name, why)], 'removed': [...],
+    'roots': [...]}; names carry their folder ('.agents/skills/x') when more than one is written."""
     a = analyse(project)
     proj = Path(project.root).name
     slug = slugify(proj, 30)
@@ -435,16 +477,28 @@ def generate(project, force=False, dry_run=False):
             "%s-bugfix" % slug: render_bugfix("%s-bugfix" % slug, proj, a, runners, cmds)}
     for m in mods:
         docs[mod_skills[m["dir"]]] = render_module(mod_skills[m["dir"]], proj, m, runners)
-    res = {"written": [], "unchanged": [], "skipped": [], "removed": []}
-    root = skills_root(project)
+    roots = target_roots(project, target)
+    res = {"written": [], "unchanged": [], "skipped": [], "removed": [],
+           "roots": [_rel_dir(project, r) for r in roots]}
+    for root in roots:
+        label = (lambda n: n) if len(roots) == 1 else (lambda n, pre=_rel_dir(project, root): pre + n)
+        _write_root(root, docs, slug, res, label, force, dry_run)
+    if not dry_run:
+        ensure_local(project)
+        write_json(project.local_dir / "skills.json", {"fingerprint": fingerprint(project), "updated": now_iso(),
+                                                      "skills": sorted(docs), "roots": res["roots"]})
+    return res
+
+
+def _write_root(root, docs, slug, res, label, force, dry_run):
     for name, text in docs.items():
         path = root / name / "SKILL.md"
         state, notes = _existing(path)
         if state == "user":
-            res["skipped"].append((name, "written by you (no UCCIF marker)"))
+            res["skipped"].append((label(name), "written by you (no UCCIF marker)"))
             continue
         if state == "edited" and not force:
-            res["skipped"].append((name, "edited outside the notes block (use --force to overwrite)"))
+            res["skipped"].append((label(name), "edited outside the notes block (use --force to overwrite)"))
             continue
         new = _finish(text, notes)
         try:
@@ -452,11 +506,11 @@ def generate(project, force=False, dry_run=False):
         except OSError:
             old = None
         if old == new:
-            res["unchanged"].append(name)
+            res["unchanged"].append(label(name))
             continue
         if not dry_run:
             write_text_atomic(path, new)
-        res["written"].append(name)
+        res["written"].append(label(name))
     prefix = "%s-mod-" % slug
     if root.is_dir():
         for p in sorted(root.glob(prefix + "*/SKILL.md")):
@@ -465,12 +519,7 @@ def generate(project, force=False, dry_run=False):
             if name not in docs and state == "ours" and not notes.strip():
                 if not dry_run:
                     shutil.rmtree(str(p.parent), ignore_errors=True)
-                res["removed"].append(name)
-    if not dry_run:
-        ensure_local(project)
-        write_json(project.local_dir / "skills.json", {"fingerprint": fingerprint(project), "updated": now_iso(),
-                                                      "skills": sorted(docs)})
-    return res
+                res["removed"].append(label(name))
 
 
 def fingerprint(project):
@@ -485,7 +534,8 @@ def auto(project):
     if not codegraph.indexed(project):
         return None
     state = read_json(project.local_dir / "skills.json", {}) or {}
-    if state.get("fingerprint") == fingerprint(project):
+    roots = [_rel_dir(project, r) for r in target_roots(project)]
+    if state.get("fingerprint") == fingerprint(project) and set(roots) <= set(state.get("roots") or [".claude/skills/"]):
         return None
     try:
         return generate(project)
@@ -499,5 +549,6 @@ def report(res):
         if res[key]:
             lines.append("%s: %s" % (label, ", ".join(res[key])))
     lines += ["skipped %s: %s" % s for s in res["skipped"]]
-    lines.append("Skills live in .claude/skills/ (commit them to share with your team).")
+    where = " and ".join(res.get("roots") or [".claude/skills/"])
+    lines.append("Skills live in %s (commit them to share with your team)." % where)
     return lines

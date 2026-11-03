@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.1.0 — Antigravity CLI (Gemini)
+
+- The plugin folder is also an **Antigravity CLI** (`agy`, Gemini CLI's successor) plugin:
+  `.antigravity-plugin/plugin.json`, `mcp_config.json` (CodeGraph MCP server) and `hooks.json`
+  (SessionStart, PostToolUse on file writes, Stop). Install with
+  `agy plugin install <clone>/plugins/uccif`.
+- `uccif hook --agent antigravity <event>` maps Antigravity's hook JSON (camelCase stdin,
+  `toolCall`, `workspacePaths`) onto the existing handlers and answers in its format
+  (`injectSteps` at SessionStart). Every hook still exits 0 and never blocks.
+- Project skills are also written to `.agents/skills/` (or the legacy `.agent/skills/`): automatically
+  in `agy` sessions or when the project already has that folder, or with
+  `uccif skills generate --target agents|all`.
+
 ## 1.0.0 — first release
 
 A Claude Code plugin marketplace with one plugin, `uccif`. Install it once; in any repository it

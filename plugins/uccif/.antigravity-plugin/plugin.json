@@ -1,0 +1,20 @@
+{
+  "$schema": "https://antigravity.google/schemas/v1/plugin.json",
+  "name": "uccif",
+  "displayName": "UCCIF",
+  "version": "1.1.0",
+  "description": "UCCIF for Antigravity CLI (agy): CodeGraph code graph via MCP, project skills generated from the graph into .agents/skills/, CORE RULES and task memory injected at session start. Never blocks.",
+  "author": {
+    "name": "phongng255",
+    "url": "https://github.com/phongng255"
+  },
+  "homepage": "https://github.com/phongng255/uccif",
+  "repository": "https://github.com/phongng255/uccif",
+  "license": "MIT",
+  "keywords": ["workflow", "context", "code-intelligence", "codegraph"],
+  "suggestedPrompts": [
+    "Set up CodeGraph for this project",
+    "What was I working on?",
+    "Show the map of this codebase"
+  ]
+}

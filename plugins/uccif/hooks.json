@@ -1,0 +1,31 @@
+{
+  "uccif": {
+    "enabled": true,
+    "SessionStart": [
+      {
+        "type": "command",
+        "command": "sh ./bin/uccif hook --agent antigravity session-start",
+        "timeout": 10
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "write_to_file|replace_file_content|multi_replace_file_content",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh ./bin/uccif hook --agent antigravity post-tool-use",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "type": "command",
+        "command": "sh ./bin/uccif hook --agent antigravity stop",
+        "timeout": 10
+      }
+    ]
+  }
+}
