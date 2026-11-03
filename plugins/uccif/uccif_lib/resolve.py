@@ -75,6 +75,12 @@ class Resolver:
             if (parent + "/__init__.py" if parent else "__init__.py") not in self.files:
                 roots.append(parent)
         self.py_roots = list(dict.fromkeys(roots))
+        self._gomods = None
+        self._java_idx = None
+        self._dirs = {}
+        for f in self.files:
+            d = str(PurePosixPath(f).parent)
+            self._dirs.setdefault("" if d == "." else d, []).append(f)
 
     # ---- config files ---------------------------------------------------------------
 
@@ -190,6 +196,111 @@ class Resolver:
 
     # ---- resolution -------------------------------------------------------------------
 
+    # ---- Go / Rust / Java (roadmap layer E) ------------------------------------------
+
+    def package_files(self, d, ext):
+        """Non-test source files directly in folder `d` with extension `ext` (a Go / Java package)."""
+        return sorted(f for f in self._dirs.get(d, ()) if f.endswith(ext) and not f.endswith("_test.go"))
+
+    def _go_modules(self):
+        """[(module path, folder)] from every go.mod in the repo, longest module first."""
+        if self._gomods is None:
+            self._gomods = []
+            for d in sorted(set(self._dirs) | {""}):
+                t = self._text(_join(d, "go.mod"))
+                m = re.search(r"^\s*module\s+(\S+)", t or "", re.M)
+                if m:
+                    self._gomods.append((m.group(1), d))
+            self._gomods.sort(key=lambda x: -len(x[0]))
+        return self._gomods
+
+    def _go_dir(self, raw):
+        for mod, d in self._go_modules():
+            if raw == mod or raw.startswith(mod + "/"):
+                return _join(d, raw[len(mod) + 1:]) if raw != mod else d
+        return None
+
+    def _rust_mod_dir(self, src):
+        """Folder holding the child modules of the module that `src` is."""
+        p = PurePosixPath(src)
+        if p.name in ("main.rs", "lib.rs", "mod.rs"):
+            d = str(p.parent)
+        else:
+            d = str(p.parent / p.stem)
+        return "" if d == "." else d
+
+    def _rust_crate_dir(self, src):
+        d = str(PurePosixPath(src).parent)
+        d = "" if d == "." else d
+        while True:
+            for root in ("main.rs", "lib.rs"):
+                if _join(d, root) in self.files:
+                    return d
+            if not d:
+                return ""
+            parent = str(PurePosixPath(d).parent)
+            d = "" if parent == "." else parent
+
+    def _rust_module_file(self, base, segments):
+        """Deepest file reached by following `segments` from module folder `base`."""
+        hit, d = None, base
+        for seg in segments:
+            for cand in (_join(d, seg + ".rs"), _join(d, seg + "/mod.rs")):
+                if cand in self.files:
+                    hit, d = cand, _join(d, seg)
+                    break
+            else:
+                break
+        return hit
+
+    def _rust(self, src, raw):
+        segs = [x for x in raw.split("::") if x]
+        if not segs:
+            return None
+        if segs[0] == "crate":
+            return self._rust_module_file(self._rust_crate_dir(src), segs[1:]) or None
+        base = self._rust_mod_dir(src)
+        if segs[0] == "self":
+            return self._rust_module_file(base, segs[1:]) or (src if len(segs) == 1 else None)
+        if segs[0] == "super":
+            parent = str(PurePosixPath(base).parent)
+            base = "" if parent == "." else parent
+            for x in segs[1:]:
+                if x != "super":
+                    break
+            return self._rust_module_file(base, [x for x in segs[1:] if x != "super"])
+        return self._rust_module_file(base, segs)  # `mod x;` or a path starting at a child module
+
+    def _java_files(self):
+        if self._java_idx is None:
+            self._java_idx = {}
+            for f in self.files:
+                if f.endswith(".java"):
+                    self._java_idx.setdefault(PurePosixPath(f).stem, []).append(f)
+        return self._java_idx
+
+    def _java(self, raw):
+        parts = raw.split(".")
+        for f in self._java_files().get(parts[-1], ()):
+            if f[:-5].endswith("/".join(parts)):
+                return f
+        return None
+
+    def _java_package(self, raw):
+        tail = "/".join(raw.split("."))
+        return [f for d, fs in self._dirs.items() if d == tail or d.endswith("/" + tail)
+                for f in sorted(fs) if f.endswith(".java")]
+
+    def resolve_many(self, src, raw, lang):
+        """Every repo file an import names: a Go package or a Java `a.b.*` is a folder of files."""
+        if lang == "go":
+            d = self._go_dir(raw)
+            return self.package_files(d, ".go") if d is not None else []
+        if lang == "java" and raw.endswith(".*"):
+            return self._java_package(raw[:-2])
+        hit = self.resolve(src, raw, lang)
+        return [hit] if hit else []
+
     def internal(self, raw, lang, src=None):
         """Does this import string name a file in this repo (even one we could not place)?
         False means a package: known, just not ours."""
@@ -197,6 +308,14 @@ class Resolver:
             return True
         if lang == "python" or (lang or "").startswith("python"):
             return raw.split(".")[0] in self.py_names
+        if lang == "go":
+            return self._go_dir(raw) is not None
+        if lang == "rust":
+            return raw.split("::")[0] in ("crate", "self", "super") or (src is not None and self._rust(src, raw)
+                                                                         is not None)
+        if lang == "java":
+            return bool(self._java(raw[:-2] if raw.endswith(".*") else raw) or self._java_package(
+                raw[:-2] if raw.endswith(".*") else raw.rsplit(".", 1)[0]))
         if src is not None and lang in JS_FAMILY and self._alias_target(src, raw) is not None:
             return True
         return False
@@ -251,7 +370,10 @@ class Resolver:
                         return cand
             return None
         if lang == "rust":
-            for cand in (_join(here, raw + ".rs"), _join(here, raw + "/mod.rs")):
-                if cand in self.files:
-                    return cand
+            return self._rust(src, raw)
+        if lang == "go":
+            files = self.resolve_many(src, raw, lang)
+            return files[0] if files else None
+        if lang == "java":
+            return self._java(raw) if not raw.endswith(".*") else None
         return None

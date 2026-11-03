@@ -1,5 +1,29 @@
 # Changelog
 
+## 3.0.0-dev.30
+
+- **Go, Rust and Java** (roadmap layer E), each with its own optional grammar
+  (`pip install tree-sitter-go tree-sitter-rust tree-sitter-java`; CI's tree-sitter job installs
+  them, `uccif doctor` names what is missing). Without the grammar a file is indexed by regex as
+  before. Symbols, imports, calls and inheritance at the level of JS/Python, in `ts_other.py`:
+  - **Go:** functions, methods (scope = receiver type), structs / interfaces, package-level
+    const / var. An import names a package, i.e. every file of its folder (module path from
+    `go.mod`). Calls resolve through `pkg.Func()`, to functions of the same package in other files
+    (no import needed), and to methods through receivers and typed parameters (`s *store.Store`
+    -> `store.Store.Save`, found in whichever file of the package defines it). Built-ins (`len`,
+    `append` ...) and other modules' packages (`fmt`) are external.
+  - **Rust:** functions, `impl` methods (scope = type), structs, enums, traits, consts; `mod x;`,
+    `use crate::a::b`, `use self:: / super::`, grouped and aliased `use`, files `x.rs` or
+    `x/mod.rs`. Calls: `helper()`, `util::other()`, `Order::new()`, `self.base()`, methods through
+    typed parameters / lets. `impl Trait for Type` is an `implements` edge. std types are external.
+  - **Java:** classes, interfaces, enums, records, methods, constructors; `import a.b.C` (and
+    `a.b.*`, a whole package). Calls through imported classes (`Util.go()`), same-package classes
+    without an import, `this.x()`, `new Foo()`, and typed parameters / fields / locals (`Helper h;
+    h.help()`). `extends` / `implements` edges. `java.lang` types are external.
+- Typed languages use the declared type of receivers, parameters, fields and locals; names of the
+  same Go / Java package are looked up in the file's folder after all files are known (derived,
+  so a function moved to another file of the package stays linked).
+
 ## 3.0.0-dev.29
 
 - **Smaller index** (`SCHEMA` 15, an older index is rebuilt automatically): the legacy `imports` and
