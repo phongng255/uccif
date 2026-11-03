@@ -33,6 +33,19 @@ _NOT_A_USE = ("variable_declarator", "function_declaration", "generator_function
               "assignment_pattern", "rest_pattern")
 
 
+def _is_default(x):
+    """Is identifier x the default value of a parameter / pattern (a read, not a declaration)?"""
+    p = x.parent
+    while p is not None and p.type not in ("formal_parameters", "variable_declarator", "catch_clause"):
+        if (p.type in ("assignment_pattern", "object_assignment_pattern") and p.child_by_field_name("right") is not None and
+                p.child_by_field_name("right").start_byte <= x.start_byte) or (
+                p.type in ("required_parameter", "optional_parameter") and p.child_by_field_name("value")
+                is not None and p.child_by_field_name("value").start_byte <= x.start_byte):
+            return True
+        p = p.parent
+    return False
+
+
 def _ident_use(n):
     """'w' when identifier `n` is written, 'r' when it is read, None for declarations / names."""
     par = n.parent
@@ -54,8 +67,11 @@ def _ident_use(n):
             return "w"
         return "r"
     if pt in _NOT_A_USE:
-        if pt in ("variable_declarator", "assignment_pattern") and par.child_by_field_name("value") == n:
+        if pt == "variable_declarator" and par.child_by_field_name("value") == n:
             return "r"
+        if (pt == "assignment_pattern" and par.child_by_field_name("right") == n) or (
+                pt in ("required_parameter", "optional_parameter") and par.child_by_field_name("value") == n):
+            return "r"  # a default value: (count = total) => ...
         if pt == "arrow_function" and par.child_by_field_name("body") == n:
             return "r"
         if pt == "for_in_statement" and par.child_by_field_name("right") == n:
@@ -527,7 +543,7 @@ def _js(root):
     syms, imps, calls, binds, ilines, heritage = [], [], [], {}, {}, []
     members, origins, reads = [], [], []
     type_props, emit_cands, macros, nav_cands, callbacks = {}, [], [], [], []
-    idents, types = [], []
+    idents, types, declared = [], [], {}
 
     def add_import(raw, line):
         if raw and raw not in imps:
@@ -579,6 +595,14 @@ def _js(root):
                     ev = _string_value(first)
                     if ev:
                         emit_cands.append((_js_caller(n), f0, ev, line))
+        if t in ("variable_declarator", "formal_parameters", "catch_clause", "for_in_statement"):
+            target = {"variable_declarator": "name", "catch_clause": "parameter", "for_in_statement": "left"}.get(t)
+            part = n.child_by_field_name(target) if target else n
+            owner = _js_caller(n)
+            if part is not None and owner is not None:  # names that shadow module variables in `owner`
+                for x in _walk(part):
+                    if x.type in ("identifier", "shorthand_property_identifier_pattern") and not _is_default(x):
+                        declared.setdefault(owner, set()).add(_txt(x))
         if t == "identifier" and len(idents) < _MAX_IDENTS:
             rw = _ident_use(n)
             if rw:
@@ -665,6 +689,7 @@ def _js(root):
                 first = next((c for c in args.children if c.type == "string"), None)
                 if first is not None:
                     add_import(_txt(first).strip("'\"`"), line)
+    idents = [i for i in idents if not (i[0] is not None and i[1] in declared.get(i[0], ()))]
     emit_vars = {"emit"}
     for caller, kind, callee, alias, names, ln in origins:
         if callee == "defineEmits":

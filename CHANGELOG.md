@@ -1,5 +1,16 @@
 # Changelog
 
+## 3.0.0-dev.27
+
+- **Scope analysis for `reads` / `writes`**: names that shadow a module variable inside a function
+  (parameters, destructured parameters, local `const`/`let`, `for (const x of ...)`, `catch (x)`) and
+  template locals (`v-for` aliases, slot props `#item="{ row }"`) no longer count as using it, while a
+  default value (`(n = total) => ...`) still reads it. With that, `reads` / `writes` are `extracted`
+  instead of `inferred` (dev.22 documented the shadowing as a known limit; it is gone).
+- Nested anonymous callbacks count as their enclosing named function, so a callback parameter
+  that shadows a module variable hides it in the whole function: conservative (a missed edge, never
+  a wrong one).
+
 ## 3.0.0-dev.26
 
 - **Fewer false leads** (the unresolved share on this repo was 50%, over the plan's 30% limit;

@@ -949,13 +949,14 @@ def _find_def(con, path, name, kinds, cache, depth=0):
 
 
 def _derive_vars(con):
-    """references_type (a type used in a signature, annotation or generic: extracted), reads / writes of
-    module-level variables and top-level refs of <script setup> (inferred: names are matched without
-    scope analysis, so a local that shadows them would count). One edge per user and target."""
+    """references_type (a type used in a signature, annotation or generic) and reads / writes of
+    module-level variables and top-level refs of <script setup>, all extracted: parameters, locals,
+    catch / for-of variables, v-for aliases and slot props that shadow a name are left out when the
+    file is parsed. One edge per user and target."""
     new, seen, cache = [], set(), {}
     spec = {"type": ("references_type", ("interface", "type", "class", "enum"), "extracted"),
-            "vread": ("reads", ("variable", "ref", "constant"), "inferred"),
-            "vwrite": ("writes", ("variable", "ref", "constant"), "inferred")}
+            "vread": ("reads", ("variable", "ref", "constant"), "extracted"),
+            "vwrite": ("writes", ("variable", "ref", "constant"), "extracted")}
     for sid, sp, kind, member, line, op in con.execute(
             "SELECT src_id, src_path, kind, member, line, origin_path FROM refs WHERE kind IN ('type','vread','vwrite') "
             "ORDER BY src_path, line").fetchall():
