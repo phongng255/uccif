@@ -1,5 +1,12 @@
 # Changelog
 
+## 3.0.0-dev.7
+
+- Windows: the Stop hook crashed printing the token line (its emoji cannot be encoded in the
+  console's legacy code page), so Windows users never saw it. The CLI now switches
+  stdin/stdout/stderr to UTF-8, and hook JSON is written ASCII-escaped. Prompts in
+  Vietnamese reach the hooks intact too.
+
 ## 3.0.0-dev.6
 
 Found by the Windows CI job:

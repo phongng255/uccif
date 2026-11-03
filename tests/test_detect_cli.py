@@ -91,3 +91,12 @@ def test_cli_hook_always_exit_0(repo):
     for stdin in ("", "garbage", "{}"):
         assert run_cli("hook", "stop", cwd=repo, stdin=stdin).returncode == 0
     assert run_cli("hook", "no-such-event", cwd=repo, stdin="{}").returncode == 0
+
+
+def test_hook_output_survives_a_non_utf8_console(repo):
+    """Windows consoles default to a legacy code page; the token line has an emoji."""
+    env = dict(os.environ, PYTHONIOENCODING="cp1252")
+    cmd = ([git_bash(), LAUNCHER.as_posix()] if os.name == "nt" else [str(LAUNCHER)]) + ["hook", "stop"]
+    r = subprocess.run(cmd, cwd=str(repo), input=b"{}", capture_output=True, env=env)
+    assert r.returncode == 0, r.stderr
+    assert json.loads(r.stdout.decode("ascii"))["systemMessage"].startswith("\U0001f522")

@@ -341,5 +341,9 @@ def run(event, stdin=None, stdout=None):
     except Exception:
         pass
     if out:
-        stdout.write(json.dumps(out, ensure_ascii=False))
+        try:
+            # ASCII-escaped JSON: valid for Claude Code whatever the stream encoding is
+            stdout.write(json.dumps(out, ensure_ascii=True))
+        except Exception:
+            pass
     return 0
