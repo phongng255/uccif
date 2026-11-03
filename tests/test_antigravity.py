@@ -139,3 +139,50 @@ def test_antigravity_hook_session_writes_agents_skills(app, project, monkeypatch
     ag_hook("session-start", {"conversationId": "c", "workspacePaths": [str(app)]})
     assert (app / ".agents" / "skills" / "repo-map" / "SKILL.md").exists()
     assert (app / ".claude" / "skills" / "repo-map" / "SKILL.md").exists()
+
+
+# ---- Antigravity / Gemini folder resolution (.gemini/uccif) -------------------------
+
+def test_antigravity_uses_gemini_uccif_folder(repo, monkeypatch):
+    from uccif_lib import paths, rules, detect
+    monkeypatch.setenv("UCCIF_AGENT", "antigravity")
+    proj = paths.resolve_project()
+    assert proj.agent == "antigravity"
+    assert proj.docs_subdir.as_posix() == ".gemini/uccif"
+    assert proj.docs_dir == repo / ".gemini" / "uccif"
+
+    # task operations write to .gemini/uccif/.local/
+    task.start(proj, "Fix login", "bug")
+    assert (repo / ".gemini" / "uccif" / ".local" / "tasks" / "current.json").exists()
+    assert (repo / ".gemini" / "uccif" / ".local" / "current-task.md").exists()
+    cur = task.load_current(proj)
+    assert cur["title"] == "Fix login"
+    task.close(proj, no_findings=True)
+
+    # user rules check .gemini/uccif/rules.md
+    rule_files = [p for _, p in rules.user_rule_files(proj)]
+    assert any(".gemini/uccif/rules.md" in p.as_posix() for p in rule_files)
+
+    # detect recognizes GEMINI.md and .gemini/uccif/summary.md
+    (repo / "GEMINI.md").write_text("<!-- UCCIF:BEGIN -->\n## Project\n<!-- UCCIF:END -->\n", encoding="utf-8")
+    (repo / ".gemini" / "uccif" / "summary.md").write_text("# Project Summary\n", encoding="utf-8")
+    d = detect.detect(proj)
+    assert d["claude_md_block"] is True
+    assert d["docs"]["summary.md"] is True
+
+    # session-start mentions .gemini/uccif/
+    code, out = ag_hook("session-start", {"conversationId": "c2", "workspacePaths": [str(repo)]})
+    assert code == 0
+    msg = out["injectSteps"][0]["userMessage"]
+    assert "Project docs: .gemini/uccif/" in msg
+
+
+def test_antigravity_respects_existing_claude_folder_for_backwards_compatibility(repo, monkeypatch):
+    from uccif_lib import paths
+    # Create existing .claude/uccif folder
+    (repo / ".claude" / "uccif").mkdir(parents=True)
+    monkeypatch.setenv("UCCIF_AGENT", "antigravity")
+    proj = paths.resolve_project()
+    # Still knows agent is antigravity, but preserves existing .claude/uccif
+    assert proj.agent == "antigravity"
+    assert proj.docs_subdir.as_posix() == ".claude/uccif"

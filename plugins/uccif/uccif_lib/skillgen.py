@@ -425,9 +425,10 @@ def agents_root(project):
 
 def wants_agents(project):
     """auto: the project already uses the .agents/ (or legacy .agent/) standard, or the host is
-    Antigravity (UCCIF_AGENT, set by its hooks)."""
+    Antigravity (UCCIF_AGENT, set by its hooks, or project.agent == 'antigravity')."""
     root = Path(project.root)
     return ((root / ".agents").is_dir() or (root / ".agent").is_dir()
+            or getattr(project, "agent", "claude") == "antigravity"
             or os.environ.get("UCCIF_AGENT") == "antigravity")
 
 

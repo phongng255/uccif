@@ -37,15 +37,16 @@ npm package `codegraph` is an unrelated project with no CLI.
    machine-specific data; never commit it).
 6. **Check.** `codegraph status` must show files and symbols. Then try one real lookup:
    `codegraph explore "<main entry point or a module name>"`.
-7. **Project skills.** `uccif skills generate` writes `.claude/skills/<project>-map`,
-   `<project>-bugfix` and one `<project>-mod-*` per sizeable module from the graph. Hooks
+7. **Project skills.** `uccif skills generate` writes `<project>-map`,
+   `<project>-bugfix` and one `<project>-mod-*` per sizeable module from the graph
+   into `.agents/skills/` (Antigravity) or `.claude/skills/` (Claude). Hooks
    refresh them by themselves when the project's structure changes (option `auto_setup`).
 
 ## Output to the user (in their language)
 
 - What was installed / wired / indexed, with the `codegraph status` numbers, and the skills
   written (they can be committed to share with the team).
-- If the CLI was installed in this session: **restart Claude Code** (or start a new session) so
+- If the CLI was installed in this session: **restart Claude Code or Antigravity (`agy`)** so
   the plugin's MCP server starts and `codegraph_explore` loads; until then use
   `codegraph explore "<question>"` in Bash.
 - Antigravity CLI (`agy`): the plugin's `mcp_config.json` declares the same server; restart `agy`

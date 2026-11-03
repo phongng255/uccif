@@ -9,7 +9,7 @@ description: Use when asked to review a change, diff, branch or PR, or before cl
 
 1. Get the change: `git diff` (working tree), `git diff <base>...HEAD` (branch) or the PR diff.
 2. Collect constraints: the user's words in this task plus conventions in
-   `.claude/uccif/architecture.md`.
+   `architecture.md` in project docs (.gemini/uccif/ or .claude/uccif/).
 3. ≥ 3 files, or constraints present → delegate to the `uccif:change-reviewer` agent with the
    diff range and the constraint list. Otherwise review yourself.
 4. Verify every finding you report by reading its `file:line`. Drop what you cannot verify,

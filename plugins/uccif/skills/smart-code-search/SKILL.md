@@ -15,7 +15,7 @@ description: Use to find where a function, class, component, style or config is 
    No `.codegraph/` index or no CLI → run the `uccif:codegraph` skill first.
 2. **LSP** (go to definition / find references) when a language server is active for the
    file — exact for overloads and same-name symbols.
-3. **Docs map**: `.claude/uccif/architecture.md` — which module owns a concept the graph has
+3. **Docs map**: `architecture.md` in project docs (.gemini/uccif/ or .claude/uccif/) — which module owns a concept the graph has
    no name for.
 4. **Grep / Glob tools**, bounded: a path or glob parameter, a type filter, and a result limit.
    Put exclusions in the tool parameters, never inside the regex. If those tools do not

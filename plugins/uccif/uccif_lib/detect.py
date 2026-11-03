@@ -18,7 +18,8 @@ from uccif_lib.paths import data_root
 
 SKIP_DIRS = {".git", "node_modules", "vendor", ".venv", "venv", "env", "dist", "build",
              "out", "bin", "obj", ".next", ".nuxt", ".output", "target", "coverage",
-             "__pycache__", ".pytest_cache", ".mypy_cache", ".idea", ".vscode", ".claude"}
+             "__pycache__", ".pytest_cache", ".mypy_cache", ".idea", ".vscode", ".claude",
+             ".gemini", ".agents"}
 LANG_EXT = {
     ".ts": "typescript", ".tsx": "typescript", ".mts": "typescript", ".cts": "typescript",
     ".js": "javascript", ".jsx": "javascript", ".mjs": "javascript", ".cjs": "javascript",
@@ -99,7 +100,8 @@ def detect(project):
         "node": _package_json(root) if (root / "package.json").exists() else None,
         "docs": {n: (project.docs_dir / n).exists()
                  for n in ("summary.md", "architecture.md", "decisions.md", "known-issues.md")},
-        "claude_md_block": _has_block(root / "CLAUDE.md"),
+        "claude_md_block": (_has_block(root / "CLAUDE.md") or _has_block(root / "GEMINI.md")
+                            or _has_block(root / "AGENTS.md")),
         "uccif_v2": _v2_traces(root),
         "codegraph": dict(codegraph.state(project), gitignored=codegraph.gitignored(project)),
         "lsp": _lsp_status(langs),
@@ -225,8 +227,11 @@ def doctor(project):
     check(cg["indexed"], "project indexed by CodeGraph (.codegraph/)",
           "project not indexed by CodeGraph (`codegraph init --yes`)")
     d = detect(project)
-    check(d["claude_md_block"], "CLAUDE.md has UCCIF block", "CLAUDE.md has no UCCIF block (run uccif:init)")
-    check(d["docs"]["summary.md"], "project docs present", "no .claude/uccif/summary.md (run uccif:init)")
+    is_ag = getattr(project, "agent", "claude") == "antigravity"
+    rules_file = "GEMINI.md" if is_ag else "CLAUDE.md"
+    check(d["claude_md_block"], "%s has UCCIF block" % rules_file, "%s has no UCCIF block (run uccif:init)" % rules_file)
+    docs_rel = project.docs_subdir.as_posix()
+    check(d["docs"]["summary.md"], "project docs present", "no %s/summary.md (run uccif:init)" % docs_rel)
     check(not d["uccif_v2"], "no UCCIF v2 leftovers", "UCCIF v2 still installed: %s" % ", ".join(d["uccif_v2"]))
     for lang, s in d["lsp"].items():
         check(s["installed"], "LSP for %s: %s" % (lang, s["binary"]),

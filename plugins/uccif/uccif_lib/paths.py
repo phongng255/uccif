@@ -26,6 +26,36 @@ CORE_MARKER = "options.json"
 LOCAL_SUBDIR = ".local"
 
 
+def get_current_agent(root=None):
+    """Detect whether current session/project is 'antigravity' or 'claude'.
+    Priority:
+    1. UCCIF_AGENT env var ('antigravity' or 'claude')
+    2. Antigravity environment variables (ANTIGRAVITY_LS_ADDRESS, ANTIGRAVITY_CSRF_TOKEN)
+    3. Project structure (e.g. .gemini/ or GEMINI.md vs .claude/ or CLAUDE.md)
+    4. CLAUDE_PROJECT_DIR env var
+    5. Default to 'claude'
+    """
+    agent = os.environ.get("UCCIF_AGENT")
+    if agent:
+        return agent.lower()
+    if os.environ.get("ANTIGRAVITY_LS_ADDRESS") or os.environ.get("ANTIGRAVITY_CSRF_TOKEN"):
+        return "antigravity"
+    if root:
+        try:
+            root_path = Path(root)
+            if (root_path / ".gemini" / "uccif").is_dir() or (root_path / "GEMINI.md").is_file():
+                return "antigravity"
+            if (root_path / ".claude" / "uccif").is_dir() or (root_path / "CLAUDE.md").is_file():
+                return "claude"
+            if (root_path / ".agents").is_dir():
+                return "antigravity"
+        except (TypeError, ValueError, OSError):
+            pass
+    if os.environ.get("CLAUDE_PROJECT_DIR"):
+        return "claude"
+    return "claude"
+
+
 def now_iso():
     return datetime.now().astimezone().isoformat(timespec="seconds")
 
@@ -115,15 +145,21 @@ def data_root_source():
 
     Hooks receive CLAUDE_PLUGIN_DATA; commands run through Claude's Bash tool do
     not, so SessionStart exports UCCIF_DATA_DIR via CLAUDE_ENV_FILE. As a last
-    resort use the core plugin's data dir under ~/.claude/plugins/data/: the
-    one installed from this marketplace (uccif-uccif), else the most recently
-    used dir holding the core marker. A bare uccif-* glob is not enough: sibling
-    plugins (uccif-strict, uccif-codeintel) get data dirs with the same prefix.
+    resort use the core plugin's data dir under ~/.claude/plugins/data/ (or
+    ~/.gemini/antigravity/plugin_data/ on Antigravity/Gemini).
     """
-    for var in ("UCCIF_DATA_DIR", "CLAUDE_PLUGIN_DATA"):
+    for var in ("UCCIF_DATA_DIR", "CLAUDE_PLUGIN_DATA", "ANTIGRAVITY_PLUGIN_DATA"):
         val = os.environ.get(var)
         if val:
             return Path(val), var
+    if get_current_agent() == "antigravity":
+        base = Path.home() / ".gemini" / "antigravity" / "plugin_data" / "uccif"
+        if base.is_dir() or base.parent.is_dir():
+            return base, "fallback-antigravity"
+        base2 = Path.home() / ".gemini" / "plugins" / "data" / CORE_DATA_NAME
+        if (base2 / CORE_MARKER).exists() or base2.is_dir():
+            return base2, "fallback-gemini"
+        return Path.home() / ".gemini" / "uccif", "fallback-gemini-home"
     base = Path.home() / ".claude" / "plugins" / "data"
     exact = base / CORE_DATA_NAME
     if (exact / CORE_MARKER).exists():
@@ -153,30 +189,48 @@ def path_key(root):
 
 
 class Project:
-    def __init__(self, root, data_dir, commit, renamed_from=None):
+    def __init__(self, root, data_dir, commit, renamed_from=None, agent=None):
         self.root = Path(root)
         self.data_dir = Path(data_dir)
         self.root_commit = commit
         self.renamed_from = renamed_from
+        self._agent = agent
 
     @property
     def key(self):
         return self.data_dir.name
 
     @property
+    def agent(self):
+        if self._agent:
+            return self._agent
+        return get_current_agent(self.root)
+
+    @property
+    def docs_subdir(self):
+        if (self.root / ".gemini" / "uccif").exists():
+            return Path(".gemini") / "uccif"
+        if (self.root / ".claude" / "uccif").exists():
+            return Path(".claude") / "uccif"
+        if (self.root / ".agents" / "uccif").exists():
+            return Path(".agents") / "uccif"
+        if self.agent == "antigravity":
+            return Path(".gemini") / "uccif"
+        return Path(".claude") / "uccif"
+
+    @property
     def docs_dir(self):
-        return self.root / DOCS_SUBDIR
+        return self.root / self.docs_subdir
 
     @property
     def local_dir(self):
-        """Per-checkout state the CLI must write from inside Claude Code's Bash sandbox
-        (task memory, drift state). The sandbox never lets commands write under ~/.claude,
-        but the working directory is writable; .claude/uccif/.gitignore keeps it out of git."""
+        """Per-checkout state the CLI must write from inside the sandbox
+        (task memory, drift state). Git ignores .local via docs_dir/.gitignore."""
         return self.docs_dir / LOCAL_SUBDIR
 
 
 def ensure_local(project):
-    """Create .claude/uccif/.local/ and make sure git ignores it."""
+    """Create .local/ under project.docs_dir and make sure git ignores it."""
     project.local_dir.mkdir(parents=True, exist_ok=True)
     gi = project.docs_dir / ".gitignore"
     try:
@@ -205,7 +259,7 @@ def _find_moved(projects_dir, commit, new_root):
     return found[0] if found else None
 
 
-def resolve_project(cwd=None, create=True):
+def resolve_project(cwd=None, create=True, agent=None):
     root = project_root(cwd)
     projects_dir = data_root() / "projects"
     data_dir = projects_dir / path_key(root)
@@ -232,7 +286,7 @@ def resolve_project(cwd=None, create=True):
         # Claude Code's Bash sandbox denies writes under ~/.claude. Commands run there
         # only read what hooks (which run outside the sandbox) keep current.
         pass
-    return Project(root, data_dir, commit, renamed_from)
+    return Project(root, data_dir, commit, renamed_from, agent=agent)
 
 
 def _write_meta(data_dir, meta_path, root, commit, renamed_from):

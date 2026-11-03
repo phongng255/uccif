@@ -169,21 +169,24 @@ def on_session_start(data, project):
     spawn(["maintain"], project, data.get("_agent"))  # drift check, CodeGraph index + project skills in the background
     parts.append(codegraph.context_line(project))
     mine = skillgen.generated(project)
+    is_ag = data.get("_agent") == ANTIGRAVITY or getattr(project, "agent", "claude") == ANTIGRAVITY
     if mine:
         maps = [n for n in mine if n.endswith("-map")]
         fixes = [n for n in mine if n.endswith("-bugfix")]
-        parts.append("Project skills generated from CodeGraph in .claude/skills/: %s%s, %d module skills. "
+        skills_folder = ".agents/skills/" if is_ag else ".claude/skills/"
+        parts.append("Project skills generated from CodeGraph in %s: %s%s, %d module skills. "
                      "Use the map skill to know where code lives and the bugfix skill for any reported bug."
-                     % (", ".join(maps + fixes), "" if maps else " (no map)", len(mine) - len(maps) - len(fixes)))
-    if data.get("_agent") == ANTIGRAVITY:
+                     % (skills_folder, ", ".join(maps + fixes), "" if maps else " (no map)", len(mine) - len(maps) - len(fixes)))
+    if is_ag:
         parts.append(antigravity_line())
     else:
         offer = lsp_offer(project)  # .lsp.json is a Claude Code plugin feature
         if offer:
             parts.append(offer)
     docs = project.docs_dir
+    docs_rel = project.docs_subdir.as_posix()
     if (docs / "summary.md").exists():
-        parts.append("Project docs: .claude/uccif/ (summary.md, architecture.md). Read only the section you need.")
+        parts.append("Project docs: %s/ (summary.md, architecture.md). Read only the section you need." % docs_rel)
     else:
         parts.append("UCCIF: this project has not been surveyed yet. Before the first code change, "
                      "run the uccif:init skill (limited survey, read-only until docs are written).")
@@ -203,7 +206,8 @@ def on_user_prompt_submit(data, project):
     lines = [] if quick else task.summary_lines(project)
     stale = drift.pending(project)
     if stale:
-        lines.append("Project docs are stale (.claude/uccif/): " + "; ".join(stale) +
+        docs_rel = project.docs_subdir.as_posix()
+        lines.append("Project docs are stale (%s/): " % docs_rel + "; ".join(stale) +
                      ". Update only those sections when convenient, then run `uccif drift ack`.")
     lines.append("Reply in %s. Do ops work yourself. To find code, query CodeGraph first "
                  "(`codegraph_explore`, or `codegraph explore` in Bash); code changes follow the uccif task flow."
@@ -226,7 +230,7 @@ def on_post_tool_use(data, project):
     ti = data.get("tool_input") or {}
     path = ti.get("file_path") or ti.get("notebook_path")
     rel = _rel(project, path) if path else None
-    if not rel or rel.startswith(".claude/"):
+    if not rel or rel.startswith((".claude/", ".gemini/", ".agents/")):
         return None, {"decision": "skip", "target": path}
     added = task.add_modified(project, rel)
     return None, {"rule": "task-files" if added else "no-task", "target": rel}
@@ -314,7 +318,7 @@ def on_session_end(data, project):
 
 def on_instructions_loaded(data, project):
     path = data.get("file_path") or ""
-    if data.get("memory_type") != "Project" or _rel(project, path) != "CLAUDE.md":
+    if data.get("memory_type") != "Project" or _rel(project, path) not in ("CLAUDE.md", "GEMINI.md", "AGENTS.md"):
         return None, {"decision": "skip"}
     try:
         has_block = "<!-- UCCIF:BEGIN -->" in Path(path).read_text(encoding="utf-8")
@@ -417,7 +421,7 @@ def run(event, stdin=None, stdout=None, agent="claude"):
         handler = HANDLERS.get(event)
         if handler is None:
             raise ValueError("unknown hook event: %s" % event)
-        project = resolve_project(data.get("cwd"))
+        project = resolve_project(data.get("cwd"), agent=agent)
         out, fields = handler(data, project)
         fields.setdefault("decision", "nudge" if out and event != "stop" else "allow")
         fields.update(session=data.get("session_id"), tool=data.get("tool_name"),

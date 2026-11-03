@@ -31,12 +31,24 @@ USER_RULES_MAX_CHARS = 300  # per line: a pasted blob must not flood the context
 
 
 def user_rule_files(project):
-    """[(scope, path)]: every project first (~/.claude/uccif/rules.md), then this project
-    (<repo>/.claude/uccif/rules.md), so the more specific file comes last."""
+    """[(scope, path)]: every project first (~/.claude/uccif/rules.md or ~/.gemini/uccif/rules.md),
+    then this project (<repo>/.../rules.md), so the more specific file comes last."""
     from pathlib import Path
     out = []
     try:
-        out.append(("all projects", Path.home() / ".claude" / "uccif" / USER_RULES_NAME))
+        home = Path.home()
+        if getattr(project, "agent", "claude") == "antigravity":
+            gemini_global = home / ".gemini" / "uccif" / USER_RULES_NAME
+            if gemini_global.is_file() or not (home / ".claude" / "uccif" / USER_RULES_NAME).is_file():
+                out.append(("all projects", gemini_global))
+            else:
+                out.append(("all projects", home / ".claude" / "uccif" / USER_RULES_NAME))
+        else:
+            claude_global = home / ".claude" / "uccif" / USER_RULES_NAME
+            if claude_global.is_file() or not (home / ".gemini" / "uccif" / USER_RULES_NAME).is_file():
+                out.append(("all projects", claude_global))
+            else:
+                out.append(("all projects", home / ".gemini" / "uccif" / USER_RULES_NAME))
     except (RuntimeError, KeyError, OSError):  # no home directory
         pass
     out.append(("this project", project.docs_dir / USER_RULES_NAME))
