@@ -29,14 +29,10 @@ def group_of(path):
 
 # Edge families drawn by the view (bit flags on each drawn link; 512 = only inferred edges).
 FAMILIES = ((1, "imports", ("imports",)),
-            (2, "calls", ("calls", "passes_callback", "uses_composable")),
-            (4, "components", ("renders", "passes_prop", "listens")),
-            (8, "stores", ("calls_action", "reads_state", "uses_store")),
-            (16, "routes", ("routes_to", "navigates_to")),
-            (32, "css", ("uses_css_var", "defines_css_var", "uses_class")),
-            (64, "types", ("references_type",)),
-            (128, "variables", ("reads", "writes")),
-            (256, "inheritance", ("extends", "implements")))
+            (2, "calls", ("calls", "passes_callback")),
+            (4, "types", ("references_type",)),
+            (8, "variables", ("reads", "writes")),
+            (16, "inheritance", ("extends", "implements")))
 BIT = {k: b for b, _, kinds in FAMILIES for k in kinds}
 INFERRED = 512
 
@@ -58,8 +54,8 @@ def _flags(rows, keep):
 
 def graph_data(project, max_nodes=DEFAULT_MAX_NODES, mode="files", file=None):
     """{'nodes': [...], 'edges': [[a, b, flags]], 'families': [[bit, name, count]], 'mode', ...}.
-    An edge a -> b means a uses b. mode: 'files' (default), 'components' (.vue render tree), or
-    'symbols' for one `file`: its functions / components and what they touch, one hop out."""
+    An edge a -> b means a uses b. mode: 'files' (default), or 'symbols' for one `file`: its
+    functions and classes and what they touch, one hop out."""
     max_nodes = max(10, min(int(max_nodes), HARD_MAX_NODES))
     con = index.connect(project, write=False)
     files = {p: (lang, t, n) for p, lang, t, n in
@@ -82,12 +78,7 @@ def graph_data(project, max_nodes=DEFAULT_MAX_NODES, mode="files", file=None):
         focus = rel
     else:
         rows = con.execute("SELECT src_path, dst_path, kind, confidence FROM edges WHERE dst_path IS NOT NULL").fetchall()
-        if mode == "components":
-            rows = [r for r in rows if r[2] == "renders"]
-            keep = lambda p: p in files and files[p][0] in ("vue", "svelte")  # noqa: E731
-        else:
-            keep = lambda p: p in files  # noqa: E731
-        flags = _flags(rows, keep)
+        flags = _flags(rows, lambda p: p in files)
         focus = None
     con.close()
     degree = {}
@@ -108,8 +99,7 @@ def graph_data(project, max_nodes=DEFAULT_MAX_NODES, mode="files", file=None):
                           "sym": files[p][2], "deg": degree[p], "q": p})
     edges = [[keep_ids[a], keep_ids[b], f] for (a, b), f in sorted(flags.items()) if a in keep_ids and b in keep_ids]
     fams = [[b, name, sum(1 for e in edges if e[2] & b)] for b, name, _ in FAMILIES]
-    total = len(meta) if mode == "symbols" else len([p for p in files if mode != "components" or
-                                                     files[p][0] in ("vue", "svelte")])
+    total = len(meta) if mode == "symbols" else len(files)
     return {"nodes": nodes, "edges": edges, "total_files": total, "shown": len(nodes),
             "isolated": max(0, total - len(degree)) if mode != "symbols" else 0,
             "families": [f for f in fams if f[2]], "mode": mode, "focus": focus}
@@ -125,7 +115,7 @@ def render(data, title):
 def write(project, out=None, max_nodes=DEFAULT_MAX_NODES, mode="files", file=None):
     """Build the graph and write the HTML. Returns (path, data)."""
     data = graph_data(project, max_nodes, mode, file)
-    what = {"components": "component tree", "symbols": "functions of %s" % data.get("focus")}.get(mode, "code graph")
+    what = "functions of %s" % data.get("focus") if mode == "symbols" else "code graph"
     html = render(data, "%s %s" % (project.root.name, what))
     if out:
         target = Path(out)
@@ -188,7 +178,7 @@ a.n:hover{text-decoration:underline}
 <div id="stage"><canvas id="c" aria-label="Code graph"></canvas></div>
 <aside id="side"><h2>Legend</h2><div class="legend" id="legend"></div>
 <h2>How to read</h2>
-<p class="tag" id="how">Each dot is a source file; a line means one file uses the other (import, call, render, store, route, CSS, type…; tick the kinds above). Dashed lines are only inferred (matched by name or pattern). Bigger dot = more connections. Click a dot to see what it uses and what uses it. Drag to pan, scroll to zoom. The index is a lead: read the file before relying on an edge.</p>
+<p class="tag" id="how">Each dot is a source file; a line means one file uses the other (import, call, type, variable, inheritance; tick the kinds above). Dashed lines are only inferred (matched by name or pattern). Bigger dot = more connections. Click a dot to see what it uses and what uses it. Drag to pan, scroll to zoom. The index is a lead: read the file before relying on an edge.</p>
 <div id="info"></div></aside>
 </main>
 <script>
@@ -266,10 +256,9 @@ document.getElementById("tests").addEventListener("change",function(ev){showTest
 document.getElementById("inf").addEventListener("change",function(ev){showInf=ev.target.checked;select(sel)});
 document.getElementById("fams").innerHTML=FAM.map(function(f){return'<label><input type="checkbox" data-b="'+f[0]+'" checked> '+esc(f[1])+' <span class="tag">'+f[2]+"</span></label>"}).join("");
 document.getElementById("fams").addEventListener("change",function(ev){var b=+ev.target.dataset.b;mask=ev.target.checked?(mask|b):(mask&~b);select(sel)});
-if(D.mode==="components")document.getElementById("how").textContent="Each dot is a component; a line means the parent renders the child (dashed: matched by file name only). Click a component for its parents and children.";
-if(D.mode==="symbols")document.getElementById("how").textContent="Functions, components, stores, props… of "+D.focus+" and the symbols they touch one hop away, coloured by file. Click one for what it uses and what uses it.";
+if(D.mode==="symbols")document.getElementById("how").textContent="Functions, classes, types and variables of "+D.focus+" and the symbols they touch one hop away, coloured by file. Click one for what it uses and what uses it.";
 document.getElementById("legend").innerHTML=groups.slice(0,30).map(function(g){return'<span><i style="background:'+color(g)+'"></i>'+esc(g)+"</span>"}).join("")+(groups.length>30?'<span class="tag">+'+(groups.length-30)+" more</span>":"");
-document.getElementById("stats").textContent=D.shown+" of "+D.total_files+(D.mode==="symbols"?" symbols":D.mode==="components"?" components":" files")+" shown"+(D.isolated?" · "+D.isolated+" unconnected hidden":"")+" · "+E.length+" links";
+document.getElementById("stats").textContent=D.shown+" of "+D.total_files+(D.mode==="symbols"?" symbols":" files")+" shown"+(D.isolated?" · "+D.isolated+" unconnected hidden":"")+" · "+E.length+" links";
 window.addEventListener("resize",function(){resize();fit()});
 if(window.matchMedia)window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change",function(){document.getElementById("legend").innerHTML=groups.slice(0,30).map(function(g){return'<span><i style="background:'+color(g)+'"></i>'+esc(g)+"</span>"}).join("")});
 resize();for(var s=0;s<260;s++)tick();fit();loop();

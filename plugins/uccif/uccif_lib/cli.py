@@ -47,8 +47,6 @@ def build_parser():
     ig = ix.add_parser("graph", help="write a self-contained HTML view of the code graph (outside the repo)")
     ig.add_argument("--out", help="write here instead of the plugin data folder")
     ig.add_argument("--max-nodes", type=int, default=300, help="most-connected files to draw (default 300)")
-    ig.add_argument("--mode", choices=("files", "components"), default="files",
-                    help="files (default) or the Vue component render tree")
     ig.add_argument("--file", help="function-level view of one file: its symbols and what they touch")
     iq = ix.add_parser("query", help="definitions, callers, dependents, impact, paths, tests (≤ 30 lines)")
     g = iq.add_mutually_exclusive_group(required=True)
@@ -57,14 +55,9 @@ def build_parser():
     g.add_argument("--tests-for")
     g.add_argument("--impact", metavar="FILE|SYMBOL", help="what a change to FILE or SYMBOL reaches, level by level")
     g.add_argument("--path", nargs=2, metavar=("FROM", "TO"), help="shortest import/call chain between two files or symbols")
-    g.add_argument("--component", metavar="NAME", help="render tree, props, emits, routes and stores of a component")
-    g.add_argument("--store", metavar="NAME", help="Pinia store: actions / state / getters and who uses each")
-    g.add_argument("--route", metavar="PATH|NAME", help="route: the component it shows and the code that opens it")
-    g.add_argument("--css-var", metavar="--NAME", help="where a CSS variable is defined and used (--css-var=--x or --css-var x)")
     g.add_argument("--cochange", metavar="FILE", help="files that changed together with FILE in git history")
     iq.add_argument("--depth", type=int, default=3, help="levels for --impact (default 3, max %d)" % index.MAX_DEPTH)
-    iq.add_argument("--kinds", help="edge kinds for --impact, comma separated; groups: code, store, vue, css, "
-                                    "route, types, vars")
+    iq.add_argument("--kinds", help="edge kinds for --impact, comma separated; groups: code, types, vars")
     iq.add_argument("--min-confidence", choices=("extracted", "inferred"),
                     help="for --impact; default: extracted edges, inferred ones only when nothing is certain")
 
@@ -137,7 +130,7 @@ def _index_cmd(args):
         except (OSError, sqlite3.Error):
             pass  # sandbox: hooks keep the index current
         try:
-            target, data = graph.write(proj, args.out, args.max_nodes, "symbols" if args.file else args.mode,
+            target, data = graph.write(proj, args.out, args.max_nodes, "symbols" if args.file else "files",
                                        args.file)
         except index.IndexUnavailable as e:
             print("Code index unavailable (%s). It is built by the session-start hook." % e)
@@ -145,7 +138,7 @@ def _index_cmd(args):
         except OSError as e:
             print("Cannot write the graph: %s" % e)
             return 1
-        unit = {"symbols": "symbols", "components": "components"}.get(data["mode"], "files")
+        unit = "symbols" if data["mode"] == "symbols" else "files"
         print("Graph: %d of %d %s, %d links -> %s" % (data["shown"], data["total_files"], unit,
                                                       len(data["edges"]), target.as_posix()))
         print("Open that file in a browser. It is self-contained and not part of the repo.")
@@ -173,18 +166,9 @@ def _index_cmd(args):
                     lines = index.impact(proj, args.impact, args.depth, kinds, args.min_confidence)
                 else:
                     lines = queries.impact_symbol(proj, args.impact, args.depth, kinds, args.min_confidence)
-            elif args.component or args.store or args.route or args.css_var or args.cochange:
+            elif args.cochange:
                 from uccif_lib import queries
-                if args.component:
-                    lines = queries.component(proj, args.component)
-                elif args.store:
-                    lines = queries.store(proj, args.store)
-                elif args.route:
-                    lines = queries.route(proj, args.route)
-                elif args.css_var:
-                    lines = queries.css_var(proj, args.css_var)
-                else:
-                    lines = queries.cochange(proj, args.cochange)
+                lines = queries.cochange(proj, args.cochange)
             elif args.path:
                 lines = index.path_between(proj, args.path[0], args.path[1])
             else:

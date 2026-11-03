@@ -1,8 +1,6 @@
-"""Baseline for the code-graph roadmap: what the index knows about the fixed Vue fixture today.
-
-Later PRs add edges (renders, store use, routes ...); these assertions pin the current
-behaviour so each PR shows exactly what it changed. Where a check is a known gap, the test
-says so and is flipped by the PR that closes it.
+"""A small JS/TS app (it happens to use Vue files) indexed as plain code: symbols, imports
+through an alias and a barrel, tests and calls. No framework feature is checked here: UCCIF has
+no framework layer, a .vue / .svelte file is read for its <script> only.
 """
 import os
 
@@ -29,7 +27,7 @@ def test_fixture_is_indexed(project, vue_app):
 def test_symbols_and_tests(project, vue_app):
     con = _con(project)
     syms = {(n, k) for n, k in con.execute("SELECT name, kind FROM symbols")}
-    for expected in [("useTripStore", "store"), ("useUiStore", "store"), ("useSync", "function"),
+    for expected in [("useTripStore", "variable"), ("useUiStore", "variable"), ("useSync", "function"),
                      ("formatMoney", "function"), ("Expense", "interface"), ("--brand-color", "css-var"),
                      ("App", "component"), ("ExpenseList", "component")]:
         assert expected in syms, expected
@@ -69,7 +67,8 @@ def test_calls_with_tree_sitter(project, vue_app, monkeypatch):
                        "AND src_path='src/composables/useSync.ts'").fetchall()
     # `store.$state` / `saveTrip` come through imports; `sync` is local
     assert ("saveTrip", "src/utils/firebase.ts") in rows
-    # store.addExpense / store.removeExpense are tied to the store actions (see test_pinia)
-    acts = con.execute("SELECT count(*) FROM edges WHERE kind='calls_action' "
-                       "AND src_path='src/components/ExpenseList.vue'").fetchone()[0]
-    assert acts >= 2
+    # store.addExpense(): the member lives inside an object handed to a library call, so it stays an
+    # unresolved lead (no framework knowledge), never a wrong certain edge
+    rows = con.execute("SELECT dst_id, confidence FROM edges WHERE kind='calls' AND detail='addExpense' "
+                       "AND src_path='src/components/ExpenseList.vue'").fetchall()
+    assert rows and all(d is None and c == "unresolved" for d, c in rows)

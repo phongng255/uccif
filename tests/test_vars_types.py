@@ -1,4 +1,4 @@
-"""Type references (D1) and reads / writes of module variables and refs (D2)."""
+"""Type references (D1) and reads / writes of module variables (D2)."""
 import os
 import time
 
@@ -12,12 +12,6 @@ def _ts(monkeypatch):
     monkeypatch.delenv("UCCIF_NO_TREE_SITTER", raising=False)
     if not any(ts_parse.availability().values()):
         pytest.skip("tree-sitter not installed")
-
-
-def _html(monkeypatch):
-    _ts(monkeypatch)
-    if not ts_parse.html_available():
-        pytest.skip("tree-sitter-html not installed")
 
 
 def write(root, rel, text):
@@ -93,16 +87,15 @@ def test_reads_and_writes(project, repo, monkeypatch):
     assert "(reads)" in sym
 
 
-def test_template_refs(project, vue_app, monkeypatch):
-    _html(monkeypatch)
+def test_script_variables_of_vue_files(project, vue_app, monkeypatch):
+    """Only the <script> of a .vue file is read: its module variables, like any other file's."""
+    _ts(monkeypatch)
     index.update(project)
     got = {(e[0], e[1], e[2], e[3]) for e in edges(project, via="~var", src_path="src/components/ExpenseForm.vue")}
     f = "src/components/ExpenseForm.vue#"
-    assert (f + "ExpenseForm", f + "title", "writes", 3) in got  # v-model="title"
-    assert (f + "ExpenseForm", f + "amount", "writes", 4) in got  # v-model.number="amount"
     assert (f + "submit", f + "title", "writes", 20) in got  # title.value = ''
+    assert not [g for g in got if g[3] < 10]  # nothing from the template
     app = {(e[1], e[2]) for e in edges(project, via="~var", src_path="src/App.vue")}
-    assert ("src/App.vue#tab", "reads") in app and ("src/App.vue#tabs", "reads") in app
     assert ("src/App.vue#tab", "writes") in app  # tab.value = t in select()
 
 
@@ -136,15 +129,3 @@ def test_shadowing_forms(project, repo, monkeypatch):
     assert ("dflt", "total", "reads") in got  # a default value reads the module variable
     for fn in ("p", "d", "l", "q"):
         assert not [g for g in got if g[0] == fn], fn  # parameter, destructuring, for-of, catch, local
-
-
-def test_template_locals_shadow(project, repo, monkeypatch):
-    _html(monkeypatch)
-    write(repo, "src/L.vue", "<template>\n  <li v-for=\"(tab, i) in tabs\">{{ tab }} {{ i }}</li>\n"
-          "  <Row #item=\"{ row }\">{{ row }}</Row>\n</template>\n<script setup lang=\"ts\">\n"
-          "const tabs = ref([])\nconst tab = ref('a')\nconst row = 1\n</script>\n")
-    commit(repo)
-    index.update(project)
-    got = {(e[1].split("#")[1], e[2]) for e in edges(project, via="~var", src_path="src/L.vue")}
-    assert ("tabs", "reads") in got
-    assert ("tab", "reads") not in got and ("row", "reads") not in got  # v-for alias, slot prop

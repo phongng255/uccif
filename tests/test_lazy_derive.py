@@ -15,7 +15,7 @@ def _ts(monkeypatch):
 
 def derived(project):
     con = index.connect(project, write=False)
-    rows = con.execute("SELECT src_path, kind, detail FROM edges WHERE kind='calls_action'").fetchall()
+    rows = con.execute("SELECT src_path, kind, detail FROM edges WHERE kind='references_type'").fetchall()
     stale = index._meta(con, "derived_stale")
     con.close()
     return set(rows), stale
@@ -25,10 +25,10 @@ def test_defer_and_catch_up(project, vue_app, monkeypatch):
     _ts(monkeypatch)
     index.update(project)
     before, stale = derived(project)
-    assert ("src/components/ExpenseList.vue", "calls_action", "addExpense") in before and stale == "0"
+    assert ("src/components/ExpenseList.vue", "references_type", "Expense") in before and stale == "0"
     monkeypatch.setattr(index, "DERIVE_BUDGET_MS", -1)  # pretend the repo is big
     f = vue_app / "src" / "components" / "ExpenseList.vue"
-    f.write_text(f.read_text().replace("store.addExpense(e)", "store.removeExpense(e.id)"), encoding="utf-8")
+    f.write_text(f.read_text().replace("add(e: Expense)", "add(e: unknown)"), encoding="utf-8")
     os.utime(str(f), (time.time() + 10, time.time() + 10))
     st = index.update(project, paths=["src/components/ExpenseList.vue"])  # the post-Edit path
     assert st["derived_stale"] is True
@@ -38,19 +38,19 @@ def test_defer_and_catch_up(project, vue_app, monkeypatch):
     assert not st["derived_stale"]
     after, stale = derived(project)
     assert stale == "0"
-    assert ("src/components/ExpenseList.vue", "calls_action", "addExpense") not in after  # caught up
+    assert ("src/components/ExpenseList.vue", "references_type", "Expense") not in after  # caught up
 
 
 def test_small_repo_stays_immediate(project, vue_app, monkeypatch):
     _ts(monkeypatch)
     index.update(project)
     f = vue_app / "src" / "components" / "ExpenseList.vue"
-    f.write_text(f.read_text().replace("store.addExpense(e)", "store.removeExpense(e.id)"), encoding="utf-8")
+    f.write_text(f.read_text().replace("add(e: Expense)", "add(e: unknown)"), encoding="utf-8")
     os.utime(str(f), (time.time() + 10, time.time() + 10))
     st = index.update(project, paths=["src/components/ExpenseList.vue"])
     assert not st["derived_stale"]
     after, stale = derived(project)
-    assert ("src/components/ExpenseList.vue", "calls_action", "addExpense") not in after and stale == "0"
+    assert ("src/components/ExpenseList.vue", "references_type", "Expense") not in after and stale == "0"
 
 
 def test_post_edit_hook_spawns_catch_up(project, vue_app, monkeypatch):

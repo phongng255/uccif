@@ -52,91 +52,68 @@ def _ms(fn):
 
 
 def synthetic_app(dest, n):
-    """Write a Vue 3 + Pinia + router app with `n` components (about n * 1.3 files) to `dest`.
-    Each component imports two others, renders them with props and listens to an emit, uses a store
-    action and state, a composable, a util through a barrel, CSS variables and classes; views are
-    routed and navigate to each other. Shaped like a real app, only bigger."""
+    """Write a plain TypeScript + Python app with `n` TS modules (plus n // 4 Python modules) to `dest`.
+    Each TS module imports two others, calls their functions, extends a base class, reads and writes
+    module state, references shared types and uses utils through a barrel; each Python module imports
+    and subclasses another. No framework: shaped like a real app, only bigger."""
     dest = Path(dest)
-    stores = max(3, n // 25)
-    views = max(3, n // 10)
+    py = max(4, n // 4)
 
     def w(rel, text):
         p = dest / rel
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(text, encoding="utf-8")
 
-    w("package.json", '{"name": "big", "dependencies": {"vue": "^3", "pinia": "^2", "vue-router": "^4"}}')
+    w("package.json", '{"name": "big", "dependencies": {"lodash": "^4"}}')
     w("tsconfig.json", '{"compilerOptions": {"baseUrl": ".", "paths": {"@/*": ["src/*"]}}}')
-    w("src/styles/tokens.css", ":root {\n" + "".join("  --c%d: #%06x;\n" % (i, i * 997) for i in range(40)) + "}\n")
     w("src/utils/format.ts", "".join("export function fmt%d(x: number): string { return String(x + %d) }\n" % (i, i)
                                      for i in range(30)))
     w("src/utils/index.ts", "export * from './format'\n")
     w("src/types/index.ts", "".join("export interface T%d { id: string; v: number }\n" % i for i in range(30)))
-    for s_ in range(stores):
-        w("src/stores/s%d.ts" % s_, "import { defineStore } from 'pinia'\nimport type { T%d } from '@/types'\n"
-          "export const useS%dStore = defineStore('s%d', {\n  state: () => ({ items: [] as T%d[], n: 0 }),\n"
-          "  getters: { total: (st) => st.items.length },\n"
-          "  actions: { add(x: T%d) { this.items.push(x) }, reset() { this.n = 0 } },\n})\n"
-          % (s_ % 30, s_, s_, s_ % 30, s_ % 30))
-    for c in range(n // 20 + 1):
-        w("src/composables/useC%d.ts" % c, "import { computed } from 'vue'\nimport { useS%dStore } from '@/stores/s%d'\n"
-          "export function useC%d() {\n  const st = useS%dStore()\n  const label = computed(() => st.total)\n"
-          "  function bump() { st.add({ id: 'x', v: 1 }) }\n  return { label, bump }\n}\n"
-          % (c % stores, c % stores, c, c % stores))
+    w("src/base.ts", "export class Base {\n  save(): void {}\n  load(id: string): string { return id }\n}\n")
     for i in range(n):
         a, b = (i + 1) % n, (i + 7) % n
-        s_ = i % stores
-        w("src/components/C%d.vue" % i, """<template>
-  <div class="card c%(i)d" :class="{ active: on }" @click="toggle()">
-    <h3>{{ fmt%(f)d(store.total) }} {{ label }}</h3>
-    <C%(a)d v-if="depth > 0" :depth="depth - 1" title="t" @picked="onPick" />
-    <C%(b)d v-if="depth > 1" :depth="depth - 2" @picked="onPick" />
-    <button @click="store.add({ id: 'i', v: %(i)d })">add</button>
-  </div>
-</template>
-
-<script setup lang="ts">
-import { ref } from 'vue'
-import C%(a)d from './C%(a)d.vue'
-import C%(b)d from './C%(b)d.vue'
+        w("src/mod/m%d.ts" % i, """import { Base } from '@/base'
 import { fmt%(f)d } from '@/utils'
-import { useS%(s)dStore } from '@/stores/s%(s)d'
-import { useC%(c)d } from '@/composables/useC%(c)d'
+import { run%(a)d, State%(a)d } from './m%(a)d'
+import { run%(b)d } from './m%(b)d'
 import type { T%(t)d } from '@/types'
+import { debounce } from 'lodash'
 
-const props = defineProps<{ depth: number; title?: string }>()
-const emit = defineEmits<{ (e: 'picked', v: T%(t)d): void }>()
-const store = useS%(s)dStore()
-const { label, bump } = useC%(c)d()
-const on = ref(false)
+export let count%(i)d = 0
+const cache = new Map<string, T%(t)d>()
 
-function toggle() {
-  on.value = !on.value
-  bump()
+export class State%(i)d extends Base {
+  items: T%(t)d[] = []
+  add(x: T%(t)d): void {
+    this.items.push(x)
+    this.save()
+  }
 }
 
-function onPick(v: T%(t)d) {
-  emit('picked', v)
+export function run%(i)d(depth: number, item: T%(t)d): string {
+  count%(i)d += 1
+  cache.set(item.id, item)
+  const s = new State%(a)d()
+  s.add(item)
+  if (depth > 0) {
+    run%(a)d(depth - 1, item)
+    run%(b)d(depth - 2, item)
+  }
+  return fmt%(f)d(count%(i)d)
 }
-</script>
 
-<style scoped>
-.card { color: var(--c%(v)d); border: 1px solid var(--c%(v2)d); }
-.active { background: var(--c%(v3)d); }
-</style>
-""" % {"i": i, "a": a, "b": b, "f": i % 30, "s": s_, "c": i % (n // 20 + 1), "t": i % 30, "v": i % 40,
-            "v2": (i + 3) % 40, "v3": (i + 9) % 40})
-    routes = "".join("    { path: '/v%d', name: 'v%d', component: () => import('@/views/V%d.vue') },\n" % (v, v, v)
-                     for v in range(views))
-    w("src/router/index.ts", "import { createRouter, createWebHistory } from 'vue-router'\n"
-      "export default createRouter({ history: createWebHistory(), routes: [\n%s] })\n" % routes)
-    for v in range(views):
-        w("src/views/V%d.vue" % v, "<template>\n  <RouterLink to=\"/v%d\">next</RouterLink>\n  <C%d :depth=\"2\" />\n"
-          "</template>\n<script setup lang=\"ts\">\nimport C%d from '@/components/C%d.vue'\n</script>\n"
-          % ((v + 1) % views, v % n, v % n, v % n))
-    w("src/App.vue", "<template><RouterView /></template>\n")
-    w("src/main.ts", "import { createApp } from 'vue'\nimport App from './App.vue'\nimport router from './router'\n"
-      "import '@/styles/tokens.css'\ncreateApp(App).use(router).mount('#app')\n")
+export const later%(i)d = debounce(() => run%(i)d(1, { id: 'x', v: %(i)d }), 10)
+""" % {"i": i, "a": a, "b": b, "f": i % 30, "t": i % 30})
+    w("src/main.ts", "import { run0 } from './mod/m0'\nrun0(3, { id: 'a', v: 1 })\n")
+    w("app/__init__.py", "")
+    w("app/base.py", "class Model:\n    def save(self):\n        return True\n")
+    for i in range(py):
+        a = (i + 1) % py
+        w("app/p%d.py" % i, "from app.base import Model\nfrom app import p%d\n\nLIMIT = %d\n\n\n"
+          "class Item%d(Model):\n    def run(self, n: int) -> int:\n        self.save()\n"
+          "        return helper%d(n)\n\n\ndef helper%d(n: int) -> int:\n"
+          "    return n + LIMIT if n > 0 else p%d.helper%d(n + 1)\n" % (a, i, i, i, i, a, a))
     return dest
 
 
@@ -155,14 +132,14 @@ def bench(target, repeat):
         counts = {t: con.execute("SELECT count(*) FROM %s" % t).fetchone()[0] for t in ("files", "symbols")}
         counts["imports"] = con.execute("SELECT count(*) FROM edges WHERE kind IN ('imports','imports_ext') "
                                         "AND via IS NULL").fetchone()[0]
-        counts["calls"] = con.execute("SELECT count(*) FROM edges WHERE kind IN ('calls','calls_ext','calls_action') "
+        counts["calls"] = con.execute("SELECT count(*) FROM edges WHERE kind IN ('calls','calls_ext') "
                                       "AND (via IS NULL OR via LIKE '~%')").fetchone()[0]
         try:  # schema >= 4
             counts["nodes"] = con.execute("SELECT count(*) FROM nodes").fetchone()[0]
             counts["edges"] = con.execute("SELECT count(*) FROM edges").fetchone()[0]
             # edges that point at the repo or at a package are fully known; "unresolved" are leads
             un = con.execute("SELECT count(*) FROM edges WHERE confidence='unresolved'").fetchone()[0]
-            ours = con.execute("SELECT count(*) FROM edges WHERE kind NOT IN ('imports_ext', 'calls_ext', 'extends_ext', 'implements_ext', 'renders_ext', 'contains', 'tests', 'uses_store', 'uses_composable', 'reads_state', 'calls_action')").fetchone()[0]
+            ours = con.execute("SELECT count(*) FROM edges WHERE kind NOT IN ('imports_ext', 'calls_ext', 'extends_ext', 'implements_ext', 'contains', 'tests')").fetchone()[0]
             counts["unresolved_pct"] = round(100.0 * un / ours) if ours else 0
         except Exception:
             counts.update(nodes=0, edges=0, unresolved_pct=0)
@@ -170,8 +147,8 @@ def bench(target, repeat):
         db_kb = index.db_path(project).stat().st_size / 1024
 
         sources = sorted(r for r in index.list_source_files(repo))
-        # the slowest path is a .vue file (script + template + derived passes), so prefer one
-        pick = next((s for s in sources if s.endswith(".vue")), None) or \
+        # a module in the middle of the import web: many users, so the derived passes have work to do
+        pick = next((s for s in sources if s.endswith("/m1.ts")), None) or \
             next((s for s in sources if not index.is_test(s)), None)
         touch, noop, catch = [], [], []
         for i in range(repeat):
@@ -203,11 +180,11 @@ def main():
     ap.add_argument("--repeat", type=int, default=5)
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--synthetic", type=int, action="append", metavar="N",
-                    help="also bench a generated Vue app with N components (repeatable, e.g. 200, 800)")
+                    help="also bench a generated TS + Python app with N TS modules (repeatable, e.g. 200, 800)")
     a = ap.parse_args()
     targets = [Path(t).resolve() for t in a.target] if a.target else [HERE / "fixtures" / "vue-app", REPO]
     for n in a.synthetic or ():
-        targets.append(synthetic_app(Path(tempfile.mkdtemp(prefix="uccif-synth-")) / ("vue-%d" % n), n))
+        targets.append(synthetic_app(Path(tempfile.mkdtemp(prefix="uccif-synth-")) / ("app-%d" % n), n))
     rows = [bench(t, a.repeat) for t in targets]
     if a.json:
         print(json.dumps(rows, indent=2))
