@@ -1,5 +1,31 @@
 # Changelog
 
+## 3.0.0-dev.16
+
+- **Vue templates** (phase 2, step 5; `SCHEMA` 7, an older index is rebuilt automatically).
+  Needs the optional `pip install tree-sitter-html` (CI installs it; `uccif doctor` mentions it
+  when a Vue project lacks it). Without it nothing changes.
+  - `renders` edges (B1): component -> component, from the template's tags. A tag is matched
+    (`expense-item`, `ExpenseItem`) to the script's imports (`extracted`); to a global
+    registration `app.component('BaseButton', BaseButton)` (`extracted`, shown as "global
+    registration"); otherwise to the one `.vue` file with that name (`inferred`, "matched by file
+    name"); several candidates or none stay `unresolved`. Vue/router built-ins (`RouterView`,
+    `Transition`...) and packages are `renders_ext`. `<component :is>` and recursion are skipped.
+  - Functions called from the template (B6): `@click="save()"`, `@remove="remove"` (a bare
+    handler is a call), `{{ format(x) }}`, `:a="fn(b)"`, `v-if`, `v-for`, with the real line.
+    They are call edges from the component node, resolved through the script's imports and
+    declarations like any other call; `$emit`/`$t` are ignored.
+  - `--impact` follows `renders` too (so changing `BaseButton.vue` lists every component that
+    renders it, even without an import), and `--symbol <Component>` shows `Renders (n)` and
+    `Rendered by (n)`.
+  - Derived edges (global / name / unresolved, `via` starting with `~`) are recomputed after
+    every update that changed anything, so adding or removing a registration or a file
+    updates them without re-parsing the components.
+- Measured: one-file update of a `.vue` file 6 ms (budget 300 ms); DB +10%.
+- Known gaps: a component reached through a barrel (`import { Card } from '@/components'`) points
+  at the barrel; `ui.toggle()` / destructured `sync()` stay unresolved (B4 / C1); Svelte
+  templates are not read.
+
 ## 3.0.0-dev.15
 
 - **Structural edges** (phase 2, step 4; `SCHEMA` 6, an older index is rebuilt automatically):

@@ -36,6 +36,9 @@ def _parser(grammar):
         if grammar == "python":
             import tree_sitter_python as mod
             lang = mod.language()
+        elif grammar == "html":
+            import tree_sitter_html as mod
+            lang = mod.language()
         else:
             import tree_sitter_typescript as mod
             lang = mod.language_typescript() if grammar == "ts" else mod.language_tsx()
@@ -51,6 +54,11 @@ def availability():
     if disabled():
         return {"typescript": False, "python": False}
     return {"typescript": bool(_parser("tsx")), "python": bool(_parser("python"))}
+
+
+def html_available():
+    """Is the optional tree-sitter-html grammar importable (Vue template parsing)?"""
+    return not disabled() and bool(_parser("html"))
 
 
 def grammar_for(rel, lang):
