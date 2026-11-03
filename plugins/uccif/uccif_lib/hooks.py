@@ -111,7 +111,8 @@ def _ctx(event, text):
 
 def _rel(project, path):
     try:
-        return str(Path(os.path.realpath(path)).relative_to(project.root))
+        # always '/'-separated: task file lists and index keys must match on Windows too
+        return Path(os.path.realpath(path)).relative_to(project.root).as_posix()
     except (ValueError, TypeError):
         return None
 
@@ -192,7 +193,7 @@ def on_post_tool_use(data, project):
     ti = data.get("tool_input") or {}
     path = ti.get("file_path") or ti.get("notebook_path")
     rel = _rel(project, path) if path else None
-    if not rel or rel.startswith(".claude" + os.sep):
+    if not rel or rel.startswith(".claude/"):
         return None, {"decision": "skip", "target": path}
     added = task.add_modified(project, rel)
     st = index.update(project, wait=0.3, paths=[rel]) if index.exists(project) else None

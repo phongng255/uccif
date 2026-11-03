@@ -36,6 +36,7 @@ def test_meta_records_path_and_root_commit(project, repo):
 def test_renamed_repo_moves_its_data(project, repo, tmp_path, monkeypatch):
     (project.data_dir / "marker").write_text("x")
     moved = tmp_path / "moved"
+    monkeypatch.chdir(tmp_path)  # Windows cannot rename the process's current directory
     shutil.move(str(repo), str(moved))
     monkeypatch.chdir(moved)
     p2 = paths.resolve_project()

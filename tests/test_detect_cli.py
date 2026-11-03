@@ -1,6 +1,8 @@
 import json
 import os
+import shutil
 import subprocess
+from pathlib import Path
 
 from conftest import PLUGIN, git
 from uccif_lib import detect
@@ -50,11 +52,24 @@ def test_doctor_warns_on_fresh_project(project):
     assert any("no .claude/uccif/summary.md" in l for l in lines)
 
 
+def git_bash():
+    """Git for Windows' bash, which Claude Code uses for hooks. A bare `bash` on Windows
+    can resolve to WSL's launcher (C:\\Windows\\System32\\bash.exe) instead."""
+    git = shutil.which("git")
+    roots = [Path(git).resolve().parents[1]] if git else []
+    roots.append(Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "Git")
+    for root in roots:
+        for cand in (root / "bin" / "bash.exe", root.parent / "bin" / "bash.exe"):
+            if cand.is_file():
+                return str(cand)
+    raise RuntimeError("Git Bash not found")
+
+
 def run_cli(*args, cwd, stdin=None):
     # On Windows the launcher is a sh script run by Git Bash, as Claude Code does.
-    cmd = (["bash", LAUNCHER.as_posix()] if os.name == "nt" else [str(LAUNCHER)]) + list(args)
-    return subprocess.run(cmd, cwd=str(cwd), input=stdin,
-                          capture_output=True, text=True, env=dict(os.environ))
+    cmd = ([git_bash(), LAUNCHER.as_posix()] if os.name == "nt" else [str(LAUNCHER)]) + list(args)
+    return subprocess.run(cmd, cwd=str(cwd), input=stdin, capture_output=True, text=True,
+                          encoding="utf-8", errors="replace", env=dict(os.environ))
 
 
 def test_launcher_is_executable_and_runs(repo):

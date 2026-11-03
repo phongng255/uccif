@@ -1,5 +1,14 @@
 # Changelog
 
+## 3.0.0-dev.6
+
+Found by the Windows CI job:
+- Files edited by Claude are recorded with `/` separators on Windows too (they were stored as
+  `src\a.ts`, so task file lists and index keys did not match).
+- Git output is decoded as UTF-8 everywhere; Windows' locale code page garbled non-ASCII paths.
+- Tests: run the launcher with Git Bash (a bare `bash` on Windows can be WSL's launcher), read
+  UTF-8 explicitly, and leave a directory before renaming it.
+
 ## 3.0.0-dev.5
 
 - `uccif detect` reports LSP status only for languages the plugin configures (TS/JS, Python);

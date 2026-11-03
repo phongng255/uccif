@@ -210,7 +210,7 @@ def ctags_binary():
     if not exe:
         return None
     try:
-        out = subprocess.run([exe, "--version"], capture_output=True, text=True, timeout=5)
+        out = subprocess.run([exe, "--version"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5)
     except (OSError, subprocess.SubprocessError):
         return None
     return exe if "Universal Ctags" in out.stdout else None
@@ -273,7 +273,7 @@ def ctags_symbols(exe, root, paths):
     try:
         out = subprocess.run(
             [exe, "--output-format=json", "--fields=+nKZ", "--extras=-F", "-f", "-", "-L", "-"],
-            cwd=str(root), input="\n".join(paths), capture_output=True, text=True, timeout=120)
+            cwd=str(root), input="\n".join(paths), capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120)
     except (OSError, subprocess.SubprocessError):
         return {}
     res = {}
@@ -485,7 +485,7 @@ def _refs(project, name, limit=10):
         return 0, []
     try:
         out = subprocess.run(["git", "grep", "-I", "-w", "-c", "-F", "--", name],
-                             cwd=str(project.root), capture_output=True, text=True, timeout=10)
+                             cwd=str(project.root), capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10)
     except (OSError, subprocess.SubprocessError):
         return 0, []
     if out.returncode not in (0, 1):

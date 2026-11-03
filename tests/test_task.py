@@ -8,7 +8,7 @@ def test_start_show_checkpoint_close(project):
     t = task.start(project, "Fix login", "bug", goal="login works")
     assert t["id"] == "T-001"
     task.checkpoint(project, next="write repro", tests=["npm test: fail"], decisions=["use cookie"])
-    md = (project.local_dir / "current-task.md").read_text()
+    md = (project.local_dir / "current-task.md").read_text(encoding="utf-8")
     assert "Task: T-001 — Fix login" in md
     assert "- use cookie" in md and "Next step: write repro" in md
     task.close(project, issues=["safari drops cookie"])

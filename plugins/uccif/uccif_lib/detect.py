@@ -39,7 +39,7 @@ LARGE_REPO = 300
 def list_files(root):
     try:
         out = subprocess.run(["git", "ls-files", "-co", "--exclude-standard"], cwd=str(root),
-                             capture_output=True, text=True, timeout=10)
+                             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10)
         if out.returncode == 0:
             return [p for p in out.stdout.splitlines()
                     if not any(part in SKIP_DIRS for part in Path(p).parts[:-1])]

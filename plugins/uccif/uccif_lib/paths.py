@@ -93,7 +93,7 @@ def write_json(path, data):
 def _git(args, cwd, timeout=5):
     try:
         out = subprocess.run(
-            ["git"] + args, cwd=str(cwd), capture_output=True, text=True, timeout=timeout
+            ["git"] + args, cwd=str(cwd), capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout
         )
     except (OSError, subprocess.SubprocessError):
         return None
