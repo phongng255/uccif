@@ -183,6 +183,17 @@ def parse(text):
             body = _txt(n)
             for m in _INTERP.finditer(body):
                 _expr_calls(m.group(1), base + body.count("\n", 0, m.start(1)), False, calls, reads, emits, navs, idents)
+    # v-for aliases and slot props are template locals: they shadow script variables of the same name
+    local = set()
+    for _t, _l, attrs in elements:
+        for an, av, _al in attrs:
+            if av and an == "v-for":
+                m = re.match(r"^\s*\(?([^)]*?)\)?\s+(?:in|of)\s", av)
+                if m:
+                    local |= set(re.findall(r"[A-Za-z_$][\w$]*", m.group(1)))
+            elif av and (an.startswith("v-slot") or an.startswith("#") or an == "slot-scope"):
+                local |= set(re.findall(r"[A-Za-z_$][\w$]*", av))
+    idents = [i for i in idents if i[0] not in local]
     return Template(tags, calls, elements, reads, uses, emits, navs, classes, idents)
 
 

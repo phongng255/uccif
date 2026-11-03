@@ -86,9 +86,9 @@ def test_reads_and_writes(project, repo, monkeypatch):
     assert ("src/use.ts#bump", "src/use.ts#local", "reads") in got
     assert ("src/use.ts#bump", "src/state.ts#tab", "writes") in got  # tab.value = ...
     assert ("src/use.ts#bump", "src/state.ts#count", "reads") in got
-    assert all(e[4] == "inferred" for e in edges(project, via="~var") if e[2] in ("reads", "writes"))
-    # known limit, documented: a parameter that shadows an imported name is not told apart
-    assert ("src/use.ts#shadow", "src/state.ts#count", "reads") in got
+    assert all(e[4] == "extracted" for e in edges(project, via="~var") if e[2] in ("reads", "writes"))
+    # a parameter that shadows the imported name is told apart
+    assert ("src/use.ts#shadow", "src/state.ts#count", "reads") not in got
     sym = "\n".join(index.query_symbol(project, "count"))
     assert "(reads)" in sym
 
@@ -118,3 +118,33 @@ def test_var_edges_follow_updates(project, repo, monkeypatch):
     os.utime(str(f), (time.time() + 10, time.time() + 10))
     index.update(project)
     assert not [e for e in edges(project, kind="reads") if e[7] == "s.ts"]  # renamed: no stale edge
+
+
+def test_shadowing_forms(project, repo, monkeypatch):
+    _ts(monkeypatch)
+    write(repo, "m.ts", "export let total = 0\nexport let count = 0\n"
+          "export function p(total: number) { return total }\n"
+          "export function d({ total }: any) { return total }\n"
+          "export function l(xs: number[]) { for (const total of xs) {} try {} catch (count) { count } return 1 }\n"
+          "export function q() { const total = 1; return total }\n"
+          "export const dflt = (n = total) => n\n"
+          "export function real() { count++; return total }\n")
+    commit(repo)
+    index.update(project)
+    got = {(e[0].split("#")[1], e[5], e[2]) for e in edges(project, via="~var")}
+    assert ("real", "count", "writes") in got and ("real", "total", "reads") in got
+    assert ("dflt", "total", "reads") in got  # a default value reads the module variable
+    for fn in ("p", "d", "l", "q"):
+        assert not [g for g in got if g[0] == fn], fn  # parameter, destructuring, for-of, catch, local
+
+
+def test_template_locals_shadow(project, repo, monkeypatch):
+    _html(monkeypatch)
+    write(repo, "src/L.vue", "<template>\n  <li v-for=\"(tab, i) in tabs\">{{ tab }} {{ i }}</li>\n"
+          "  <Row #item=\"{ row }\">{{ row }}</Row>\n</template>\n<script setup lang=\"ts\">\n"
+          "const tabs = ref([])\nconst tab = ref('a')\nconst row = 1\n</script>\n")
+    commit(repo)
+    index.update(project)
+    got = {(e[1].split("#")[1], e[2]) for e in edges(project, via="~var", src_path="src/L.vue")}
+    assert ("tabs", "reads") in got
+    assert ("tab", "reads") not in got and ("row", "reads") not in got  # v-for alias, slot prop
