@@ -22,6 +22,7 @@ import time
 from collections import Counter
 from pathlib import Path, PurePosixPath
 
+from uccif_lib import ts_parse
 from uccif_lib.paths import LockTimeout, file_lock, now_iso
 
 SCHEMA = 1
@@ -214,6 +215,16 @@ def ctags_binary():
     except (OSError, subprocess.SubprocessError):
         return None
     return exe if "Universal Ctags" in out.stdout else None
+
+
+def symbol_tool(exe=None):
+    """Human-readable list of what extracts symbols right now, best first."""
+    parts = []
+    if any(ts_parse.availability().values()):
+        parts.append("tree-sitter")
+    if exe:
+        parts.append("universal-ctags")
+    return "+".join(parts + ["regex"])
 
 
 # ---- parsing --------------------------------------------------------------------
@@ -415,6 +426,7 @@ def _update(project, full, only=None):
         changed.append((rel, st))
 
     exe = ctags_binary()
+    tool = symbol_tool(exe)
     to_parse = []
     for rel, st in changed:
         if st.st_size > MAX_BYTES:
@@ -429,32 +441,47 @@ def _update(project, full, only=None):
             continue
         to_parse.append((rel, st, h, text))
 
-    tagged = ctags_symbols(exe, root, [r for r, _, _, _ in to_parse]) if exe else {}
+    # symbol sources, best first: tree-sitter (optional) -> universal-ctags -> regex
+    ast = {}
+    for rel, _, _, text in to_parse:
+        lang = lang_of(rel)
+        res = ts_parse.parse(_script_part(text, lang), rel, lang)
+        if res is not None:
+            ast[rel] = res
+    need_ctags = [r for r, _, _, _ in to_parse if r not in ast]
+    tagged = ctags_symbols(exe, root, need_ctags) if exe and need_ctags else {}
     resolver = Resolver(current)
     for rel in removed:
         _drop(con, rel)
     for rel, st, h, text in to_parse:
         _drop(con, rel)
         lang = lang_of(rel)
-        syms, precision = tagged.get(rel), "ctags"
-        if not syms:
-            syms, precision = regex_symbols(text, lang), "approx"
+        if rel in ast:
+            syms, precision = list(ast[rel][0]), "ast"
+            if lang in ("vue", "svelte"):
+                syms.append((None, "component", 1, None))
+            raws = ast[rel][1]
+        else:
+            syms, precision = tagged.get(rel), "ctags"
+            if not syms:
+                syms, precision = regex_symbols(text, lang), "approx"
+            raws = raw_imports(text, lang)
         stem = PurePosixPath(rel).stem
         rows = [((n if n is not None else stem), k, rel, ln, sc, precision) for n, k, ln, sc in syms]
         con.executemany("INSERT INTO symbols VALUES (?,?,?,?,?,?)", rows)
-        imps = [(rel, raw, resolver.resolve(rel, raw, lang)) for raw in raw_imports(text, lang)]
+        imps = [(rel, raw, resolver.resolve(rel, raw, lang)) for raw in raws]
         con.executemany("INSERT INTO imports VALUES (?,?,?)", imps)
         con.execute("INSERT INTO files VALUES (?,?,?,?,?,?,?)",
                     (rel, lang, st.st_size, st.st_mtime, h, int(is_test(rel)), len(rows)))
     if to_parse or removed or full:
         _set_meta(con, "updated_at", now_iso())
-        _set_meta(con, "symbol_tool", "universal-ctags" if exe else "regex")
+        _set_meta(con, "symbol_tool", tool)
         if full or not _meta(con, "built_at"):
             _set_meta(con, "built_at", now_iso())
     con.commit()
     con.close()
     return {"files": len(current), "parsed": len(to_parse), "removed": len(removed),
-            "ms": int((time.time() - t0) * 1000), "tool": "universal-ctags" if exe else "regex"}
+            "ms": int((time.time() - t0) * 1000), "tool": tool}
 
 
 def _drop(con, rel):
@@ -586,7 +613,7 @@ def status(project):
     langs = Counter(dict(con.execute("SELECT lang, count(*) FROM files GROUP BY lang").fetchall()))
     out = ["Index: %d files, %d symbols, %d imports (%d resolved to repo files)" % (files, syms, imps[0], imps[1]),
            "Languages: " + ", ".join("%s %d" % kv for kv in langs.most_common(6)),
-           "Symbols from: %s · built %s · updated %s" % (_meta(con, "symbol_tool"), _meta(con, "built_at"),
+           "Symbols from: %s (precision ast > ctags > approx) · built %s · updated %s" % (_meta(con, "symbol_tool"), _meta(con, "built_at"),
                                                        _meta(con, "updated_at")),
            "Path: %s" % db_path(project)]
     con.close()

@@ -20,6 +20,20 @@ jobs:
       - run: pip install pytest
       - run: python -m pytest -q
 
+  test-treesitter:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pytest tree-sitter tree-sitter-javascript tree-sitter-typescript tree-sitter-python
+      - run: python -m pytest -q
+
   validate:
     runs-on: ubuntu-latest
     steps:

@@ -12,7 +12,7 @@ PLUGIN = REPO / "plugins" / "uccif"
 sys.path.insert(0, str(PLUGIN))
 
 ENV_VARS = ("UCCIF_DATA_DIR", "UCCIF_SYNC", "CLAUDE_PLUGIN_DATA", "CLAUDE_PROJECT_DIR", "CLAUDE_ENV_FILE",
-            "CLAUDE_PLUGIN_OPTION_REPLY_LANGUAGE", "CLAUDE_PLUGIN_OPTION_TOKEN_REPORT")
+            "CLAUDE_PLUGIN_OPTION_REPLY_LANGUAGE", "CLAUDE_PLUGIN_OPTION_TOKEN_REPORT", "UCCIF_NO_TREE_SITTER")
 
 
 def git(cwd, *args):
@@ -27,6 +27,7 @@ def data_dir(tmp_path, monkeypatch):
     d = tmp_path / "data"
     monkeypatch.setenv("UCCIF_DATA_DIR", str(d))
     monkeypatch.setenv("UCCIF_SYNC", "1")  # background upkeep runs inline in tests
+    monkeypatch.setenv("UCCIF_NO_TREE_SITTER", "1")  # regex/ctags path by default; ts tests opt in
     return d
 
 
