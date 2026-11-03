@@ -48,6 +48,26 @@ tried in a real Claude Code session. Language servers and MCP servers are never 
 The per-project key is the repo path; the root commit is stored with it, so a renamed or
 moved repo keeps its data while two live clones stay separate.
 
+## Extend it yourself
+
+UCCIF is one framework-neutral core. What is special about your project or your stack goes in
+your own files, which Claude Code and UCCIF load without any change to the plugin:
+
+| What | Where | Loaded by |
+|---|---|---|
+| Rules for one project (committable) | `<project>/.claude/uccif/rules.md` | UCCIF, after the CORE RULES |
+| Rules for every project | `~/.claude/uccif/rules.md` | UCCIF, after the CORE RULES |
+| A skill (e.g. how your framework is wired) | `<project>/.claude/skills/<name>/SKILL.md` | Claude Code |
+| An agent | `<project>/.claude/agents/<name>.md` | Claude Code |
+| Fixed project instructions | `CLAUDE.md` (outside the UCCIF block) | Claude Code |
+
+The rule files are plain Markdown, one rule per line. They are read at session start, after
+`/clear` and after compaction, the same moments as the CORE RULES (every-project file first, then
+the project's). Each file contributes at most 15 non-empty lines (`<!-- -->` comments do not count);
+a longer file is cut with a pointer to the rest. A missing or unreadable file is skipped.
+`uccif doctor` lists which rule files are loaded. `/uccif:init` offers an empty project file with
+commented examples, and never overwrites one.
+
 ## Develop
 
 ```

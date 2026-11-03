@@ -28,6 +28,10 @@ def data_dir(tmp_path, monkeypatch):
     monkeypatch.setenv("UCCIF_DATA_DIR", str(d))
     monkeypatch.setenv("UCCIF_SYNC", "1")  # background upkeep runs inline in tests
     monkeypatch.setenv("UCCIF_NO_TREE_SITTER", "1")  # regex/ctags path by default; ts tests opt in
+    home = tmp_path / "home"  # never read the real ~/.claude/uccif/rules.md
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
     return d
 
 

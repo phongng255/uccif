@@ -1,5 +1,22 @@
 # Changelog
 
+## 3.0.0-dev.32
+
+- **Your own rules, without touching the plugin:** `<project>/.claude/uccif/rules.md` (one
+  project, commit it) and `~/.claude/uccif/rules.md` (every project). SessionStart appends them
+  after the CORE RULES at startup, `/clear` and after compaction (the compaction path is
+  SessionStart's `compact` source, where the core rules are re-injected too): every-project file
+  first, then the project's. At most 15 non-empty lines per file (`<!-- -->` comments do not
+  count, lines over 300 characters are cut); a longer file ends with
+  `(+N more lines, see <file>)`. A missing, empty or unreadable file is skipped and the hook still
+  exits 0; with no files the output is unchanged.
+- `uccif doctor` lists the rule files it loads (and where the optional ones would go).
+- `/uccif:init` creates an empty project `rules.md` holding only commented examples, never
+  overwriting one.
+- README: "Extend it yourself" lists where rules, skills (`.claude/skills/<name>/SKILL.md`),
+  agents (`.claude/agents/<name>.md`) and fixed instructions (`CLAUDE.md`) go.
+- Tests run with a temporary home directory, so a real `~/.claude/uccif/rules.md` never leaks in.
+
 ## 3.0.0-dev.31
 
 - **The framework layer is gone** (asked for by the user): UCCIF is one core that fits any project,

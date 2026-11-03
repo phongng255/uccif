@@ -190,6 +190,16 @@ def doctor(project):
     check(errors == 0, "no hook errors in 7 days", "%d hook errors in 7 days: uccif log hooks --only-errors" % errors)
     check(slow == 0, "no slow hooks", "%d slow hook runs in 7 days" % slow)
 
+    from uccif_lib.rules import load_user_rules, user_rule_files
+    loaded = {p: (len(shown), hidden) for _, p, shown, hidden in load_user_rules(project)}
+    for scope, path in user_rule_files(project):
+        if path in loaded:
+            n_shown, hidden = loaded[path]
+            info("user rules loaded (%s): %s, %d lines%s" % (scope, path.as_posix(), n_shown + hidden,
+                                                             ", first %d injected" % n_shown if hidden else ""))
+        else:
+            info("no user rules for %s (optional: %s)" % (scope, path.as_posix()))
+
     from uccif_lib import index, ts_parse
     av = ts_parse.availability()
     if any(av.values()):

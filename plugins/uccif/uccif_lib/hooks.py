@@ -21,7 +21,7 @@ from pathlib import Path
 
 from uccif_lib import drift, index, log, task, usage
 from uccif_lib.paths import CORE_MARKER, data_root, read_json, resolve_project, write_json
-from uccif_lib.rules import core_rules
+from uccif_lib.rules import core_rules, user_rules
 
 SLOW_MS = {"session-start": 3000, "user-prompt-submit": 300, "pre-tool-use": 300,
            "post-tool-use": 500, "stop": 1000}
@@ -139,9 +139,16 @@ def on_session_start(data, project):
         with open(env_file, "a", encoding="utf-8") as f:
             f.write("export UCCIF_DATA_DIR=%s\n" % quoted)
 
-    parts = []
+    parts, n_user = [], 0
     if source in ("startup", "clear", "compact"):
         parts.append(core_rules(opts["reply_language"]))
+        try:  # the user's own rules, right after the core (never fails the hook)
+            extra = user_rules(project)
+        except Exception:
+            extra = ""
+        if extra:
+            parts.append(extra)
+            n_user = extra.count("USER RULES (")
     ready = index.exists(project)
     spawn(["maintain"], project)  # build/refresh the code index and check drift in the background
     if ready:
@@ -162,7 +169,10 @@ def on_session_start(data, project):
     lines = task.summary_lines(project)
     if lines:
         parts.append("\n".join(lines) + "\nIf the user's request continues it, use the uccif:resume skill.")
-    return _ctx("SessionStart", "\n\n".join(parts)), {"rule": "context", "target": source}
+    fields = {"rule": "context", "target": source}
+    if n_user:
+        fields["user_rules"] = n_user
+    return _ctx("SessionStart", "\n\n".join(parts)), fields
 
 
 def on_user_prompt_submit(data, project):
