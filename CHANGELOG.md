@@ -1,5 +1,31 @@
 # Changelog
 
+## 3.0.0-dev.19
+
+- **vue-router** (phase 2, step 7b; `SCHEMA` 10, an older index is rebuilt automatically).
+  - `route` nodes: every route record `{ path, component | redirect | children }` of a router
+    config, with nested `children` joined onto their parent's path (`/` + `kid` -> `/kid`), the route
+    `name` kept as the node detail. They are searchable (`--symbol /expenses`) and shown as
+    `route /expenses`. Objects with a `path` but no component / redirect / children (plain data)
+    are ignored.
+  - `routes_to` (route -> component): the component given as an imported identifier or a lazy
+    `() => import('@/views/X.vue')`, `extracted`; a component we cannot place is `unresolved`.
+    `--symbol <Component>` shows `Routed from (n)`, `--symbol <route>` shows `Routes to`.
+  - `navigates_to` (code -> route, derived): `router.push` / `router.replace` (a `router`, `$router`
+    or a variable from `useRouter()`) with a string, a template literal (`/trip/${id}`), a
+    concatenation, or `{ name }` / `{ path }`; and in templates `<RouterLink to>` / `:to=` and
+    `$router.push(...)`. An exact path or a route name is `extracted`; a path that only fits a
+    pattern (`/trip/42` -> `/trip/:id`) or has a dynamic part is `inferred`; no route is an
+    `unresolved` lead. Catch-all routes (`/:pathMatch(.*)*`), external URLs, relative targets and
+    other objects' `.push()` never count. Recomputed after every update, so renaming a route turns
+    the navigations that used it into leads and deleting the router leaves nothing dangling.
+  - `--impact` follows both kinds: changing a view lists the router that loads it, then the code
+    that navigates to it.
+- Measured: one-file update 7 ms on the fixture (budget 300 ms); DB +4%. Unresolved share: fixture
+  16%, this repo 66%.
+- Not yet: `name`-only links between nested routes, `router.resolve`, route guards, Nuxt file-based
+  routing, `<component :is>`.
+
 ## 3.0.0-dev.18
 
 - **Props and emits** (phase 2, step 7a; `SCHEMA` 9, an older index is rebuilt automatically).
