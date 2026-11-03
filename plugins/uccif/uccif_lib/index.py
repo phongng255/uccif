@@ -26,7 +26,8 @@ from uccif_lib import styles, ts_parse, vue_template
 from uccif_lib.resolve import JS_RESOLVE_EXT, Resolver  # noqa: F401 (re-exported)
 from uccif_lib.paths import LockTimeout, file_lock, now_iso
 
-SCHEMA = 14
+SCHEMA = 15
+DERIVE_BUDGET_MS = 150  # above this, a post-Edit update defers the derived edges (see _update)
 MAX_BYTES = 1000000
 QUERY_LINES = 30
 
@@ -155,15 +156,14 @@ def connect(project, write=True):
     path.parent.mkdir(parents=True, exist_ok=True)
     con = sqlite3.connect(str(path), timeout=5)
     con.execute("PRAGMA journal_mode=DELETE")
+    # schema 15: the old imports / calls tables are gone, edges hold the same facts
+    con.executescript("DROP TABLE IF EXISTS imports; DROP TABLE IF EXISTS calls;")
     con.executescript("""
         CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
         CREATE TABLE IF NOT EXISTS files (path TEXT PRIMARY KEY, lang TEXT, size INTEGER,
             mtime REAL, hash TEXT, is_test INTEGER, n_symbols INTEGER);
         CREATE TABLE IF NOT EXISTS symbols (name TEXT, kind TEXT, path TEXT, line INTEGER,
             scope TEXT, precision TEXT);
-        CREATE TABLE IF NOT EXISTS imports (src TEXT, raw TEXT, target TEXT, line INTEGER);
-        CREATE TABLE IF NOT EXISTS calls (src_path TEXT, src_symbol TEXT, callee_name TEXT,
-            callee_path TEXT, line INTEGER);
         CREATE TABLE IF NOT EXISTS nodes (id TEXT PRIMARY KEY, kind TEXT, name TEXT, path TEXT, line INTEGER,
             end_line INTEGER, scope TEXT, precision TEXT, detail TEXT);
         CREATE TABLE IF NOT EXISTS edges (src_id TEXT, dst_id TEXT, kind TEXT, line INTEGER,
@@ -192,17 +192,12 @@ def connect(project, write=True):
         CREATE INDEX IF NOT EXISTS edge_src ON edges(src_path, kind);
         CREATE INDEX IF NOT EXISTS edge_dst ON edges(dst_path, kind);
         CREATE INDEX IF NOT EXISTS edge_detail ON edges(detail);
-        CREATE INDEX IF NOT EXISTS call_callee ON calls(callee_name);
-        CREATE INDEX IF NOT EXISTS call_src ON calls(src_path);
-        CREATE INDEX IF NOT EXISTS call_cpath ON calls(callee_path);
         CREATE INDEX IF NOT EXISTS sym_name ON symbols(name);
         CREATE INDEX IF NOT EXISTS sym_lname ON symbols(lower(name));
         CREATE INDEX IF NOT EXISTS sym_path ON symbols(path);
-        CREATE INDEX IF NOT EXISTS imp_src ON imports(src);
-        CREATE INDEX IF NOT EXISTS imp_target ON imports(target);
     """)
     if _meta(con, "schema") not in (None, str(SCHEMA)):
-        con.executescript("DELETE FROM files; DELETE FROM symbols; DELETE FROM imports; DELETE FROM calls; "
+        con.executescript("DELETE FROM files; DELETE FROM symbols; "
                          "DELETE FROM nodes; DELETE FROM edges; DELETE FROM bindings; DELETE FROM tags; "
                          "DELETE FROM globals; DELETE FROM refs; DELETE FROM tag_uses; DELETE FROM navs; DELETE FROM css_uses; DELETE FROM cochanges; "
                          "DELETE FROM meta;")
@@ -385,7 +380,7 @@ def _update(project, full, only=None, force=()):
     root = project.root
     con = connect(project)
     if full:
-        con.executescript("DELETE FROM files; DELETE FROM symbols; DELETE FROM imports; DELETE FROM calls; "
+        con.executescript("DELETE FROM files; DELETE FROM symbols; "
                           "DELETE FROM nodes; DELETE FROM edges; DELETE FROM bindings; DELETE FROM tags; "
                           "DELETE FROM globals; DELETE FROM refs; DELETE FROM tag_uses; DELETE FROM navs; "
                           "DELETE FROM css_uses;")
@@ -461,7 +456,8 @@ def _update(project, full, only=None, force=()):
             if lang in ("vue", "svelte"):
                 syms.append((None, "component", 1, None))
             raws, ilines = ast[rel][1], ast[rel][4]
-            call_rows, ref_rows = _resolve_calls(rel, lang, ast[rel], resolver)
+            call_rows, ref_rows = (_resolve_calls_typed if lang in TYPED_LANGS else _resolve_calls)(
+                rel, lang, ast[rel], resolver)
             herit_rows = _resolve_heritage(rel, lang, ast[rel], resolver)
             tag_rows = _resolve_tags(rel, lang, ast[rel], tpl_tags.get(rel, ()), resolver)
         else:
@@ -478,9 +474,8 @@ def _update(project, full, only=None, force=()):
         rows = [((n if n is not None else stem), k, rel, ln, (stem if sc is None and k in ("prop", "emit") else sc),
                  precision) for n, k, ln, sc in syms]
         con.executemany("INSERT INTO symbols VALUES (?,?,?,?,?,?)", rows)
-        imps = [(rel, raw, resolver.resolve(rel, raw, lang), ilines.get(raw)) for raw in raws]
-        con.executemany("INSERT INTO imports VALUES (?,?,?,?)", imps)
-        con.executemany("INSERT INTO calls VALUES (?,?,?,?,?)", [r[:5] for r in call_rows])
+        imps = [(rel, raw, target, ilines.get(raw)) for raw in raws  # a Go package / Java a.b.* is many files
+                for target in (resolver.resolve_many(rel, raw, lang) or [None])]
         con.execute("INSERT INTO files VALUES (?,?,?,?,?,?,?)",
                     (rel, lang, st.st_size, st.st_mtime, h, int(is_test(rel)), len(rows)))
         _write_graph(con, rel, lang, rows, imps, call_rows, resolver, text, herit_rows, tag_rows, ref_rows,
@@ -490,9 +485,22 @@ def _update(project, full, only=None, force=()):
                      _resolve_routes(rel, lang, ast[rel], resolver) if rel in ast else (),
                      styles.uses(text, lang) + [("class", c, ln) for c, ln in tpl_classes.get(rel, ())],
                      scoped_classes)
-    if to_parse or removed or full:
-        _through_barrels(con)
-        _derive_all(con)
+    # Derived edges (barrels, components, store members, CSS, variables ...) are recomputed from the
+    # whole repo. On a big repo that would blow the post-Edit budget, so a one-file update (`only`)
+    # skips it when the last run was slow and marks it stale; the next full-scan update (every query
+    # does one first, and the hooks start one in the background) catches up. Direct edges are always
+    # current.
+    stale = False
+    if to_parse or removed or full or _meta(con, "derived_stale") == "1":
+        if only is not None and float(_meta(con, "derive_ms") or 0) > DERIVE_BUDGET_MS:
+            _set_meta(con, "derived_stale", 1)
+            stale = True
+        else:
+            t1 = time.time()
+            _through_barrels(con)
+            _derive_all(con)
+            _set_meta(con, "derive_ms", int((time.time() - t1) * 1000))
+            _set_meta(con, "derived_stale", 0)
         _set_meta(con, "updated_at", now_iso())
         _set_meta(con, "symbol_tool", tool)
         if full or not _meta(con, "built_at"):
@@ -503,7 +511,7 @@ def _update(project, full, only=None, force=()):
         cochanged = _refresh_cochanges(con, root, set(current))
     else:
         cochanged = False
-    if cochanged:  # new history: the derived edges (co_changes among them) are rebuilt once
+    if cochanged and not stale:  # new history: the derived edges (co_changes among them) are rebuilt once
         _derive_all(con)
     # C3: a file that imports a path which did not exist when it was parsed keeps an unresolved import
     # (and calls through it). When new files appear, re-parse exactly the importers whose import now
@@ -521,7 +529,7 @@ def _update(project, full, only=None, force=()):
     if extra:
         to_parse = list(to_parse) + [None] * extra["parsed"]
     return {"files": len(current), "parsed": len(to_parse), "removed": len(removed),
-            "ms": int((time.time() - t0) * 1000), "tool": tool}
+            "ms": int((time.time() - t0) * 1000), "tool": tool, "derived_stale": stale}
 
 # Language built-ins: calls to these are known (not repo code), so they are external, not leads.
 PY_BUILTINS = frozenset(n for n in dir(__import__("builtins")) if not n.startswith("_"))
@@ -654,6 +662,139 @@ def _var_origins(rel, parsed, bound, local):
                     destructured.setdefault(local_name, []).append((caller, found[0], found[1], member))
                     refs.append((caller, "read", member, line, found[0], found[1]))
     return var_of, destructured, refs
+
+
+TYPED_LANGS = ("go", "rust", "java")
+GO_BUILTINS = frozenset("append cap clear close complex copy delete imag len make max min new panic print println "
+                        "real recover".split())
+RUST_STD = frozenset("Some Ok Err None Box Vec String Option Result HashMap HashSet BTreeMap BTreeSet Rc Arc RefCell "
+                     "Cell Mutex RwLock Path PathBuf File Duration Instant std core alloc format".split())
+JAVA_LANG = frozenset("String Math System Integer Long Double Boolean Character Object Objects List Map Set Arrays "
+                      "Collections Optional Thread StringBuilder Stream Collectors Files Paths LocalDate Instant "
+                      "super".split())
+
+
+def _pkg_dir(path):
+    d = str(PurePosixPath(path).parent)
+    return "" if d == "." else d
+
+
+def _resolve_calls_typed(rel, lang, parsed, resolver):
+    """Calls for Go / Rust / Java, using the types the code writes: a receiver, parameter, field or
+    typed local `f Foo` ties `f.bar()` to Foo's method; a Go or Java name of the same package needs no
+    import, so it is looked up in the file's folder after all files are known (refs kind 'pkgcall')."""
+    syms, calls, binds = parsed[0], parsed[2], parsed[3]
+    typed = parsed[7] if len(parsed) > 7 else ()
+    local = {n for n, k, _, sc in syms if n and sc is None and k not in ("method",)}
+    local_types = {n for n, k, _, _ in syms if k in ("class", "interface", "enum", "type")}
+    own_methods = {(sc, n) for n, k, _, sc in syms if k == "method"}
+    bound, pkg = _bind_map(rel, lang, binds, resolver)
+    here = _pkg_dir(rel)
+    var_type = {(c, v): t for c, v, t in typed if v and t}
+    std = {"go": GO_BUILTINS, "rust": RUST_STD, "java": JAVA_LANG}[lang]
+    sep = "::" if lang == "rust" else "."
+    rows, refs = [], []
+
+    def handled(caller, name, line):
+        rows.append((rel, caller, name, None, line, False, True))
+
+    def direct(caller, name, path, line, ext=False):
+        rows.append((rel, caller, name, path, line, ext, False))
+
+    def on_type(caller, name, line, tname):
+        """A method `name` of type `tname` (as written: T, pkg.T, crate::m::T)."""
+        q, _, t = tname.rpartition(sep)
+        if q:
+            if q in bound and bound[q][0]:
+                if lang == "go":
+                    refs.append((caller, "pkgcall", name, line, _pkg_dir(bound[q][0]), t))
+                else:
+                    refs.append((caller, "call", name, line, bound[q][0], t))
+                return handled(caller, name, line)
+            target = resolver.resolve(rel, q, lang) if lang == "rust" else None
+            if target:
+                refs.append((caller, "call", name, line, target, t))
+                return handled(caller, name, line)
+            return direct(caller, name, None, line, ext=q in pkg or q.split(sep)[0] in std)
+        if (t, name) in own_methods:
+            return direct(caller, name, rel, line)
+        if t in bound and bound[t][0]:
+            refs.append((caller, "call", name, line, bound[t][0], bound[t][1] if bound[t][1] != "*" else t))
+            return handled(caller, name, line)
+        if t in std:
+            return direct(caller, name, None, line, ext=True)
+        if lang in ("go", "java") or t in local_types:  # same package, or a type of this file
+            refs.append((caller, "pkgcall", name, line, here, t))
+            return handled(caller, name, line)
+        return direct(caller, name, None, line)
+
+    for caller, name, obj, line in calls:
+        if obj == "this":
+            owner = (caller or "").split(".")[0] if caller and "." in caller else None
+            if owner:
+                on_type(caller, name, line, owner)
+            else:
+                direct(caller, name, None, line)
+            continue
+        ty = (var_type.get((caller, obj)) or var_type.get((None, obj))) if obj else None
+        if ty:
+            on_type(caller, name, line, ty)
+        elif obj is None:
+            if name in local:
+                direct(caller, name, rel, line)
+            elif name in bound and bound[name][0]:
+                direct(caller, bound[name][1] if bound[name][1] not in ("*", "default") else name, bound[name][0], line)
+            elif name in pkg or name in std:
+                direct(caller, name, None, line, ext=True)
+            elif lang in ("go", "java"):
+                refs.append((caller, "pkgcall", name, line, here, None))
+                handled(caller, name, line)
+            else:
+                direct(caller, name, None, line)
+        elif obj in bound and bound[obj][0]:
+            if bound[obj][1] == "*":  # a package / module: pkg.Func(), util::helper()
+                if lang == "go":
+                    refs.append((caller, "pkgcall", name, line, _pkg_dir(bound[obj][0]), None))
+                    handled(caller, name, line)
+                else:
+                    direct(caller, name, bound[obj][0], line)
+            else:  # an imported type: Util.go(), Foo::new()
+                on_type(caller, name, line, obj)
+        elif obj in pkg or obj.split(sep)[0] in std:
+            direct(caller, name, None, line, ext=True)
+        elif lang == "rust" and "::" in obj:
+            target = resolver.resolve(rel, obj, lang)
+            if target:
+                direct(caller, name, target, line)
+            elif obj.rsplit("::", 1)[-1] in local_types:
+                on_type(caller, name, line, obj.rsplit("::", 1)[-1])
+            else:
+                direct(caller, name, None, line)
+        elif obj in local_types or (lang in ("java", "rust") and obj[:1].isupper()):
+            on_type(caller, name, line, obj)
+        else:
+            direct(caller, name, None, line)
+    return rows, refs
+
+
+def _derive_pkgcalls(con):
+    """Go / Java names of the same package (no import), and typed method calls whose type lives in a
+    package folder: tied to the function, type or method defined in that folder (extracted)."""
+    new = []
+    for sid, sp, member, line, d, scope in con.execute("SELECT src_id, src_path, member, line, origin_path, "
+                                                       "origin_name FROM refs WHERE kind='pkgcall'").fetchall():
+        like = (d + "/%") if d else "%"
+        hit = con.execute("SELECT id, path FROM nodes WHERE name=? AND path LIKE ? AND instr(substr(path, ?), '/')=0 "
+                          "AND kind IN ('function','method','class','interface','enum','type','constant','variable') "
+                          "AND %s ORDER BY kind='method' DESC LIMIT 1" % ("scope=?" if scope else "scope IS NULL"),
+                          (member, like, len(d) + 2 if d else 1) + ((scope,) if scope else ())).fetchone()
+        if hit:
+            new.append((sid, hit[0], "calls", line, "extracted", member, sp, hit[1], "~pkg"))
+            if is_test(sp):
+                new.append((sid, hit[0], "tests", line, "extracted", member, sp, hit[1], "~pkg"))
+        else:
+            new.append((sid, None, "calls", line, "unresolved", member, sp, None, "~pkg"))
+    con.executemany("INSERT INTO edges VALUES (?,?,?,?,?,?,?,?,?)", new)
 
 
 def _resolve_calls(rel, lang, parsed, resolver):
@@ -921,6 +1062,7 @@ def _derive_all(con):
     _derive_navs(con)
     _derive_members(con)
     _derive_callbacks(con)
+    _derive_pkgcalls(con)
     _derive_builtins(con)
     _derive_css(con)
     _derive_vars(con)
@@ -1422,8 +1564,6 @@ def _drop(con, rel):
     con.execute("DELETE FROM edges WHERE src_path=?", (rel,))
     con.execute("DELETE FROM files WHERE path=?", (rel,))
     con.execute("DELETE FROM symbols WHERE path=?", (rel,))
-    con.execute("DELETE FROM imports WHERE src=?", (rel,))
-    con.execute("DELETE FROM calls WHERE src_path=?", (rel,))
 
 
 def exists(project):
@@ -1630,7 +1770,8 @@ def query_file(project, path):
                        (rel,)).fetchall()
     if syms:
         lines.append("Symbols: " + ", ".join("%s %s:%d" % (k, n, ln) for n, k, ln in syms))
-    imps = con.execute("SELECT raw, target FROM imports WHERE src=? LIMIT 12", (rel,)).fetchall()
+    imps = con.execute("SELECT detail, dst_path FROM edges WHERE src_path=? AND kind IN ('imports','imports_ext') "
+                       "AND via IS NULL ORDER BY line LIMIT 12", (rel,)).fetchall()
     local = [t for _, t in imps if t]
     ext = [r for r, t in imps if not t]
     if local:
@@ -1858,7 +1999,8 @@ def status(project):
     con = connect(project, write=False)
     files = con.execute("SELECT count(*) FROM files").fetchone()[0]
     syms = con.execute("SELECT count(*) FROM symbols").fetchone()[0]
-    imps = con.execute("SELECT count(*), count(target) FROM imports").fetchone()
+    imps = con.execute("SELECT count(*), count(dst_path) FROM edges WHERE kind IN ('imports','imports_ext') "
+                       "AND via IS NULL").fetchone()
     edges = con.execute("SELECT count(*), count(dst_path) FROM edges WHERE kind='calls'").fetchone()
     conf = dict(con.execute("SELECT confidence, count(*) FROM edges GROUP BY confidence"))
     langs = Counter(dict(con.execute("SELECT lang, count(*) FROM files GROUP BY lang").fetchall()))
@@ -1870,6 +2012,9 @@ def status(project):
            "Languages: " + ", ".join("%s %d" % kv for kv in langs.most_common(6)),
            "Symbols from: %s (precision ast > ctags > approx) · built %s · updated %s" % (_meta(con, "symbol_tool"), _meta(con, "built_at"),
                                                        _meta(con, "updated_at")),
+           "Derived edges: %s (last full pass %s ms)" % ("pending, refreshed by the next query" if
+                                                          _meta(con, "derived_stale") == "1" else "current",
+                                                          _meta(con, "derive_ms") or "?"),
            "Path: %s" % db_path(project)]
     con.close()
     return out

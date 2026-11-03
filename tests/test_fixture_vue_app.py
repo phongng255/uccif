@@ -65,10 +65,11 @@ def test_query_limits(project, vue_app):
 def test_calls_with_tree_sitter(project, vue_app, monkeypatch):
     monkeypatch.delenv("UCCIF_NO_TREE_SITTER")
     con = _con(project)
-    rows = con.execute("SELECT callee_name, callee_path FROM calls WHERE src_path='src/composables/useSync.ts'").fetchall()
+    rows = con.execute("SELECT detail, dst_path FROM edges WHERE kind='calls' AND via IS NULL "
+                       "AND src_path='src/composables/useSync.ts'").fetchall()
     # `store.$state` / `saveTrip` come through imports; `sync` is local
     assert ("saveTrip", "src/utils/firebase.ts") in rows
-    # the legacy `calls` table keeps them unresolved; the edges tie them to the store (test_pinia)
-    unresolved = con.execute("SELECT count(*) FROM calls WHERE src_path='src/components/ExpenseList.vue' "
-                             "AND callee_path IS NULL").fetchone()[0]
-    assert unresolved >= 2  # store.addExpense, store.removeExpense
+    # store.addExpense / store.removeExpense are tied to the store actions (see test_pinia)
+    acts = con.execute("SELECT count(*) FROM edges WHERE kind='calls_action' "
+                       "AND src_path='src/components/ExpenseList.vue'").fetchone()[0]
+    assert acts >= 2

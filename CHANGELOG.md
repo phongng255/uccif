@@ -1,5 +1,56 @@
 # Changelog
 
+## 3.0.0-dev.30
+
+- **Go, Rust and Java** (roadmap layer E), each with its own optional grammar
+  (`pip install tree-sitter-go tree-sitter-rust tree-sitter-java`; CI's tree-sitter job installs
+  them, `uccif doctor` names what is missing). Without the grammar a file is indexed by regex as
+  before. Symbols, imports, calls and inheritance at the level of JS/Python, in `ts_other.py`:
+  - **Go:** functions, methods (scope = receiver type), structs / interfaces, package-level
+    const / var. An import names a package, i.e. every file of its folder (module path from
+    `go.mod`). Calls resolve through `pkg.Func()`, to functions of the same package in other files
+    (no import needed), and to methods through receivers and typed parameters (`s *store.Store`
+    -> `store.Store.Save`, found in whichever file of the package defines it). Built-ins (`len`,
+    `append` ...) and other modules' packages (`fmt`) are external.
+  - **Rust:** functions, `impl` methods (scope = type), structs, enums, traits, consts; `mod x;`,
+    `use crate::a::b`, `use self:: / super::`, grouped and aliased `use`, files `x.rs` or
+    `x/mod.rs`. Calls: `helper()`, `util::other()`, `Order::new()`, `self.base()`, methods through
+    typed parameters / lets. `impl Trait for Type` is an `implements` edge. std types are external.
+  - **Java:** classes, interfaces, enums, records, methods, constructors; `import a.b.C` (and
+    `a.b.*`, a whole package). Calls through imported classes (`Util.go()`), same-package classes
+    without an import, `this.x()`, `new Foo()`, and typed parameters / fields / locals (`Helper h;
+    h.help()`). `extends` / `implements` edges. `java.lang` types are external.
+- Typed languages use the declared type of receivers, parameters, fields and locals; names of the
+  same Go / Java package are looked up in the file's folder after all files are known (derived,
+  so a function moved to another file of the package stays linked).
+
+## 3.0.0-dev.29
+
+- **Smaller index** (`SCHEMA` 15, an older index is rebuilt automatically): the legacy `imports` and
+  `calls` tables, written alongside `edges` since dev.13, are dropped. `--file` and `index status`
+  read imports from `edges` (`imports` / `imports_ext`), the benchmark counts from `edges`.
+  DB size: fixture 240 -> 212 KB, this repo 3368 -> 2648 KB, a 200-component app 4316 -> 3840 KB.
+  The `symbols` table stays (small; every symbol query uses it).
+
+## 3.0.0-dev.28
+
+- **Big-repo benchmark and lazy derived edges.** `tests/bench_index.py --synthetic N` generates a
+  Vue 3 + Pinia + router app with N components (each importing and rendering two others with props
+  and emits, using a store, a composable, a util through a barrel, types, CSS variables and scoped
+  classes; routed views navigating to each other) and benches it next to the other targets.
+  - Measured before this change: one-file update 59 ms at 200 components, **353 ms at 800**, over the
+    300 ms budget: the derived passes (barrels, components, store members, CSS, variables ...) are
+    recomputed from the whole repo after every change.
+  - As the plan prescribes for a layer over budget, they are now **lazy on big repos**: each full
+    pass records its duration; when it exceeded 150 ms, the post-Edit one-file update keeps direct
+    edges current, marks the derived ones stale and the hook starts `uccif maintain` in the
+    background. The next full-scan update (every query runs one first) catches up, so answers are
+    never stale. Small repos are unchanged (still computed inline). `index status` says whether
+    derived edges are current or pending.
+  - Now: 800 components: one-file update **6 ms**, background catch-up 347 ms, no-op 24 ms;
+    200 components: 57 ms inline; the fixture: 8 ms.
+- The benchmark table has a `catch-up ms` column.
+
 ## 3.0.0-dev.27
 
 - **Scope analysis for `reads` / `writes`**: names that shadow a module variable inside a function

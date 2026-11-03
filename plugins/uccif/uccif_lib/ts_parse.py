@@ -96,6 +96,9 @@ def _parser(grammar):
         elif grammar == "html":
             import tree_sitter_html as mod
             lang = mod.language()
+        elif grammar in ("go", "rust", "java"):  # roadmap layer E, each optional on its own
+            mod = __import__("tree_sitter_" + grammar)
+            lang = mod.language()
         else:
             import tree_sitter_typescript as mod
             lang = mod.language_typescript() if grammar == "ts" else mod.language_tsx()
@@ -110,7 +113,11 @@ def availability():
     """{'typescript': bool, 'python': bool}; False everywhere when disabled."""
     if disabled():
         return {"typescript": False, "python": False}
-    return {"typescript": bool(_parser("tsx")), "python": bool(_parser("python"))}
+    out = {"typescript": bool(_parser("tsx")), "python": bool(_parser("python"))}
+    for g in ("go", "rust", "java"):
+        if _parser(g):
+            out[g] = True
+    return out
 
 
 def html_available():
@@ -121,6 +128,8 @@ def html_available():
 def grammar_for(rel, lang):
     if lang == "python":
         return "python"
+    if lang in ("go", "rust", "java"):
+        return lang
     if lang in ("typescript", "javascript", "vue", "svelte"):
         return "ts" if rel.endswith((".ts", ".mts", ".cts")) else "tsx"
     return None
@@ -174,6 +183,9 @@ def parse(text, rel, lang):
         tree = parser.parse(text.encode("utf-8"))
         if grammar == "python":
             return _python(tree.root_node)
+        if grammar in ("go", "rust", "java"):
+            from uccif_lib import ts_other
+            return ts_other.PARSERS[grammar](tree.root_node)
         return _js(tree.root_node)
     except Exception:
         return None

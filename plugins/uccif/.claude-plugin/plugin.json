@@ -1,7 +1,7 @@
 {
   "name": "uccif",
   "displayName": "UCCIF",
-  "version": "3.0.0-dev.27",
+  "version": "3.0.0-dev.30",
   "description": "Install once, then in any repository: a self-updating code index, LSP config, task memory, token reporting, project docs with drift detection, and a token-saving workflow. Never blocks.",
   "author": {
     "name": "phongng255",
