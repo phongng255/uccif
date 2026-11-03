@@ -1,5 +1,26 @@
 # Changelog
 
+## 3.0.0-dev.22
+
+- **Types and variables** (phase 2, step 10; `SCHEMA` 13, an older index is rebuilt automatically).
+  - `references_type` (D1, `extracted`): a type used in a signature, annotation, generic argument or
+    props type (TS `type_identifier`s; Python parameter / return / variable annotations), to the
+    interface / type / class / enum that defines it, also through barrels. Generic parameters (`T`)
+    and built-in types (`list`, `string`) add nothing. `--impact types/trip.ts` lists every file
+    whose signatures use its types.
+  - `reads` / `writes` (D2, `inferred`): module-level variables and top-level `ref()` / `reactive()` /
+    `computed()` of a script (new `variable` / `ref` symbols, exported or not), used from functions
+    of the same file, from other files that import them, and from the template (`{{ tab }}`,
+    `v-model="title"` is a write, `tab.value = x` is a write of `tab`). One edge per user and
+    variable. `inferred` because names are matched without scope analysis: a local or parameter
+    that shadows the variable is not told apart (documented, tested). Local variables inside
+    functions are not tracked.
+  - Both are derived from the whole repo after each update, so renaming the variable or type
+    removes stale edges. `--symbol` shows them in `Used by (n)`.
+- Measured: one-file update 8 ms on the fixture (budget 300 ms), so no lazy mode was needed; DB +2%.
+  Unresolved share: fixture 8%, this repo 51%.
+- Not yet: Python module variables (only annotations for Python), JSDoc types.
+
 ## 3.0.0-dev.21
 
 - **CSS variables and classes** (phase 2, step 9; `SCHEMA` 12, an older index is rebuilt

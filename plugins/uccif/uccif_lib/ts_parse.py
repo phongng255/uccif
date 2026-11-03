@@ -21,6 +21,47 @@ KEYWORD_CALLS = {"require", "import", "super", "if", "for", "while", "switch", "
                  "function", "constructor", "typeof", "await", "defineProps", "defineEmits",
                  "defineExpose", "withDefaults"}
 _CLASS_NODES = ("class_declaration", "abstract_class_declaration", "class")
+_MAX_IDENTS = 3000
+_TYPE_DECLS = ("interface_declaration", "type_alias_declaration", "class_declaration", "abstract_class_declaration",
+               "enum_declaration", "type_parameter", "class")
+REF_CALLS = ("ref", "reactive", "computed", "shallowRef", "shallowReactive", "toRef", "readonly")
+_NOT_A_USE = ("variable_declarator", "function_declaration", "generator_function_declaration", "class_declaration",
+              "import_specifier", "import_clause", "namespace_import", "export_specifier", "formal_parameters",
+              "required_parameter", "optional_parameter", "labeled_statement", "break_statement",
+              "continue_statement", "method_definition", "arrow_function", "catch_clause", "for_in_statement",
+              "shorthand_property_identifier_pattern", "pair_pattern", "object_pattern", "array_pattern",
+              "assignment_pattern", "rest_pattern")
+
+
+def _ident_use(n):
+    """'w' when identifier `n` is written, 'r' when it is read, None for declarations / names."""
+    par = n.parent
+    if par is None:
+        return None
+    pt = par.type
+    if pt in ("assignment_expression", "augmented_assignment_expression"):
+        return "w" if par.child_by_field_name("left") == n else "r"
+    if pt == "update_expression":
+        return "w"
+    if pt == "call_expression" and par.child_by_field_name("function") == n:
+        return None  # a call, recorded as such
+    if pt == "member_expression":
+        if par.child_by_field_name("object") != n:
+            return None
+        gp = par.parent  # x.value = 1 writes the ref x
+        if gp is not None and gp.type in ("assignment_expression", "augmented_assignment_expression") and \
+                gp.child_by_field_name("left") == par:
+            return "w"
+        return "r"
+    if pt in _NOT_A_USE:
+        if pt in ("variable_declarator", "assignment_pattern") and par.child_by_field_name("value") == n:
+            return "r"
+        if pt == "arrow_function" and par.child_by_field_name("body") == n:
+            return "r"
+        if pt == "for_in_statement" and par.child_by_field_name("right") == n:
+            return "r"
+        return None
+    return "r"
 
 
 def disabled():
@@ -94,7 +135,10 @@ def parse(text, rel, lang):
     navs: [(enclosing function, "path"|"name", value, dynamic, line)] for `router.push/replace(...)`;
     routes: [(full path, route name, ("ident", x) | ("import", module) | None, line)] of router configs
     (also symbols of kind route, with the route name in members); callbacks (13th):
-    [(enclosing function, name, "this" | None, line)] for identifiers passed as call arguments.
+    [(enclosing function, name, "this" | None, line)] for identifiers passed as call arguments;
+    idents (14th): [(enclosing function, name, "r"|"w", line)] for identifiers used as values (writes:
+    `x = `, `x += `, `x++`, `x.value = `); types (15th): [(enclosing function, type name, line)] for
+    type references (TS type positions, Python annotations).
     heritage: [(class or interface name, base name as written, "extends"|"implements", line)];
     a dotted base keeps its dots (`mod.Base`), generic arguments are dropped.
     symbols: [(name, kind, line, scope)]; imports: [raw module strings];
@@ -483,6 +527,7 @@ def _js(root):
     syms, imps, calls, binds, ilines, heritage = [], [], [], {}, {}, []
     members, origins, reads = [], [], []
     type_props, emit_cands, macros, nav_cands, callbacks = {}, [], [], [], []
+    idents, types = [], []
 
     def add_import(raw, line):
         if raw and raw not in imps:
@@ -534,6 +579,14 @@ def _js(root):
                     ev = _string_value(first)
                     if ev:
                         emit_cands.append((_js_caller(n), f0, ev, line))
+        if t == "identifier" and len(idents) < _MAX_IDENTS:
+            rw = _ident_use(n)
+            if rw:
+                idents.append((_js_caller(n), _txt(n), rw, line))
+        elif t == "type_identifier" and len(types) < _MAX_IDENTS:
+            par = n.parent
+            if par is not None and not (par.type in _TYPE_DECLS and par.child_by_field_name("name") == n):
+                types.append((_js_caller(n), _txt(n), line))
         if t == "variable_declarator":
             _js_origin(n, origins)
         elif t == "member_expression" and len(reads) < _MAX_CALLS:
@@ -590,7 +643,10 @@ def _js(root):
                         and _txt(val.child_by_field_name("function")) == "defineStore":
                     syms.append((_txt(name), "store", dline, None))
                     _pinia_members(val, _txt(name), syms, members)
-                elif exported:
+                elif val is not None and val.type == "call_expression" and _txt(
+                        val.child_by_field_name("function")) in REF_CALLS:
+                    syms.append((_txt(name), "ref", dline, None))  # ref() / reactive() / computed()
+                elif exported or (val is not None and val.type not in ("call_expression", "await_expression")):
                     syms.append((_txt(name), "variable", dline, None))
         elif t in ("import_statement", "export_statement"):
             src = n.child_by_field_name("source")
@@ -628,7 +684,7 @@ def _js(root):
     syms = [s for s in syms if s[0]]
     syms.sort(key=lambda s: s[2])
     return (syms, imps[:200], calls, binds, ilines, heritage, members, origins, reads, emit_calls, navs, routes,
-            callbacks)
+            callbacks, idents, types)
 
 
 def _js_bindings(stmt, raw, binds):
@@ -656,7 +712,7 @@ def _js_bindings(stmt, raw, binds):
 
 def _python(root):
     syms, imps, calls, binds, ilines, heritage = [], [], [], {}, {}, []
-    origins, callbacks = [], []
+    origins, callbacks, types = [], [], []
 
     def add_import(raw, line):
         if raw and raw not in imps:
@@ -669,6 +725,10 @@ def _python(root):
         n, cls, top, caller = stack.pop()
         t = n.type
         nxt_cls, nxt_top, nxt_caller = cls, top, caller
+        if t == "type" and len(types) < _MAX_IDENTS:  # annotations: def f(x: Order) -> Item
+            for x in _walk(n):
+                if x.type == "identifier":
+                    types.append((caller, _txt(x), x.start_point[0] + 1))
         if t == "assignment" and len(origins) < 500:  # x = Foo(...)
             left, right = n.child_by_field_name("left"), n.child_by_field_name("right")
             fn = right.child_by_field_name("function") if right is not None and right.type == "call" else None
@@ -736,4 +796,4 @@ def _python(root):
         for c in reversed(n.children):
             stack.append((c, nxt_cls, nxt_top, nxt_caller))
     syms.sort(key=lambda s: s[2])
-    return syms, imps[:200], calls, binds, ilines, heritage, [], origins, [], [], [], [], callbacks
+    return syms, imps[:200], calls, binds, ilines, heritage, [], origins, [], [], [], [], callbacks, [], types

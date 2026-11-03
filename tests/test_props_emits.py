@@ -126,7 +126,8 @@ def test_symbol_query_shows_users(project, vue_app, monkeypatch):
     index.update(project)
     out = index.query_symbol(project, "title")
     text = "\n".join(out)
-    assert "Used by (1):" in text and "src/App.vue:3 in App  (passes prop)" in text
+    assert "src/App.vue:3 in App  (passes prop)" in text  # the prop
+    assert "src/components/ExpenseForm.vue:20 in submit  (writes)" in text  # ExpenseForm's own `title` ref
     ev = "\n".join(index.query_symbol(project, "toggle-theme"))
     assert "Used by (2):" in ev and "(listens)" in ev and "(emits)" in ev
     assert all(len(index.query_symbol(project, n)) <= index.QUERY_LINES for n in ("title", "remove", "save"))
