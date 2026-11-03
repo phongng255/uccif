@@ -26,7 +26,7 @@ from uccif_lib import styles, ts_parse, vue_template
 from uccif_lib.resolve import JS_RESOLVE_EXT, Resolver  # noqa: F401 (re-exported)
 from uccif_lib.paths import LockTimeout, file_lock, now_iso
 
-SCHEMA = 13
+SCHEMA = 14
 MAX_BYTES = 1000000
 QUERY_LINES = 30
 
@@ -179,6 +179,8 @@ def connect(project, write=True):
         CREATE TABLE IF NOT EXISTS navs (src_id TEXT, src_path TEXT, line INTEGER, kind TEXT, value TEXT,
             dynamic INTEGER);
         CREATE INDEX IF NOT EXISTS navs_path ON navs(src_path);
+        CREATE TABLE IF NOT EXISTS cochanges (a TEXT, b TEXT, n INTEGER, ratio REAL);
+        CREATE INDEX IF NOT EXISTS cochanges_a ON cochanges(a);
         CREATE TABLE IF NOT EXISTS css_uses (path TEXT, src_id TEXT, kind TEXT, name TEXT, line INTEGER);
         CREATE INDEX IF NOT EXISTS css_uses_path ON css_uses(path);
         CREATE TABLE IF NOT EXISTS globals (path TEXT, name TEXT, target TEXT, line INTEGER);
@@ -202,7 +204,8 @@ def connect(project, write=True):
     if _meta(con, "schema") not in (None, str(SCHEMA)):
         con.executescript("DELETE FROM files; DELETE FROM symbols; DELETE FROM imports; DELETE FROM calls; "
                          "DELETE FROM nodes; DELETE FROM edges; DELETE FROM bindings; DELETE FROM tags; "
-                         "DELETE FROM globals; DELETE FROM refs; DELETE FROM tag_uses; DELETE FROM navs; DELETE FROM css_uses; DELETE FROM meta;")
+                         "DELETE FROM globals; DELETE FROM refs; DELETE FROM tag_uses; DELETE FROM navs; DELETE FROM css_uses; DELETE FROM cochanges; "
+                         "DELETE FROM meta;")
     _set_meta(con, "schema", SCHEMA)
     return con
 
@@ -494,6 +497,14 @@ def _update(project, full, only=None, force=()):
         _set_meta(con, "symbol_tool", tool)
         if full or not _meta(con, "built_at"):
             _set_meta(con, "built_at", now_iso())
+    # D5: files that change together, from git history; recomputed only when HEAD moves, never in the
+    # one-file update after an Edit (it stays a few ms)
+    if only is None:
+        cochanged = _refresh_cochanges(con, root, set(current))
+    else:
+        cochanged = False
+    if cochanged:  # new history: the derived edges (co_changes among them) are rebuilt once
+        _derive_all(con)
     # C3: a file that imports a path which did not exist when it was parsed keeps an unresolved import
     # (and calls through it). When new files appear, re-parse exactly the importers whose import now
     # resolves, once.
@@ -845,6 +856,54 @@ def _through_barrels(con):
     con.executemany("INSERT INTO edges VALUES (?,?,?,?,?,?,?,?,?)", new)
 
 
+COCHANGE_COMMITS = 300
+COCHANGE_MAX_FILES = 30  # bigger commits (formatting, renames, vendoring) say nothing about coupling
+COCHANGE_MIN = 2
+COCHANGE_RATIO = 0.3
+
+
+def _refresh_cochanges(con, root, files):
+    """Rebuild the cochanges table from `git log` when HEAD changed. -> True if it was rebuilt."""
+    try:
+        head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(root), capture_output=True, text=True,
+                              timeout=5).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return False
+    if not head or _meta(con, "cochange_head") == head:
+        return False
+    try:
+        out = subprocess.run(["git", "log", "--no-merges", "-n", str(COCHANGE_COMMITS), "--name-only",
+                              "--format=@@%H"], cwd=str(root), capture_output=True, text=True, encoding="utf-8",
+                             errors="replace", timeout=20).stdout
+    except (OSError, subprocess.SubprocessError):
+        return False
+    changes, pairs = Counter(), Counter()
+    for block in out.split("@@")[1:]:
+        names = sorted({ln.strip() for ln in block.splitlines()[1:] if ln.strip() in files})
+        if not names or len(names) > COCHANGE_MAX_FILES:
+            continue
+        changes.update(names)
+        for i, a in enumerate(names):
+            for b in names[i + 1:]:
+                pairs[(a, b)] += 1
+    rows = []
+    for (a, b), n in pairs.items():
+        ratio = n / float(min(changes[a], changes[b]))
+        if n >= COCHANGE_MIN and ratio >= COCHANGE_RATIO:
+            rows += [(a, b, n, ratio), (b, a, n, ratio)]
+    con.execute("DELETE FROM cochanges")
+    con.executemany("INSERT INTO cochanges VALUES (?,?,?,?)", rows)
+    _set_meta(con, "cochange_head", head)
+    return True
+
+
+def _derive_cochanges(con):
+    """co_changes edges (inferred) from the cached git-history table, for files still in the index."""
+    con.execute("INSERT INTO edges SELECT c.a, c.b, 'co_changes', NULL, 'inferred', "
+                "c.n || ' commits (' || CAST(ROUND(c.ratio * 100) AS INTEGER) || '%)', c.a, c.b, '~git' "
+                "FROM cochanges c JOIN files fa ON fa.path=c.a JOIN files fb ON fb.path=c.b")
+
+
 def _derive_all(con):
     """Edges that depend on other files' contents, recomputed from scratch (`via` starts with '~')."""
     con.execute("DELETE FROM edges WHERE via LIKE '~%'")
@@ -856,6 +915,7 @@ def _derive_all(con):
     _derive_builtins(con)
     _derive_css(con)
     _derive_vars(con)
+    _derive_cochanges(con)
     _derive_uses(con)
 
 
@@ -1559,6 +1619,10 @@ def query_file(project, path):
     lines.append("Imported by %d files%s" % (len(deps), (": " + ", ".join(deps[:10])) if deps else ""))
     tests = tests_for(con, rel)
     lines.append("Tests: " + (", ".join(tests[:8]) if tests else "none found"))
+    co = con.execute("SELECT dst_path, detail FROM edges WHERE kind='co_changes' AND src_path=? "
+                     "ORDER BY CAST(detail AS INTEGER) DESC, dst_path LIMIT 6", (rel,)).fetchall()
+    if co:
+        lines.append("Often changed with (git): " + ", ".join("%s [%s]" % c for c in co))
     con.close()
     return lines[:QUERY_LINES]
 

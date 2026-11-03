@@ -1,5 +1,19 @@
 # Changelog
 
+## 3.0.0-dev.23
+
+- **Files that change together** (phase 2, step 11, roadmap D5; `SCHEMA` 14, an older index is
+  rebuilt automatically).
+  - `co_changes` edges (`inferred`, both directions) from the last 300 non-merge commits
+    (`git log --name-only`): a pair of indexed files changed together in at least 2 commits and in
+    at least 30% of the commits touching the rarer of the two. Commits touching more than 30 files
+    (formatting, renames, vendoring) are ignored. `detail` holds the evidence ("3 commits (100%)").
+  - Cached by HEAD: git runs only when HEAD moved, never in the one-file update after an Edit.
+    11 ms on this repo's 47 commits. Deleted files drop their pairs.
+  - `--file` shows `Often changed with (git): view.ts [3 commits (100%)]`. Not part of `--impact`'s
+    default edges (history is a hint, not a dependency); a `--cochange` query comes with the query
+    step.
+
 ## 3.0.0-dev.22
 
 - **Types and variables** (phase 2, step 10; `SCHEMA` 13, an older index is rebuilt automatically).
