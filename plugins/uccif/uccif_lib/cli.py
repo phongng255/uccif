@@ -44,11 +44,14 @@ def build_parser():
     iu = ix.add_parser("update", help="refresh changed files")
     iu.add_argument("--quiet", action="store_true")
     ix.add_parser("status")
-    iq = ix.add_parser("query", help="definitions, references, dependents, tests (≤ 30 lines)")
+    iq = ix.add_parser("query", help="definitions, callers, dependents, impact, paths, tests (≤ 30 lines)")
     g = iq.add_mutually_exclusive_group(required=True)
     g.add_argument("--symbol")
     g.add_argument("--file")
     g.add_argument("--tests-for")
+    g.add_argument("--impact", metavar="FILE", help="files affected by changing FILE, several levels deep")
+    g.add_argument("--path", nargs=2, metavar=("FROM", "TO"), help="shortest import/call chain between two files or symbols")
+    iq.add_argument("--depth", type=int, default=3, help="levels for --impact (default 3, max %d)" % index.MAX_DEPTH)
 
     dr = sub.add_parser("drift", help="structural changes that make docs stale").add_subparsers(dest="action")
     dr.add_parser("check")
@@ -124,6 +127,10 @@ def _index_cmd(args):
                 lines = index.query_symbol(proj, args.symbol)
             elif args.file:
                 lines = index.query_file(proj, args.file)
+            elif args.impact:
+                lines = index.impact(proj, args.impact, args.depth)
+            elif args.path:
+                lines = index.path_between(proj, args.path[0], args.path[1])
             else:
                 lines = index.query_tests_for(proj, args.tests_for)
         except index.IndexUnavailable as e:

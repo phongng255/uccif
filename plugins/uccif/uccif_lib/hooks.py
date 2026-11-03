@@ -145,7 +145,7 @@ def on_session_start(data, project):
     ready = index.exists(project)
     spawn(["maintain"], project)  # build/refresh the code index and check drift in the background
     if ready:
-        parts.append("Code index ready: `uccif index query --symbol X | --file P | --tests-for P` "
+        parts.append("Code index ready: `uccif index query --symbol X | --file P | --impact P | --path A B | --tests-for P` "
                      "(refreshes itself; never read the .db).")
     else:
         parts.append("Code index is being built in the background; `uccif index query` waits for it.")

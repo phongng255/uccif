@@ -74,12 +74,13 @@ def _walk(root):
 
 
 def parse(text, rel, lang):
-    """-> (symbols, imports, calls, bindings) or None.
+    """-> (symbols, imports, calls, bindings, import_lines) or None.
     symbols: [(name, kind, line, scope)]; imports: [raw module strings];
     calls: [(caller, callee, object, line)] where caller is the enclosing function/method
     ("Class.method", or None at top level) and object is the receiver identifier ("this",
     a local name) when the call is `obj.callee()`; bindings: {local name: (raw module, name
-    in that module)} with name "*" for namespace imports and "default" for default imports.
+    in that module)} with name "*" for namespace imports and "default" for default imports;
+    import_lines: {raw module string: line of its first import}.
     `text` must already have non-script parts of .vue/.svelte blanked (line numbers kept)."""
     if disabled():
         return None
@@ -137,11 +138,12 @@ def _js_call(n, calls):
 
 
 def _js(root):
-    syms, imps, calls, binds = [], [], [], {}
+    syms, imps, calls, binds, ilines = [], [], [], {}, {}
 
-    def add_import(raw):
+    def add_import(raw, line):
         if raw and raw not in imps:
             imps.append(raw)
+            ilines[raw] = line
 
     for n in _walk(root):
         t = n.type
@@ -198,7 +200,7 @@ def _js(root):
             src = n.child_by_field_name("source")
             if src is not None:
                 raw = _txt(src).strip("'\"`")
-                add_import(raw)
+                add_import(raw, line)
                 if t == "import_statement":
                     _js_bindings(n, raw, binds)
         elif t == "new_expression":
@@ -210,10 +212,10 @@ def _js(root):
             if fn is not None and args is not None and (fn.type == "import" or _txt(fn) == "require"):
                 first = next((c for c in args.children if c.type == "string"), None)
                 if first is not None:
-                    add_import(_txt(first).strip("'\"`"))
+                    add_import(_txt(first).strip("'\"`"), line)
     syms = [s for s in syms if s[0]]
     syms.sort(key=lambda s: s[2])
-    return syms, imps[:200], calls, binds
+    return syms, imps[:200], calls, binds, ilines
 
 
 def _js_bindings(stmt, raw, binds):
@@ -240,11 +242,12 @@ def _js_bindings(stmt, raw, binds):
 # ---- Python ------------------------------------------------------------------------
 
 def _python(root):
-    syms, imps, calls, binds = [], [], [], {}
+    syms, imps, calls, binds, ilines = [], [], [], {}, {}
 
-    def add_import(raw):
+    def add_import(raw, line):
         if raw and raw not in imps:
             imps.append(raw)
+            ilines[raw] = line
 
     # (node, enclosing class name or None, at module level, enclosing function name or None)
     stack = [(root, None, True, None)]
@@ -283,7 +286,7 @@ def _python(root):
                 syms.append((_txt(left), "constant", n.start_point[0] + 1, None))
         elif t == "import_from_statement":
             raw = _txt(n.child_by_field_name("module_name"))
-            add_import(raw)
+            add_import(raw, n.start_point[0] + 1)
             for c in n.children_by_field_name("name"):
                 if c.type == "aliased_import":
                     orig = _txt(c.child_by_field_name("name"))
@@ -294,13 +297,13 @@ def _python(root):
             for c in n.children_by_field_name("name"):
                 if c.type == "aliased_import":
                     mod = _txt(c.child_by_field_name("name"))
-                    add_import(mod)
+                    add_import(mod, n.start_point[0] + 1)
                     binds[_txt(c.child_by_field_name("alias")) or mod] = (mod, "*")
                 else:
                     mod = _txt(c)
-                    add_import(mod)
+                    add_import(mod, n.start_point[0] + 1)
                     binds[mod.split(".")[0]] = (mod.split(".")[0], "*")
         for c in reversed(n.children):
             stack.append((c, nxt_cls, nxt_top, nxt_caller))
     syms.sort(key=lambda s: s[2])
-    return syms, imps[:200], calls, binds
+    return syms, imps[:200], calls, binds, ilines

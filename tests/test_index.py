@@ -326,3 +326,75 @@ def test_calls_dropped_with_file_and_schema_upgrade(project, repo, monkeypatch):
     assert con.execute("SELECT count(*) FROM files").fetchone()[0] == 0
     con.close()
     assert index.update(project)["parsed"] > 0
+
+
+# ---- impact / path --------------------------------------------------------------
+
+def make_chain(repo):
+    write(repo, "core.ts", "export function base() {}\n")
+    write(repo, "mid.ts", "import { base } from './core'\nexport function run() { base() }\n")
+    write(repo, "top.ts", "import { run } from './mid'\nexport function main() { run() }\n")
+    write(repo, "app.ts", "import { main } from './top'\nmain()\n")
+    write(repo, "core.test.ts", "import { base } from './core'\n")
+    write(repo, "island.ts", "export const x = 1\n")
+
+
+def test_impact_levels_with_file_line_and_tests(project, repo, monkeypatch):
+    _ts_or_skip(monkeypatch)
+    make_chain(repo)
+    index.update(project)
+    out = index.impact(project, "core.ts", 3)
+    text = "\n".join(out)
+    assert out[0].startswith("Impact of core.ts (depth 3): 3 files, 1 tests")
+    assert "Level 1 (direct):" in text and "mid.ts:1  imports './core'; calls base at :2 in run" in text
+    assert "Level 2:" in text and "top.ts:1  imports './mid'; calls run at :2 in main  via mid.ts" in text
+    assert "Level 3:" in text and "app.ts:1" in text and "via top.ts" in text
+    assert "Tests to run (1):" in text and "core.test.ts" in text
+    assert len(out) <= index.QUERY_LINES
+    shallow = "\n".join(index.impact(project, "core.ts", 1))
+    assert "mid.ts" in shallow and "top.ts" not in shallow
+    assert "nothing imports or calls it" in "\n".join(index.impact(project, "island.ts"))
+    assert "not in the index" in index.impact(project, "nope.ts")[0]
+
+
+def test_impact_without_tree_sitter_uses_import_edges(project, repo):
+    make_chain(repo)
+    index.update(project)
+    text = "\n".join(index.impact(project, "core.ts", 3))
+    assert "mid.ts:1  imports './core'" in text and "app.ts:1" in text  # regex imports carry lines too
+    assert "calls" not in text
+
+
+def test_impact_output_is_capped(project, repo):
+    write(repo, "core.ts", "export const a = 1\n")
+    for i in range(60):
+        write(repo, "u%02d.ts" % i, "import { a } from './core'\n")
+    index.update(project)
+    out = index.impact(project, "core.ts")
+    assert len(out) <= index.QUERY_LINES and any("more" in l for l in out)
+    assert out[0].startswith("Impact of core.ts (depth 3): 60 files")
+
+
+def test_path_between_files_and_symbols(project, repo, monkeypatch):
+    _ts_or_skip(monkeypatch)
+    make_chain(repo)
+    index.update(project)
+    out = index.path_between(project, "app.ts", "base")
+    text = "\n".join(out)
+    assert out[0].startswith("Path app.ts -> core.ts [function core.ts:1] (3 hops")
+    assert "app.ts:1  imports './top'; calls main at :2  -> top.ts" in text
+    assert text.rstrip().endswith("-> core.ts")
+    rev = index.path_between(project, "core.ts", "app.ts")  # found in the other direction
+    assert rev[0].startswith("Path app.ts -> core.ts")
+    assert "No import/call path" in index.path_between(project, "core.ts", "island.ts")[0]
+    assert "Not in the index: ghost" in index.path_between(project, "core.ts", "ghost")[0]
+    assert "same file" in index.path_between(project, "core.ts", "base")[0]
+
+
+def test_cli_impact_and_path(project, repo, monkeypatch, capsys):
+    from uccif_lib import cli
+    make_chain(repo)
+    assert cli.main(["index", "query", "--impact", "core.ts", "--depth", "1"]) == 0
+    assert "Impact of core.ts (depth 1)" in capsys.readouterr().out
+    assert cli.main(["index", "query", "--path", "app.ts", "core.ts"]) == 0
+    assert "Path app.ts -> core.ts" in capsys.readouterr().out
