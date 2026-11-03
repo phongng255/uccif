@@ -1,5 +1,18 @@
 # Changelog
 
+## 3.0.0-dev.8
+
+- **Optional tree-sitter parsing** for the code index (step 1 of the code-graph roadmap).
+  When `tree-sitter`, `tree-sitter-javascript`/`-typescript` and `tree-sitter-python` are
+  importable, JS/TS/TSX/Vue/Svelte/Python files get exact symbols (functions, classes, methods
+  with their class, arrow-function consts, Pinia `defineStore`, types/interfaces/enums) and
+  exact imports (`import`, `export … from`, `require`, dynamic `import()`, `import a, b`),
+  stored with precision `ast`. Vue/Svelte parse only `<script>` and keep real line numbers.
+- Fallback order is tree-sitter → universal-ctags → regex; without the packages behaviour is
+  unchanged. Nothing is installed automatically; `uccif doctor` and `index status` say which
+  tool is active. `UCCIF_NO_TREE_SITTER=1` turns it off.
+- CI runs the suite a second time with the tree-sitter packages installed.
+
 ## 3.0.0-dev.7
 
 - Windows: the Stop hook crashed printing the token line (its emoji cannot be encoded in the

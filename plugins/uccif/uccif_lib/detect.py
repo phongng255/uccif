@@ -190,7 +190,14 @@ def doctor(project):
     check(errors == 0, "no hook errors in 7 days", "%d hook errors in 7 days: uccif log hooks --only-errors" % errors)
     check(slow == 0, "no slow hooks", "%d slow hook runs in 7 days" % slow)
 
-    from uccif_lib import index
+    from uccif_lib import index, ts_parse
+    av = ts_parse.availability()
+    if any(av.values()):
+        info("tree-sitter active for: %s (precise symbols and imports)"
+             % ", ".join(k for k, v in av.items() if v))
+    else:
+        info("tree-sitter not installed: symbols come from ctags/regex (approximate). Optional: "
+             "pip install tree-sitter tree-sitter-javascript tree-sitter-typescript tree-sitter-python")
     idx = index.status(project)
     check(index.exists(project), idx[0], idx[0])
     d = detect(project)

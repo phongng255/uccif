@@ -166,3 +166,78 @@ def test_queries_work_when_data_dir_is_read_only(project, repo, monkeypatch, cap
 def test_query_before_build_says_so(project, repo, capsys):
     from uccif_lib import index as I
     assert "not built yet" in "\n".join(I.status(project))
+
+
+# ---- tree-sitter (optional) ------------------------------------------------------
+
+def _ts_or_skip(monkeypatch):
+    import pytest
+    monkeypatch.delenv("UCCIF_NO_TREE_SITTER", raising=False)
+    from uccif_lib import ts_parse
+    if not all(ts_parse.availability().values()):
+        pytest.skip("tree-sitter packages not installed")
+
+
+def test_without_tree_sitter_status_says_regex(project, repo):
+    make_app(repo)
+    index.update(project)
+    con = index.connect(project)
+    assert {r[0] for r in con.execute("SELECT DISTINCT precision FROM symbols")} <= {"approx", "ctags"}
+    con.close()
+    assert "from: regex" in "\n".join(index.status(project)) or "ctags" in "\n".join(index.status(project))
+
+
+def test_tree_sitter_extracts_same_symbols_as_regex(project, repo, monkeypatch):
+    _ts_or_skip(monkeypatch)
+    make_app(repo)
+    index.update(project)
+    con = index.connect(project)
+    syms = {(n, k) for n, k in con.execute("SELECT name, kind FROM symbols")}
+    for expected in [("add", "function"), ("double", "function"), ("Point", "interface"),
+                     ("useCart", "store"), ("refresh", "function"), ("Cart", "component"),
+                     ("Order", "class"), ("total", "method"), ("MAX_ITEMS", "constant"),
+                     ("helper", "function")]:
+        assert expected in syms, expected
+    assert {r[0] for r in con.execute("SELECT precision FROM symbols WHERE path='src/utils/math.ts'")} == {"ast"}
+    assert {r[0] for r in con.execute("SELECT precision FROM symbols WHERE path='src/styles/tokens.css'")} == {"approx"}
+    assert set(index.dependents(con, "src/utils/math.ts")) == {
+        "src/components/Cart.vue", "src/stores/cart.ts", "src/utils/math.spec.ts"}
+    assert index.dependents(con, "app/models.py") == ["app/views.py"]
+    line = con.execute("SELECT line FROM symbols WHERE name='refresh'").fetchone()[0]
+    assert line == 5  # Vue script keeps real file line numbers
+    con.close()
+    assert "tree-sitter" in "\n".join(index.status(project))
+
+
+def test_tree_sitter_finer_cases(project, repo, monkeypatch):
+    _ts_or_skip(monkeypatch)
+    write(repo, "a.ts",
+          "import x, { y as z } from './b'\nexport * from './c'\nconst m = require('./d')\n"
+          "const lazy = () => import('./e')\n"
+          "export abstract class Svc<T> {\n  private count = 0\n  async run(): Promise<void> {}\n"
+          "  handler = () => 1\n}\nexport enum Mode { A }\nexport type Id = string\n")
+    write(repo, "b.ts", "export const y = 1\n")
+    write(repo, "c.ts", "")
+    write(repo, "d.ts", "")
+    write(repo, "e.ts", "")
+    write(repo, "p.py", "import os, sys as s\nfrom . import q\nclass A:\n    async def m(self):\n        def inner(): pass\n")
+    write(repo, "q.py", "")
+    index.update(project)
+    con = index.connect(project)
+    got = {(n, k, sc) for n, k, sc in con.execute("SELECT name, kind, scope FROM symbols WHERE path='a.ts'")}
+    for e in [("Svc", "class", None), ("run", "method", "Svc"), ("handler", "method", "Svc"),
+              ("Mode", "enum", None), ("Id", "type", None), ("lazy", "function", None)]:
+        assert e in got, e
+    assert {t for (t,) in con.execute("SELECT target FROM imports WHERE src='a.ts'")} == {
+        "b.ts", "c.ts", "d.ts", "e.ts"}
+    py = {(n, k, sc) for n, k, sc in con.execute("SELECT name, kind, scope FROM symbols WHERE path='p.py'")}
+    assert ("m", "method", "A") in py and ("inner", "function", None) in py
+    assert {r for (r,) in con.execute("SELECT raw FROM imports WHERE src='p.py'")} == {"os", "sys", "."}
+    con.close()
+
+
+def test_broken_source_still_indexes(project, repo, monkeypatch):
+    _ts_or_skip(monkeypatch)
+    write(repo, "bad.ts", "export function ok() {}\nfunction (((\n")
+    index.update(project)
+    assert "function ok" in "\n".join(index.query_symbol(project, "ok"))
