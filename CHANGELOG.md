@@ -1,5 +1,13 @@
 # Changelog
 
+## 3.0.0-dev.29
+
+- **Smaller index** (`SCHEMA` 15, an older index is rebuilt automatically): the legacy `imports` and
+  `calls` tables, written alongside `edges` since dev.13, are dropped. `--file` and `index status`
+  read imports from `edges` (`imports` / `imports_ext`), the benchmark counts from `edges`.
+  DB size: fixture 240 -> 212 KB, this repo 3368 -> 2648 KB, a 200-component app 4316 -> 3840 KB.
+  The `symbols` table stays (small; every symbol query uses it).
+
 ## 3.0.0-dev.28
 
 - **Big-repo benchmark and lazy derived edges.** `tests/bench_index.py --synthetic N` generates a

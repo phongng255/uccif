@@ -228,11 +228,12 @@ def test_tree_sitter_finer_cases(project, repo, monkeypatch):
     for e in [("Svc", "class", None), ("run", "method", "Svc"), ("handler", "method", "Svc"),
               ("Mode", "enum", None), ("Id", "type", None), ("lazy", "function", None)]:
         assert e in got, e
-    assert {t for (t,) in con.execute("SELECT target FROM imports WHERE src='a.ts'")} == {
+    assert {t for (t,) in con.execute("SELECT dst_path FROM edges WHERE kind='imports' AND src_path='a.ts'")} == {
         "b.ts", "c.ts", "d.ts", "e.ts"}
     py = {(n, k, sc) for n, k, sc in con.execute("SELECT name, kind, scope FROM symbols WHERE path='p.py'")}
     assert ("m", "method", "A") in py and ("inner", "function", None) in py
-    assert {r for (r,) in con.execute("SELECT raw FROM imports WHERE src='p.py'")} == {"os", "sys", "."}
+    assert {r for (r,) in con.execute("SELECT detail FROM edges WHERE kind IN ('imports','imports_ext') "
+                                      "AND src_path='p.py'")} == {"os", "sys", "."}
     con.close()
 
 
@@ -265,7 +266,9 @@ def test_calls_are_resolved_through_imports(project, repo, monkeypatch):
     make_calls(repo)
     index.update(project)
     con = index.connect(project)
-    got = set(con.execute("SELECT src_path, src_symbol, callee_name, callee_path, line FROM calls"))
+    got = {(sp, sid[len(sp) + 1:] if sid.startswith(sp + "#") else None, d, dp, ln) for sid, sp, d, dp, ln in
+           con.execute("SELECT src_id, src_path, detail, dst_path, line FROM edges WHERE kind IN ('calls','calls_ext') "
+                       "AND (via IS NULL OR via LIKE '~%')")}
     con.close()
     assert ("src/math.ts", "twice", "add", "src/math.ts", 2) in got        # same-file call
     assert ("src/use.ts", "total", "add", "src/math.ts", 3) in got         # alias: plus -> add
@@ -305,7 +308,7 @@ def test_no_tree_sitter_means_no_call_edges(project, repo):
     make_calls(repo)
     index.update(project)
     con = index.connect(project)
-    assert con.execute("SELECT count(*) FROM calls").fetchone()[0] == 0
+    assert con.execute("SELECT count(*) FROM edges WHERE kind='calls'").fetchone()[0] == 0
     con.close()
     out = "\n".join(index.query_symbol(project, "add"))
     assert "Called by" not in out and "Referenced (whole word)" in out
@@ -318,7 +321,7 @@ def test_calls_dropped_with_file_and_schema_upgrade(project, repo, monkeypatch):
     (repo / "src" / "use.ts").unlink()
     index.update(project)
     con = index.connect(project)
-    assert con.execute("SELECT count(*) FROM calls WHERE src_path='src/use.ts'").fetchone()[0] == 0
+    assert con.execute("SELECT count(*) FROM edges WHERE src_path='src/use.ts'").fetchone()[0] == 0
     con.execute("UPDATE meta SET value='1' WHERE key='schema'")  # pretend an old index
     con.commit()
     con.close()

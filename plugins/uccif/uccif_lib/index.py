@@ -26,7 +26,7 @@ from uccif_lib import styles, ts_parse, vue_template
 from uccif_lib.resolve import JS_RESOLVE_EXT, Resolver  # noqa: F401 (re-exported)
 from uccif_lib.paths import LockTimeout, file_lock, now_iso
 
-SCHEMA = 14
+SCHEMA = 15
 DERIVE_BUDGET_MS = 150  # above this, a post-Edit update defers the derived edges (see _update)
 MAX_BYTES = 1000000
 QUERY_LINES = 30
@@ -156,15 +156,14 @@ def connect(project, write=True):
     path.parent.mkdir(parents=True, exist_ok=True)
     con = sqlite3.connect(str(path), timeout=5)
     con.execute("PRAGMA journal_mode=DELETE")
+    # schema 15: the old imports / calls tables are gone, edges hold the same facts
+    con.executescript("DROP TABLE IF EXISTS imports; DROP TABLE IF EXISTS calls;")
     con.executescript("""
         CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
         CREATE TABLE IF NOT EXISTS files (path TEXT PRIMARY KEY, lang TEXT, size INTEGER,
             mtime REAL, hash TEXT, is_test INTEGER, n_symbols INTEGER);
         CREATE TABLE IF NOT EXISTS symbols (name TEXT, kind TEXT, path TEXT, line INTEGER,
             scope TEXT, precision TEXT);
-        CREATE TABLE IF NOT EXISTS imports (src TEXT, raw TEXT, target TEXT, line INTEGER);
-        CREATE TABLE IF NOT EXISTS calls (src_path TEXT, src_symbol TEXT, callee_name TEXT,
-            callee_path TEXT, line INTEGER);
         CREATE TABLE IF NOT EXISTS nodes (id TEXT PRIMARY KEY, kind TEXT, name TEXT, path TEXT, line INTEGER,
             end_line INTEGER, scope TEXT, precision TEXT, detail TEXT);
         CREATE TABLE IF NOT EXISTS edges (src_id TEXT, dst_id TEXT, kind TEXT, line INTEGER,
@@ -193,17 +192,12 @@ def connect(project, write=True):
         CREATE INDEX IF NOT EXISTS edge_src ON edges(src_path, kind);
         CREATE INDEX IF NOT EXISTS edge_dst ON edges(dst_path, kind);
         CREATE INDEX IF NOT EXISTS edge_detail ON edges(detail);
-        CREATE INDEX IF NOT EXISTS call_callee ON calls(callee_name);
-        CREATE INDEX IF NOT EXISTS call_src ON calls(src_path);
-        CREATE INDEX IF NOT EXISTS call_cpath ON calls(callee_path);
         CREATE INDEX IF NOT EXISTS sym_name ON symbols(name);
         CREATE INDEX IF NOT EXISTS sym_lname ON symbols(lower(name));
         CREATE INDEX IF NOT EXISTS sym_path ON symbols(path);
-        CREATE INDEX IF NOT EXISTS imp_src ON imports(src);
-        CREATE INDEX IF NOT EXISTS imp_target ON imports(target);
     """)
     if _meta(con, "schema") not in (None, str(SCHEMA)):
-        con.executescript("DELETE FROM files; DELETE FROM symbols; DELETE FROM imports; DELETE FROM calls; "
+        con.executescript("DELETE FROM files; DELETE FROM symbols; "
                          "DELETE FROM nodes; DELETE FROM edges; DELETE FROM bindings; DELETE FROM tags; "
                          "DELETE FROM globals; DELETE FROM refs; DELETE FROM tag_uses; DELETE FROM navs; DELETE FROM css_uses; DELETE FROM cochanges; "
                          "DELETE FROM meta;")
@@ -386,7 +380,7 @@ def _update(project, full, only=None, force=()):
     root = project.root
     con = connect(project)
     if full:
-        con.executescript("DELETE FROM files; DELETE FROM symbols; DELETE FROM imports; DELETE FROM calls; "
+        con.executescript("DELETE FROM files; DELETE FROM symbols; "
                           "DELETE FROM nodes; DELETE FROM edges; DELETE FROM bindings; DELETE FROM tags; "
                           "DELETE FROM globals; DELETE FROM refs; DELETE FROM tag_uses; DELETE FROM navs; "
                           "DELETE FROM css_uses;")
@@ -480,8 +474,6 @@ def _update(project, full, only=None, force=()):
                  precision) for n, k, ln, sc in syms]
         con.executemany("INSERT INTO symbols VALUES (?,?,?,?,?,?)", rows)
         imps = [(rel, raw, resolver.resolve(rel, raw, lang), ilines.get(raw)) for raw in raws]
-        con.executemany("INSERT INTO imports VALUES (?,?,?,?)", imps)
-        con.executemany("INSERT INTO calls VALUES (?,?,?,?,?)", [r[:5] for r in call_rows])
         con.execute("INSERT INTO files VALUES (?,?,?,?,?,?,?)",
                     (rel, lang, st.st_size, st.st_mtime, h, int(is_test(rel)), len(rows)))
         _write_graph(con, rel, lang, rows, imps, call_rows, resolver, text, herit_rows, tag_rows, ref_rows,
@@ -1436,8 +1428,6 @@ def _drop(con, rel):
     con.execute("DELETE FROM edges WHERE src_path=?", (rel,))
     con.execute("DELETE FROM files WHERE path=?", (rel,))
     con.execute("DELETE FROM symbols WHERE path=?", (rel,))
-    con.execute("DELETE FROM imports WHERE src=?", (rel,))
-    con.execute("DELETE FROM calls WHERE src_path=?", (rel,))
 
 
 def exists(project):
@@ -1644,7 +1634,8 @@ def query_file(project, path):
                        (rel,)).fetchall()
     if syms:
         lines.append("Symbols: " + ", ".join("%s %s:%d" % (k, n, ln) for n, k, ln in syms))
-    imps = con.execute("SELECT raw, target FROM imports WHERE src=? LIMIT 12", (rel,)).fetchall()
+    imps = con.execute("SELECT detail, dst_path FROM edges WHERE src_path=? AND kind IN ('imports','imports_ext') "
+                       "AND via IS NULL ORDER BY line LIMIT 12", (rel,)).fetchall()
     local = [t for _, t in imps if t]
     ext = [r for r, t in imps if not t]
     if local:
@@ -1872,7 +1863,8 @@ def status(project):
     con = connect(project, write=False)
     files = con.execute("SELECT count(*) FROM files").fetchone()[0]
     syms = con.execute("SELECT count(*) FROM symbols").fetchone()[0]
-    imps = con.execute("SELECT count(*), count(target) FROM imports").fetchone()
+    imps = con.execute("SELECT count(*), count(dst_path) FROM edges WHERE kind IN ('imports','imports_ext') "
+                       "AND via IS NULL").fetchone()
     edges = con.execute("SELECT count(*), count(dst_path) FROM edges WHERE kind='calls'").fetchone()
     conf = dict(con.execute("SELECT confidence, count(*) FROM edges GROUP BY confidence"))
     langs = Counter(dict(con.execute("SELECT lang, count(*) FROM files GROUP BY lang").fetchall()))

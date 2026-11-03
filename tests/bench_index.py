@@ -152,8 +152,11 @@ def bench(target, repeat):
         project = resolve_project()
         build_ms, stats = _ms(lambda: index.update(project, full=True))
         con = index.connect(project, write=False)
-        counts = {t: con.execute("SELECT count(*) FROM %s" % t).fetchone()[0]
-                  for t in ("files", "symbols", "imports", "calls")}
+        counts = {t: con.execute("SELECT count(*) FROM %s" % t).fetchone()[0] for t in ("files", "symbols")}
+        counts["imports"] = con.execute("SELECT count(*) FROM edges WHERE kind IN ('imports','imports_ext') "
+                                        "AND via IS NULL").fetchone()[0]
+        counts["calls"] = con.execute("SELECT count(*) FROM edges WHERE kind IN ('calls','calls_ext','calls_action') "
+                                      "AND (via IS NULL OR via LIKE '~%')").fetchone()[0]
         try:  # schema >= 4
             counts["nodes"] = con.execute("SELECT count(*) FROM nodes").fetchone()[0]
             counts["edges"] = con.execute("SELECT count(*) FROM edges").fetchone()[0]
