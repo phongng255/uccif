@@ -15,6 +15,9 @@ A Claude Code plugin marketplace. Install the core plugin `uccif` once; from the
 - read-only **agents** for module analysis, impact analysis and change review;
 - **logs** of every hook run and session (`uccif log hooks|sessions`).
 
+Full context — decisions, incidents, how it works — for people and AIs picking this up:
+[docs/HANDOFF.md](docs/HANDOFF.md).
+
 The core plugin **never blocks** a tool call or a stop. Blocking gates will live in an
 optional `uccif-strict` plugin.
 
