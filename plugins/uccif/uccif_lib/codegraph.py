@@ -5,7 +5,8 @@ tree-sitter into `<project>/.codegraph/` (SQLite) and serves it to Claude throug
 its MCP tool `codegraph_explore` (CLI: `codegraph explore`). This module
 detects its state, tells Claude what to do and, when the CLI is already installed,
 indexes the project in the background (`codegraph init --yes`, project-local). It
-never installs anything.
+never installs anything. The MCP server itself is declared by the plugin (`.mcp.json`:
+`codegraph serve --mcp`), so nothing has to be written into the user's Claude config.
 
 The npm package is `@colbymchenry/codegraph`. The unscoped `codegraph` package on
 npm is an unrelated project with no CLI, so `npx codegraph` must never be used.
@@ -21,6 +22,7 @@ NPX = "npx -y %s" % PACKAGE
 INDEX_DIR = ".codegraph"
 DOCS = "https://github.com/colbymchenry/codegraph"
 MCP_TOOL = "mcp__codegraph__codegraph_explore"
+PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 
 
 def cli():
@@ -46,14 +48,29 @@ def _mcp_in(path):
     return any("codegraph" in str(k).lower() or "codegraph" in json.dumps(v).lower() for k, v in servers.items())
 
 
-def mcp_wired(project):
-    """True when a Claude Code MCP config (user or project) mentions the codegraph server."""
+def plugin_mcp():
+    """True when this plugin declares the CodeGraph MCP server itself (plugins/uccif/.mcp.json)."""
+    return _mcp_in(PLUGIN_ROOT / ".mcp.json")
+
+
+def mcp_via(project):
+    """Where the CodeGraph MCP server comes from: "plugin", "config" (the user's ~/.claude.json or the
+    project's .mcp.json, e.g. from `codegraph install`) or None."""
+    if plugin_mcp():
+        return "plugin"
     home = Path(os.path.expanduser("~"))
-    return any(_mcp_in(p) for p in (home / ".claude.json", Path(project.root) / ".mcp.json"))
+    if any(_mcp_in(p) for p in (home / ".claude.json", Path(project.root) / ".mcp.json")):
+        return "config"
+    return None
+
+
+def mcp_wired(project):
+    return mcp_via(project) is not None
 
 
 def state(project):
-    return {"cli": cli(), "indexed": indexed(project), "mcp": mcp_wired(project)}
+    via = mcp_via(project)
+    return {"cli": cli(), "indexed": indexed(project), "mcp": via is not None, "mcp_via": via}
 
 
 def gitignored(project):
@@ -69,6 +86,10 @@ def gitignored(project):
 def context_line(project):
     """One SessionStart line for Claude: how to look code up, or how to get CodeGraph."""
     st = state(project)
+    if st["indexed"] and not st["cli"]:
+        return ("CodeGraph index exists (.codegraph/) but the `codegraph` CLI is not installed, so its MCP server "
+                "cannot start. Use bounded Grep/Glob, and offer the user once to run the uccif:codegraph skill "
+                "(installs the CLI; needs a Claude Code restart).")
     if st["indexed"] and st["mcp"]:
         return ("CodeGraph is active for this project (.codegraph/). To find or understand code, call the "
                 "`codegraph_explore` MCP tool FIRST (subagents / shell: `codegraph explore \"<question>\"`); "

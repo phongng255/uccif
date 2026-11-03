@@ -192,13 +192,14 @@ def _src(project, rel, text):
     return p
 
 
-def _cg_env(monkeypatch, project, cli=False, mcp=False, indexed=False):
+def _cg_env(monkeypatch, project, cli=False, mcp=False, indexed=False, plugin=False):
     from uccif_lib import codegraph
     home = project.root.parent / "home"
     home.mkdir(exist_ok=True)
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("USERPROFILE", str(home))
     monkeypatch.setattr(codegraph, "cli", lambda: "/usr/bin/codegraph" if cli else None)
+    monkeypatch.setattr(codegraph, "plugin_mcp", lambda: plugin)  # the real plugin always ships .mcp.json
     if mcp:
         (home / ".claude.json").write_text(json.dumps(
             {"mcpServers": {"codegraph": {"command": "codegraph", "args": ["serve", "--mcp"]}}}))
@@ -227,9 +228,24 @@ def test_session_start_codegraph_active(base, project, monkeypatch):
 
 
 def test_session_start_index_without_mcp(base, project, monkeypatch):
-    _cg_env(monkeypatch, project, cli=True, indexed=True)
+    _cg_env(monkeypatch, project, cli=True, indexed=True)  # an older plugin without .mcp.json
     _, out = run_hook("session-start", dict(base, source="startup"))
     assert "not wired into Claude Code" in ctx(out)
+
+
+def test_session_start_active_with_plugin_provided_mcp(base, project, monkeypatch):
+    """No ~/.claude.json entry needed: the plugin's own .mcp.json provides the server."""
+    _cg_env(monkeypatch, project, cli=True, indexed=True, plugin=True)
+    _, out = run_hook("session-start", dict(base, source="startup"))
+    assert "CodeGraph is active" in ctx(out) and "not wired" not in ctx(out)
+
+
+def test_session_start_index_without_cli(base, project, monkeypatch):
+    """The server cannot start without the CLI, so never claim CodeGraph is active."""
+    _cg_env(monkeypatch, project, cli=False, indexed=True, plugin=True)
+    _, out = run_hook("session-start", dict(base, source="startup"))
+    assert "CodeGraph is active" not in ctx(out) and "CLI is not installed" in ctx(out)
+    assert "uccif:codegraph" in ctx(out)
 
 
 def test_post_tool_use_records_task_file(base, project):

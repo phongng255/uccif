@@ -34,8 +34,8 @@ Options (`/config`): `reply_language` (default `vi`), `token_report` (default on
 
 Requirements: Python 3.8+ (`python3`, `python` or `py -3`), git. macOS, Linux and Windows (Git
 Bash, which Claude Code uses to run hooks) are all tested in CI; Windows has not yet been
-tried in a real Claude Code session. Language servers and MCP servers are never installed automatically;
-`uccif doctor` reports what is missing.
+tried in a real Claude Code session. Language servers and the CodeGraph CLI are never installed
+without your agreement; `uccif doctor` reports what is missing.
 
 ## Where data lives
 
@@ -100,15 +100,15 @@ npm install -g @colbymchenry/codegraph
 ```
 
 ```bash
-codegraph install --target=claude --location=global --yes
-```
-
-```bash
 codegraph init --yes
 ```
 
-then keeps `.codegraph/` out of git and checks `codegraph status`. Restart Claude Code once
-afterwards so the `codegraph_explore` MCP tool loads. `uccif codegraph` prints the current state.
+then keeps `.codegraph/` out of git and checks `codegraph status`. The MCP server is declared by the
+plugin itself (`.mcp.json`: `codegraph serve --mcp`), so nothing is written to your Claude config.
+Restart Claude Code once afterwards so `codegraph_explore` loads; its first call may ask you to
+allow the tool. `uccif codegraph` prints the current state (`mcp_via` says where the server comes
+from). If you ran `codegraph install` by hand earlier you now have the server twice; remove yours
+with `codegraph uninstall --target=claude`.
 
 **Automatic from then on** (option `auto_setup`, default on): when the `codegraph` CLI is on the
 machine, opening any project indexes it in the background (`codegraph init --yes`, project-local;
@@ -138,4 +138,5 @@ CLI. The real one is `@colbymchenry/codegraph` (`npx -y @colbymchenry/codegraph`
 | 3.0-dev.11+ | code graph: optional tree-sitter parsing (done), call edges (done), multi-level `--impact` and `--path` queries (done), HTML graph view `uccif index graph` (done); phase 2 (nodes/edges model, Vue/Pinia/router edges, deeper resolution) in progress, step 0 fixture + benchmark done, nodes/edges model with confidence done, config-driven aliases + barrels + Python roots done, extends/implements + contains + function-level tests done, Vue template edges (`renders`, template calls) done, Pinia stores + composables + variable origins done, props/emits + vue-router done, callbacks + late resolution + built-in methods done, CSS variables + classes done, type references + variable reads/writes done, git co-change done, new graph queries done, graph view with kind filters / component tree / function level done, Go / Rust / Java (layer E) done; framework layer (Vue templates, Pinia, vue-router, CSS links) removed in dev.31: UCCIF is one framework-neutral core, project-specific knowledge goes in your own rules / skills / agents |
 | 3.0-dev.33 | own code index and graph removed; CodeGraph setup skill + hooks that route code lookups to it |
 | 3.0-dev.34 | automatic CodeGraph indexing + project skills (map, bugfix, modules) generated from the graph |
+| 3.0-dev.35 | the plugin declares CodeGraph's MCP server itself (`.mcp.json`): no manual `codegraph install` step, only the CLI and one restart |
 | 3.3 | `uccif-strict` (blocking gates), only if needed |

@@ -95,6 +95,17 @@ def test_no_claude_md_at_plugin_root():
     assert not (PLUGIN / "CLAUDE.md").exists()  # never loaded as context
 
 
+def test_plugin_declares_the_codegraph_mcp_server():
+    """The plugin ships the MCP server, so nothing has to edit the user's Claude config."""
+    from uccif_lib import codegraph
+    data = json.loads((PLUGIN / ".mcp.json").read_text(encoding="utf-8"))
+    srv = data["mcpServers"]["codegraph"]
+    assert srv["command"] == "codegraph" and srv["args"] == ["serve", "--mcp"] and srv["type"] == "stdio"
+    assert codegraph.plugin_mcp() is True
+    skill = (PLUGIN / "skills" / "codegraph" / "SKILL.md").read_text(encoding="utf-8")
+    assert "Do **not** run" in skill and "`codegraph install --target=claude`" in skill
+
+
 def test_no_unscoped_npx_codegraph():
     # `codegraph` on npm is an unrelated package; only @colbymchenry/codegraph is CodeGraph.
     import re as _re

@@ -23,11 +23,14 @@ npm package `codegraph` is an unrelated project with no CLI.
    - No Node: show the user the official installer and ask before running it:
      `curl -fsSL https://raw.githubusercontent.com/colbymchenry/codegraph/main/install.sh | sh`
      (Windows PowerShell: `irm https://raw.githubusercontent.com/colbymchenry/codegraph/main/install.ps1 | iex`).
-3. **Wire Claude Code** (only if `mcp` is false), once per machine, covers every project:
-   `codegraph install --target=claude --location=global --yes`.
-   It adds the MCP server to `~/.claude.json`, an allow rule for `mcp__codegraph__*`, and a
-   marker-fenced CodeGraph section in CLAUDE.md. If the sandbox denies the write, give the
-   user that exact command to run in their terminal; do not retry another way.
+3. **MCP tool.** Nothing to run: the plugin declares the server itself (`.mcp.json`:
+   `codegraph serve --mcp`), so no Claude config is edited, which Claude Code would refuse
+   anyway. It starts once the CLI is on PATH, after a restart of Claude Code; the first call
+   of `codegraph_explore` may ask the user to allow the tool. Do **not** run
+   `codegraph install --target=claude`: it would register a second server with the same
+   tools. Only when `mcp` is false (an older plugin without `.mcp.json`) give the user
+   `codegraph install --target=claude --location=global --yes` to run in their terminal; do
+   not retry another way if the sandbox denies it.
 4. **Index this project** (only if `indexed` is false): `codegraph init --yes` at the project
    root. It builds `.codegraph/` and keeps it in sync by itself afterwards (no `sync` needed).
 5. **Git.** If `gitignored` is false, append `.codegraph/` to `.gitignore` (the index is local,
@@ -42,8 +45,9 @@ npm package `codegraph` is an unrelated project with no CLI.
 
 - What was installed / wired / indexed, with the `codegraph status` numbers, and the skills
   written (they can be committed to share with the team).
-- If step 3 ran: **restart Claude Code** (or start a new session) so the `codegraph_explore`
-  tool loads; until then use `codegraph explore "<question>"` in Bash.
+- If the CLI was installed in this session: **restart Claude Code** (or start a new session) so
+  the plugin's MCP server starts and `codegraph_explore` loads; until then use
+  `codegraph explore "<question>"` in Bash.
 - Undo: `codegraph uninit` (this project), `codegraph uninstall` (everything).
 
 ## After setup: how to look up code

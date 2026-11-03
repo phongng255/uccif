@@ -53,6 +53,23 @@ def test_doctor_warns_on_fresh_project(project):
     assert any("not indexed by CodeGraph" in l for l in lines)
 
 
+def test_codegraph_state_reports_where_the_mcp_server_comes_from(project, repo, monkeypatch, tmp_path):
+    from uccif_lib import codegraph
+    home = tmp_path / "h"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setattr(codegraph, "plugin_mcp", lambda: False)
+    assert codegraph.state(project)["mcp"] is False and codegraph.state(project)["mcp_via"] is None
+    (home / ".claude.json").write_text('{"mcpServers": {"codegraph": {"command": "codegraph"}}}')
+    assert codegraph.state(project)["mcp_via"] == "config"
+    monkeypatch.setattr(codegraph, "plugin_mcp", lambda: True)
+    st = codegraph.state(project)
+    assert st["mcp"] is True and st["mcp_via"] == "plugin"
+    ok, lines = detect.doctor(project)
+    assert any("MCP server provided by the plugin" in l for l in lines)
+
+
 def test_detect_reports_codegraph_state(project, repo):
     (repo / ".codegraph").mkdir()
     (repo / ".gitignore").write_text(".codegraph/\n")

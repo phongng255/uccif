@@ -1,5 +1,20 @@
 # Changelog
 
+## 3.0.0-dev.35
+
+- **CodeGraph's MCP server is declared by the plugin** (`plugins/uccif/.mcp.json`:
+  `codegraph serve --mcp`, `alwaysLoad`). Claude Code refuses to let Claude edit its own config, so
+  the old `codegraph install --target=claude` step always ended with "run this yourself". Now the only
+  manual step left is installing the CLI (`npm install -g @colbymchenry/codegraph`, done by the
+  `uccif:codegraph` skill once you agree); after one Claude Code restart `codegraph_explore` loads.
+- The `uccif:codegraph` skill no longer runs `codegraph install --target=claude` (it would register a
+  second server with the same tools); it is kept only as a fallback for an older plugin.
+- State and hooks: `uccif codegraph` adds `mcp_via` (`plugin` / `config` / null); SessionStart no
+  longer claims CodeGraph is active when `.codegraph/` exists but the CLI does not; `uccif doctor`
+  says where the MCP server comes from.
+- If you already ran `codegraph install` yourself, you now have the server twice (yours and the
+  plugin's). Remove yours with `codegraph uninstall --target=claude` if the duplicate bothers you.
+
 ## 3.0.0-dev.34
 
 - **Project skills from the CodeGraph graph** (`skillgen.py`, `uccif skills generate|list`), for any

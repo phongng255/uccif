@@ -218,8 +218,10 @@ def doctor(project):
     cg = codegraph.state(project)
     check(bool(cg["cli"]), "codegraph CLI: %s" % cg["cli"],
           "codegraph CLI not installed (run the uccif:codegraph skill)")
-    check(cg["mcp"], "codegraph MCP server wired into Claude Code",
-          "codegraph MCP server not wired (`codegraph install --target=claude --location=global --yes`)")
+    check(cg["mcp"], ("codegraph MCP server provided by the plugin (.mcp.json); it starts when the CLI is "
+                      "installed, after a Claude Code restart") if cg["mcp_via"] == "plugin"
+          else "codegraph MCP server wired into Claude Code (your own config)",
+          "codegraph MCP server not wired (update the plugin, or `codegraph install --target=claude --location=global --yes`)")
     check(cg["indexed"], "project indexed by CodeGraph (.codegraph/)",
           "project not indexed by CodeGraph (`codegraph init --yes`)")
     d = detect(project)
