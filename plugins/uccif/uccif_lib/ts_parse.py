@@ -88,7 +88,9 @@ def parse(text, rel, lang):
     come from, [(enclosing function, "call"|"new", callee, aliased variable, [(local, member or
     None)], line)] for `const s = useStore()`, `const {a, b: c} = useStore()`, `const x = new Foo()`,
     `const {a} = storeToRefs(s)`; reads: [(enclosing function, object variable, property, line)]
-    for `obj.prop` that is not a call.
+    for `obj.prop` that is not a call. Props and emits declared by defineProps / defineEmits (script
+    setup, type or runtime form) or `props:` / `emits:` of an options component are symbols of kind
+    prop / emit; emit_calls (tenth item): [(enclosing function, event, line)] for `emit('event')`.
     heritage: [(class or interface name, base name as written, "extends"|"implements", line)];
     a dotted base keeps its dots (`mod.Base`), generic arguments are dropped.
     symbols: [(name, kind, line, scope)]; imports: [raw module strings];
@@ -277,6 +279,70 @@ def _js_origin(d, out):
         out.append((_js_caller(d), kind, callee, alias, names, d.start_point[0] + 1))
 
 
+def _as_object_type(body):
+    """interface_body shares the shape of object_type for our purposes."""
+    return body
+
+
+def _string_value(n):
+    """Text of a string literal node (quotes stripped), or None."""
+    if n is None or n.type not in ("string", "template_string"):
+        return None
+    frag = next((c for c in n.children if c.type == "string_fragment"), None)
+    return _txt(frag) if frag is not None else (_txt(n).strip("'\"`") if n.type == "string" else None)
+
+
+def _declared_names(node, type_props):
+    """[(name, line)] declared by a props / emits spec: an array of strings, an object literal, or
+    (in a type argument) an object type, a call-signature list or a type name from this file."""
+    out = []
+    if node is None:
+        return out
+    t = node.type
+    if t == "array":
+        for c in node.children:
+            v = _string_value(c)
+            if v:
+                out.append((v, c.start_point[0] + 1))
+    elif t == "object":
+        out += _obj_keys(node)
+    elif t == "type_identifier":
+        out += type_props.get(_txt(node), [])
+    elif t in ("object_type", "interface_body"):
+        for c in node.children:
+            if c.type == "property_signature":
+                k = c.children[0] if c.children else None
+                name = _string_value(k) if k is not None and k.type == "string" else _txt(k)
+                if name:
+                    out.append((name, c.start_point[0] + 1))
+            elif c.type == "call_signature":  # (e: 'save', x: T): void
+                params = next((x for x in c.children if x.type == "formal_parameters"), None)
+                first = next((x for x in (params.children if params is not None else [])
+                              if x.type in ("required_parameter", "optional_parameter")), None)
+                frag = None
+                for x in (_walk(first) if first is not None else []):
+                    if x.type == "string_fragment":
+                        frag = x
+                        break
+                if frag is not None:
+                    out.append((_txt(frag), c.start_point[0] + 1))
+    return out
+
+
+def _define_macro(call, name, syms, type_props):
+    """defineProps / defineEmits (and the options-API `props:` / `emits:` values)."""
+    kind = "prop" if name == "defineProps" else "emit"
+    targ = next((c for c in call.children if c.type == "type_arguments"), None)
+    args = call.child_by_field_name("arguments")
+    sources = []
+    if targ is not None:
+        sources += [c for c in targ.children if c.type not in ("<", ">", ",")][:1]
+    sources += [c for c in (args.children if args is not None else []) if c.type not in ("(", ")", ",")][:1]
+    for src in sources:
+        for nm, ln in _declared_names(src, type_props):
+            syms.append((nm, kind, ln, None))
+
+
 def _base_name(c):
     """Written name of a base class / interface node, or None when it is not a plain name."""
     t = c.type
@@ -315,6 +381,7 @@ def _js_heritage(n, cname, out):
 def _js(root):
     syms, imps, calls, binds, ilines, heritage = [], [], [], {}, {}, []
     members, origins, reads = [], [], []
+    type_props, emit_cands, macros = {}, [], []
 
     def add_import(raw, line):
         if raw and raw not in imps:
@@ -324,6 +391,33 @@ def _js(root):
     for n in _walk(root):
         t = n.type
         line = n.start_point[0] + 1
+        if t in ("interface_declaration", "type_alias_declaration"):
+            body = n.child_by_field_name("body") if t == "interface_declaration" else n.child_by_field_name("value")
+            if body is not None and body.type in ("object_type", "interface_body"):
+                type_props[_txt(n.child_by_field_name("name"))] = _declared_names(
+                    body if body.type == "object_type" else _as_object_type(body), type_props)
+        if t == "pair" and n.parent is not None and n.parent.type == "object":
+            key = _txt(n.child_by_field_name("key")).strip("'\"")
+            gp = n.parent.parent
+            if key in ("props", "emits") and gp is not None and (
+                    gp.type == "export_statement" or (gp.type == "arguments" and gp.parent is not None
+                                                      and _txt(gp.parent.child_by_field_name("function")) in (
+                                                          "defineComponent", "Vue.extend"))):
+                for nm, ln in _declared_names(n.child_by_field_name("value"), type_props):
+                    syms.append((nm, "prop" if key == "props" else "emit", ln, None))
+        if t == "call_expression":
+            fn0 = n.child_by_field_name("function")
+            if fn0 is not None and fn0.type == "identifier":
+                f0 = _txt(fn0)
+                if f0 in ("defineProps", "defineEmits"):
+                    macros.append((n, f0))
+                elif len(emit_cands) < 300:
+                    a0 = n.child_by_field_name("arguments")
+                    first = next((c for c in (a0.children if a0 is not None else []) if c.type not in ("(", ")", ",")),
+                                 None)
+                    ev = _string_value(first)
+                    if ev:
+                        emit_cands.append((_js_caller(n), f0, ev, line))
         if t == "variable_declarator":
             _js_origin(n, origins)
         elif t == "member_expression" and len(reads) < _MAX_CALLS:
@@ -399,9 +493,16 @@ def _js(root):
                 first = next((c for c in args.children if c.type == "string"), None)
                 if first is not None:
                     add_import(_txt(first).strip("'\"`"), line)
+    emit_vars = {"emit"}
+    for caller, kind, callee, alias, names, ln in origins:
+        if callee == "defineEmits":
+            emit_vars |= {nm for nm, _ in names}
+    for call, mname in macros:
+        _define_macro(call, mname, syms, type_props)
+    emit_calls = [(c, ev, ln) for c, f0, ev, ln in emit_cands if f0 in emit_vars]
     syms = [s for s in syms if s[0]]
     syms.sort(key=lambda s: s[2])
-    return syms, imps[:200], calls, binds, ilines, heritage, members, origins, reads
+    return syms, imps[:200], calls, binds, ilines, heritage, members, origins, reads, emit_calls
 
 
 def _js_bindings(stmt, raw, binds):
@@ -503,4 +604,4 @@ def _python(root):
         for c in reversed(n.children):
             stack.append((c, nxt_cls, nxt_top, nxt_caller))
     syms.sort(key=lambda s: s[2])
-    return syms, imps[:200], calls, binds, ilines, heritage, [], origins, []
+    return syms, imps[:200], calls, binds, ilines, heritage, [], origins, [], []

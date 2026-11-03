@@ -140,7 +140,7 @@ def test_package_calls_are_external_not_unresolved(project, vue_app, monkeypatch
     assert {"ref", "onMounted"} <= ext  # imported from 'vue'
     assert all(e[4] == "extracted" and e[1] is None for e in _edges(con, kind="calls_ext"))
     unres = {e[5] for e in _edges(con, confidence="unresolved")}
-    assert "ref" not in unres and "emit" in unres
+    assert "ref" not in unres and "emit" not in unres and "mount" in unres  # `emit` is a Vue macro now (calls_ext)
     # package calls never show up as "possibly called by"
     assert "Possibly called by" not in "\n".join(index.query_symbol(project, "ref"))
 
