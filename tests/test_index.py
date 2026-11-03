@@ -42,7 +42,7 @@ def test_build_extracts_symbols_imports_and_tests(project, repo):
     con = index.connect(project)
     syms = {(n, k) for n, k in con.execute("SELECT name, kind FROM symbols")}
     for expected in [("add", "function"), ("double", "function"), ("Point", "interface"),
-                     ("useCart", "store"), ("refresh", "function"), ("Cart", "component"),
+                     ("useCart", "variable"), ("refresh", "function"), ("Cart", "component"),
                      ("Order", "class"), ("total", "method"), ("MAX_ITEMS", "constant"),
                      ("helper", "function"), ("--brand-color", "css-var")]:
         assert expected in syms, expected
@@ -194,7 +194,7 @@ def test_tree_sitter_extracts_same_symbols_as_regex(project, repo, monkeypatch):
     con = index.connect(project)
     syms = {(n, k) for n, k in con.execute("SELECT name, kind FROM symbols")}
     for expected in [("add", "function"), ("double", "function"), ("Point", "interface"),
-                     ("useCart", "store"), ("refresh", "function"), ("Cart", "component"),
+                     ("useCart", "variable"), ("refresh", "function"), ("Cart", "component"),
                      ("Order", "class"), ("total", "method"), ("MAX_ITEMS", "constant"),
                      ("helper", "function")]:
         assert expected in syms, expected

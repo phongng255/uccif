@@ -88,7 +88,7 @@ VUE_APP = Path(__file__).resolve().parent / "fixtures" / "vue-app"
 
 
 def copy_vue_app(dest):
-    """Copy the fixed Vue 3 + Pinia + router fixture into `dest` and commit it."""
+    """Copy the fixed JS/TS fixture app (it has .vue files, read for their <script>) into `dest` and commit it."""
     import shutil
     for src in sorted(VUE_APP.rglob("*")):
         if src.is_file():

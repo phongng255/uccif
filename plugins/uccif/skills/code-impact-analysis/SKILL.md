@@ -9,11 +9,10 @@ description: Use before a refactor, rename, or any change to a shared interface,
 
 1. Name the change precisely: file, symbol, kind (rename / signature / behaviour / removal).
 2. Find dependents: start with `uccif index query --impact <file or symbol>` (importers,
-   callers, renders, store actions/state, props/emits, routes, CSS variables, types, up to 3
-   levels, each with `file:line`, plus the tests to run; `--depth 5` for core modules,
-   `--kinds store,vue` to narrow, `--min-confidence inferred` to include name/pattern matches,
-   which are hidden by default when certain edges exist). For a component, store or route also
-   run `--component` / `--store` / `--route`. Add `--symbol <name>` and `--path <A> <B>` to
+   callers, callbacks, types, variable reads/writes, up to 3 levels, each with `file:line`,
+   plus the tests to run; `--depth 5` for core modules, `--kinds calls,types` to narrow,
+   `--min-confidence inferred` to include name/pattern matches, which are hidden by default
+   when certain edges exist). Add `--symbol <name>` and `--path <A> <B>` to
    explain how two distant files connect. Then LSP references when active, and string
    references (events, config keys) with a bounded Grep. Edges are exact only for files parsed
    with tree-sitter; unresolved calls are listed as "possibly".

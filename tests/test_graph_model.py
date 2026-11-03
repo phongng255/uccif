@@ -30,9 +30,9 @@ def test_nodes_and_import_edges_without_tree_sitter(project, vue_app):
     index.update(project)
     con = index.connect(project, write=False)
     kinds = {k for (k,) in con.execute("SELECT DISTINCT kind FROM nodes")}
-    assert {"file", "store", "component", "interface", "css_var"} <= kinds  # '-' becomes '_' in node kinds
+    assert {"file", "variable", "component", "interface", "css_var"} <= kinds  # '-' becomes '_' in node kinds
     node = con.execute("SELECT kind, path, line FROM nodes WHERE id='src/stores/trip.ts#useTripStore'").fetchone()
-    assert node[0] == "store" and node[1] == "src/stores/trip.ts"
+    assert node[0] == "variable" and node[1] == "src/stores/trip.ts"
     assert con.execute("SELECT count(*) FROM nodes WHERE kind='file'").fetchone()[0] == 24
     ok = [e for e in _edges(con, kind="imports", src_path="src/App.vue", dst_path="src/stores/trip.ts")]
     assert len(ok) == 1 and ok[0][4] == "extracted" and ok[0][1] == "src/stores/trip.ts" and ok[0][5] == "@/stores/trip"
@@ -57,10 +57,10 @@ def test_call_edges_point_at_symbol_nodes(project, vue_app, monkeypatch):
     e = [x for x in _edges(con, kind="calls", src_path="src/composables/useSync.ts") if x[5] == "saveTrip"]
     assert e and e[0][4] == "extracted" and e[0][1] == "src/utils/firebase.ts#saveTrip"
     assert e[0][0] == "src/composables/useSync.ts#sync"  # caller is the enclosing function's node
-    # `store.addExpense()` is no longer a lead: it is tied to the store action (roadmap B4)
-    assert not _edges(con, kind="calls", src_path="src/components/ExpenseList.vue", confidence="unresolved")
-    act = _edges(con, kind="calls_action", src_path="src/components/ExpenseList.vue")
-    assert {x[5] for x in act} == {"addExpense", "removeExpense"} and all(x[4] == "extracted" for x in act)
+    # `store.addExpense()`: the member is not a top-level definition of the store file, so it stays a
+    # lead with no target (UCCIF has no framework layer to place it)
+    lead = _edges(con, kind="calls", src_path="src/components/ExpenseList.vue", confidence="unresolved")
+    assert {x[5] for x in lead} == {"addExpense", "removeExpense"} and all(x[1] is None for x in lead)
 
 
 def test_confidence_filter(project, vue_app, monkeypatch):

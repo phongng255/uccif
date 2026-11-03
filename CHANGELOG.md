@@ -1,5 +1,29 @@
 # Changelog
 
+## 3.0.0-dev.31
+
+- **The framework layer is gone** (asked for by the user): UCCIF is one core that fits any project,
+  with no knowledge of a particular framework. Removed: Vue template parsing (`renders`, template
+  calls, `passes_prop` / `listens` / `emits`), Pinia stores (`calls_action`, `reads_state`,
+  `uses_store`), `uses_composable`, vue-router routes and navigation (`routes_to`,
+  `navigates_to`), CSS links (`uses_css_var`, `defines_css_var`, `uses_class`), and with them the
+  `--component`, `--store`, `--route`, `--css-var` queries, `index graph --mode components`, the
+  `store` / `vue` / `css` / `route` kind groups and the optional `tree-sitter-html` grammar.
+- **The core is unchanged:** symbols, imports (aliases, barrels), calls (with variable origins and
+  class methods through base classes), callbacks, inheritance, type references, reads / writes of
+  module variables, tests, git co-change, `--impact` / `--path`, the graph view, Go / Rust / Java.
+  A `.vue` / `.svelte` file is still read for its `<script>` (file-type support), and CSS files keep
+  their `--var` / `$var` / `@mixin` symbols.
+- Every top-level JS/TS variable is a `variable` symbol now (before, a call result such as
+  `const s = make()` was skipped and `ref()` / `computed()` were a separate `ref` kind).
+- `SCHEMA` 16: an older index is rebuilt automatically; the `tags`, `tag_uses`, `navs`, `css_uses`
+  and `globals` tables are dropped. The parser keeps its 15-item result (the framework slots are
+  reserved, always empty).
+- `tests/bench_index.py --synthetic N` generates a plain TypeScript + Python app (modules importing
+  each other, classes, a barrel, module state). With tree-sitter: 200 modules (257 files) touch-1
+  136 ms; 800 modules (1007 files) touch-1 20 ms with the derived edges deferred (catch-up 2.5 s in
+  the next full-scan update). Without tree-sitter: 16 / 38 ms. Budget 300 ms.
+
 ## 3.0.0-dev.30
 
 - **Go, Rust and Java** (roadmap layer E), each with its own optional grammar

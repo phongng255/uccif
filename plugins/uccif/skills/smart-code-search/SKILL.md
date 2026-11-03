@@ -10,11 +10,8 @@ description: Use to find where a function, class, component, style or config is 
 1. **Code index** — `uccif index query --symbol <Name>` (definitions, callers, dependents, files
    that mention it), `--file <path>` (symbols, imports, imported-by, tests), `--tests-for <path>`,
    `--impact <path|symbol> [--depth N] [--kinds ...]` (what a change reaches, level by level),
-   `--path <A> <B>` (how two files/symbols connect). Vue / Pinia / router / CSS:
-   `--component <Name>` (who renders it, what it renders, props with who passes them, emits with
-   who listens, routes, stores), `--store <name>` (each action / state / getter and its users),
-   `--route </path|name>` (component shown, code that navigates there), `--css-var=--x`
-   (definitions and every use), `--cochange <path>` (files git history changes together).
+   `--path <A> <B>` (how two files/symbols connect), `--cochange <path>` (files git history
+   changes together).
    It refreshes changed files itself and answers in ≤ 30 lines. Never read the `.db`.
    `~approx` marks regex-extracted symbols, `~inferred` an edge matched by name or pattern;
    "Possibly called by" means the receiver could not be resolved: confirm these by reading the

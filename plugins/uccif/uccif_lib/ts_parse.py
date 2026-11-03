@@ -5,7 +5,7 @@ Everything here is best-effort: if `tree-sitter` or a grammar package is not ins
 universal-ctags, then regexes. UCCIF never installs anything; `uccif doctor` only reports.
 
 Optional packages: tree-sitter, tree-sitter-javascript, tree-sitter-typescript,
-tree-sitter-python.
+tree-sitter-python, tree-sitter-go, tree-sitter-rust, tree-sitter-java.
 """
 
 import os
@@ -18,13 +18,11 @@ _CONST_RE = re.compile(r"^[A-Z][A-Z0-9_]{2,}$")
 _MAX_CALLS = 1500
 _FN_VALUES = ("arrow_function", "function_expression", "function", "generator_function")
 KEYWORD_CALLS = {"require", "import", "super", "if", "for", "while", "switch", "catch", "return",
-                 "function", "constructor", "typeof", "await", "defineProps", "defineEmits",
-                 "defineExpose", "withDefaults"}
+                 "function", "constructor", "typeof", "await"}
 _CLASS_NODES = ("class_declaration", "abstract_class_declaration", "class")
 _MAX_IDENTS = 3000
 _TYPE_DECLS = ("interface_declaration", "type_alias_declaration", "class_declaration", "abstract_class_declaration",
                "enum_declaration", "type_parameter", "class")
-REF_CALLS = ("ref", "reactive", "computed", "shallowRef", "shallowReactive", "toRef", "readonly")
 _NOT_A_USE = ("variable_declarator", "function_declaration", "generator_function_declaration", "class_declaration",
               "import_specifier", "import_clause", "namespace_import", "export_specifier", "formal_parameters",
               "required_parameter", "optional_parameter", "labeled_statement", "break_statement",
@@ -61,7 +59,7 @@ def _ident_use(n):
     if pt == "member_expression":
         if par.child_by_field_name("object") != n:
             return None
-        gp = par.parent  # x.value = 1 writes the ref x
+        gp = par.parent  # x.value = 1 writes x
         if gp is not None and gp.type in ("assignment_expression", "augmented_assignment_expression") and \
                 gp.child_by_field_name("left") == par:
             return "w"
@@ -93,9 +91,6 @@ def _parser(grammar):
         if grammar == "python":
             import tree_sitter_python as mod
             lang = mod.language()
-        elif grammar == "html":
-            import tree_sitter_html as mod
-            lang = mod.language()
         elif grammar in ("go", "rust", "java"):  # roadmap layer E, each optional on its own
             mod = __import__("tree_sitter_" + grammar)
             lang = mod.language()
@@ -118,11 +113,6 @@ def availability():
         if _parser(g):
             out[g] = True
     return out
-
-
-def html_available():
-    """Is the optional tree-sitter-html grammar importable (Vue template parsing)?"""
-    return not disabled() and bool(_parser("html"))
 
 
 def grammar_for(rel, lang):
@@ -148,22 +138,16 @@ def _walk(root):
 
 
 def parse(text, rel, lang):
-    """-> (symbols, imports, calls, bindings, import_lines, heritage, members, origins, reads) or None.
-    members: [(store variable, member, "state"|"getter"|"action")] of Pinia stores (also in
-    symbols as kind store_member with scope = the store variable); origins: where local variables
-    come from, [(enclosing function, "call"|"new", callee, aliased variable, [(local, member or
-    None)], line)] for `const s = useStore()`, `const {a, b: c} = useStore()`, `const x = new Foo()`,
-    `const {a} = storeToRefs(s)`; reads: [(enclosing function, object variable, property, line)]
-    for `obj.prop` that is not a call. Props and emits declared by defineProps / defineEmits (script
-    setup, type or runtime form) or `props:` / `emits:` of an options component are symbols of kind
-    prop / emit; emit_calls (tenth item): [(enclosing function, event, line)] for `emit('event')`;
-    navs: [(enclosing function, "path"|"name", value, dynamic, line)] for `router.push/replace(...)`;
-    routes: [(full path, route name, ("ident", x) | ("import", module) | None, line)] of router configs
-    (also symbols of kind route, with the route name in members); callbacks (13th):
-    [(enclosing function, name, "this" | None, line)] for identifiers passed as call arguments;
-    idents (14th): [(enclosing function, name, "r"|"w", line)] for identifiers used as values (writes:
-    `x = `, `x += `, `x++`, `x.value = `); types (15th): [(enclosing function, type name, line)] for
-    type references (TS type positions, Python annotations).
+    """-> a 15-item tuple, or None:
+    (symbols, imports, calls, bindings, import_lines, heritage, members, origins, reads, emit_calls,
+    navs, routes, callbacks, idents, types). Items 7, 9, 10, 11, 12 (members, reads, emit_calls, navs,
+    routes) are reserved and always empty: the slots stay so the tuple shape is stable.
+    origins: where local variables come from, [(enclosing function, "call"|"new", callee, None,
+    [(local, member or None)], line)] for `const s = make()`, `const {a, b: c} = make()`,
+    `const x = new Foo()`; callbacks (13th): [(enclosing function, name, "this" | None, line)] for
+    identifiers passed as call arguments; idents (14th): [(enclosing function, name, "r"|"w", line)]
+    for identifiers used as values (writes: `x = `, `x += `, `x++`, `x.value = `); types (15th):
+    [(enclosing function, type name, line)] for type references (TS type positions, Python annotations).
     heritage: [(class or interface name, base name as written, "extends"|"implements", line)];
     a dotted base keeps its dots (`mod.Base`), generic arguments are dropped.
     symbols: [(name, kind, line, scope)]; imports: [raw module strings];
@@ -231,91 +215,6 @@ def _js_call(n, calls):
         calls.append((_js_caller(n), name, obj, n.start_point[0] + 1))
 
 
-def _obj_keys(obj):
-    """[(name, line)] of an object literal's keys / methods / shorthand properties."""
-    keys = []
-    for c in (obj.children if obj is not None else []):
-        if c.type == "pair":
-            k = c.child_by_field_name("key")
-            name = _txt(k).strip("'\"`") if k is not None else ""
-        elif c.type == "method_definition":
-            name = _txt(c.child_by_field_name("name"))
-        elif c.type == "shorthand_property_identifier":
-            name = _txt(c)
-        else:
-            continue
-        if name:
-            keys.append((name, c.start_point[0] + 1))
-    return keys
-
-
-def _returned_object(fn):
-    """The object a function / arrow returns, if it is a literal (`() => ({...})`, `return {...}`)."""
-    if fn is None:
-        return None
-    body = fn.child_by_field_name("body")
-    if body is None:
-        return None
-    if body.type == "parenthesized_expression":
-        return next((c for c in body.children if c.type == "object"), None)
-    if body.type == "statement_block":
-        for c in body.children:
-            if c.type == "return_statement":
-                return next((x for x in c.children if x.type == "object"), None)
-    return None
-
-
-def _pinia_members(call, store, syms, members):
-    """Members of `defineStore(id, options | setup)`: state / getters / actions, or the names a setup
-    store returns, classified by how each is declared (ref -> state, computed -> getter, function -> action)."""
-    args = call.child_by_field_name("arguments")
-    if args is None:
-        return
-    rest = [c for c in args.children if c.type not in ("(", ")", ",")][1:]
-    if not rest:
-        return
-    spec = rest[0]
-    found = []
-    if spec.type == "object":
-        for c in spec.children:
-            key = (_txt(c.child_by_field_name("key" if c.type == "pair" else "name")).strip("'\"")
-                   if c.type in ("pair", "method_definition") else "")
-            val = c.child_by_field_name("value") if c.type == "pair" else c
-            if key == "state":
-                found += [(n, "state", ln) for n, ln in _obj_keys(_returned_object(val))]
-            elif key in ("getters", "actions") and val is not None and val.type == "object":
-                found += [(n, key[:-1] if key == "getters" else "action", ln) for n, ln in _obj_keys(val)]
-                found = [(n, "getter" if k == "getter" else k, ln) for n, k, ln in found]
-    elif spec.type in ("arrow_function", "function_expression", "function"):
-        body = spec.child_by_field_name("body")
-        kinds = {}
-        for c in (body.children if body is not None and body.type == "statement_block" else []):
-            if c.type == "function_declaration":
-                kinds[_txt(c.child_by_field_name("name"))] = "action"
-            elif c.type == "lexical_declaration":
-                for d in c.children:
-                    if d.type != "variable_declarator":
-                        continue
-                    v = d.child_by_field_name("value")
-                    if v is None:
-                        continue
-                    callee = _txt(v.child_by_field_name("function")) if v.type == "call_expression" else ""
-                    kinds[_txt(d.child_by_field_name("name"))] = (
-                        "getter" if callee in ("computed",) else "action" if v.type in _FN_VALUES else "state")
-        for c in (_returned_object(spec).children if _returned_object(spec) is not None else []):
-            if c.type == "shorthand_property_identifier":
-                name, ref = _txt(c), _txt(c)
-            elif c.type == "pair":
-                name, v = _txt(c.child_by_field_name("key")), c.child_by_field_name("value")
-                ref = _txt(v) if v is not None and v.type == "identifier" else ""
-            else:
-                continue
-            found.append((name, kinds.get(ref, "state"), c.start_point[0] + 1))
-    for name, kind, line in found:
-        syms.append((name, "store_member", line, store))
-        members.append((store, name, kind))
-
-
 def _js_origin(d, out):
     """Record where the variable(s) declared by a `variable_declarator` come from."""
     name, val = d.child_by_field_name("name"), d.child_by_field_name("value")
@@ -331,14 +230,8 @@ def _js_origin(d, out):
         return
     if fn is None or fn.type != "identifier":
         return
-    callee, alias = _txt(fn), None
-    if callee == "storeToRefs":
-        a = val.child_by_field_name("arguments")
-        first = next((c for c in (a.children if a is not None else []) if c.type == "identifier"), None)
-        if first is None:
-            return
-        callee, alias = None, _txt(first)
-    elif callee in KEYWORD_CALLS:
+    callee = _txt(fn)
+    if callee in KEYWORD_CALLS:
         return
     names = []
     if name.type == "identifier":
@@ -352,168 +245,7 @@ def _js_origin(d, out):
                 if k is not None and v is not None and v.type == "identifier":
                     names.append((_txt(v), _txt(k)))
     if names:
-        out.append((_js_caller(d), kind, callee, alias, names, d.start_point[0] + 1))
-
-
-def route_target(node):
-    """What a router call / `to` attribute points at: (kind, value, dynamic) or None.
-    kind 'path' or 'name'; for a template literal or concatenation `value` is the static prefix and
-    dynamic is True (`/trip/${id}` -> ('path', '/trip/', True))."""
-    if node is None:
-        return None
-    t = node.type
-    if t == "string":
-        v = _string_value(node)
-        return ("path", v, False) if v is not None else None
-    if t == "template_string":
-        prefix = ""
-        for c in node.children:
-            if c.type == "string_fragment":
-                prefix += _txt(c)
-            elif c.type == "template_substitution":
-                return ("path", prefix, True)
-        return ("path", prefix, False)
-    if t == "binary_expression":
-        left = route_target(node.child_by_field_name("left"))
-        return ("path", left[1], True) if left and left[0] == "path" else None
-    if t == "parenthesized_expression":
-        inner = [c for c in node.children if c.type not in ("(", ")")]
-        return route_target(inner[0]) if inner else None
-    if t == "object":
-        found = {}
-        for c in node.children:
-            if c.type == "pair":
-                k = _txt(c.child_by_field_name("key")).strip("'\"")
-                if k in ("name", "path"):
-                    found[k] = route_target(c.child_by_field_name("value"))
-        if found.get("name") and found["name"][0] == "path":
-            return ("name", found["name"][1], found["name"][2])
-        return found.get("path")
-    return None
-
-
-def _route_info(obj):
-    """(path, name, component) of a route-record object literal, or None. component is
-    ('ident', name) or ('import', module) or None."""
-    path = name = comp = None
-    has_target = False
-    for c in obj.children:
-        if c.type != "pair":
-            continue
-        k = _txt(c.child_by_field_name("key")).strip("'\"")
-        v = c.child_by_field_name("value")
-        if k == "path":
-            path = _string_value(v)
-        elif k == "name":
-            name = _string_value(v)
-        elif k in ("component", "components") and v is not None:
-            has_target = True
-            if v.type == "identifier":
-                comp = ("ident", _txt(v))
-            else:
-                for x in _walk(v):
-                    if x.type == "call_expression" and _txt(x.child_by_field_name("function")) == "import":
-                        a = x.child_by_field_name("arguments")
-                        first = next((q for q in (a.children if a is not None else []) if q.type == "string"), None)
-                        if first is not None:
-                            comp = ("import", _string_value(first))
-                        break
-        elif k in ("redirect", "children"):
-            has_target = True
-    return (path, name, comp) if path is not None and has_target else None
-
-
-def _routes(root):
-    """Route records of a router config: [(full path, name, component, line)] with nested `children`
-    joined onto their parent's path."""
-    infos = {}
-    for n in _walk(root):
-        if n.type == "object":
-            info = _route_info(n)
-            if info:
-                infos[n.id] = (n, info)
-    out = []
-    for nid, (n, (path, name, comp)) in infos.items():
-        full, cur = path, n
-        while not full.startswith("/"):
-            par = cur.parent.parent.parent if cur.parent is not None and cur.parent.parent is not None else None
-            if par is None or par.id not in infos or cur.parent.type != "array":
-                full = "/" + full
-                break
-            full = infos[par.id][1][0].rstrip("/") + "/" + full
-            cur = par
-        out.append((full.replace("//", "/"), name, comp, n.start_point[0] + 1))
-    out.sort(key=lambda r: r[3])
-    return out
-
-
-def text_hint(root):
-    """Cheap pre-check so files without any `path` word skip the route scan."""
-    return root.text.decode("utf-8", errors="ignore") if root.end_byte < 400000 else "path"
-
-
-def _as_object_type(body):
-    """interface_body shares the shape of object_type for our purposes."""
-    return body
-
-
-def _string_value(n):
-    """Text of a string literal node (quotes stripped), or None."""
-    if n is None or n.type not in ("string", "template_string"):
-        return None
-    frag = next((c for c in n.children if c.type == "string_fragment"), None)
-    return _txt(frag) if frag is not None else (_txt(n).strip("'\"`") if n.type == "string" else None)
-
-
-def _declared_names(node, type_props):
-    """[(name, line)] declared by a props / emits spec: an array of strings, an object literal, or
-    (in a type argument) an object type, a call-signature list or a type name from this file."""
-    out = []
-    if node is None:
-        return out
-    t = node.type
-    if t == "array":
-        for c in node.children:
-            v = _string_value(c)
-            if v:
-                out.append((v, c.start_point[0] + 1))
-    elif t == "object":
-        out += _obj_keys(node)
-    elif t == "type_identifier":
-        out += type_props.get(_txt(node), [])
-    elif t in ("object_type", "interface_body"):
-        for c in node.children:
-            if c.type == "property_signature":
-                k = c.children[0] if c.children else None
-                name = _string_value(k) if k is not None and k.type == "string" else _txt(k)
-                if name:
-                    out.append((name, c.start_point[0] + 1))
-            elif c.type == "call_signature":  # (e: 'save', x: T): void
-                params = next((x for x in c.children if x.type == "formal_parameters"), None)
-                first = next((x for x in (params.children if params is not None else [])
-                              if x.type in ("required_parameter", "optional_parameter")), None)
-                frag = None
-                for x in (_walk(first) if first is not None else []):
-                    if x.type == "string_fragment":
-                        frag = x
-                        break
-                if frag is not None:
-                    out.append((_txt(frag), c.start_point[0] + 1))
-    return out
-
-
-def _define_macro(call, name, syms, type_props):
-    """defineProps / defineEmits (and the options-API `props:` / `emits:` values)."""
-    kind = "prop" if name == "defineProps" else "emit"
-    targ = next((c for c in call.children if c.type == "type_arguments"), None)
-    args = call.child_by_field_name("arguments")
-    sources = []
-    if targ is not None:
-        sources += [c for c in targ.children if c.type not in ("<", ">", ",")][:1]
-    sources += [c for c in (args.children if args is not None else []) if c.type not in ("(", ")", ",")][:1]
-    for src in sources:
-        for nm, ln in _declared_names(src, type_props):
-            syms.append((nm, kind, ln, None))
+        out.append((_js_caller(d), kind, callee, None, names, d.start_point[0] + 1))
 
 
 def _base_name(c):
@@ -553,8 +285,7 @@ def _js_heritage(n, cname, out):
 
 def _js(root):
     syms, imps, calls, binds, ilines, heritage = [], [], [], {}, {}, []
-    members, origins, reads = [], [], []
-    type_props, emit_cands, macros, nav_cands, callbacks = {}, [], [], [], []
+    origins, callbacks = [], []
     idents, types, declared = [], [], {}
 
     def add_import(raw, line):
@@ -565,22 +296,7 @@ def _js(root):
     for n in _walk(root):
         t = n.type
         line = n.start_point[0] + 1
-        if t in ("interface_declaration", "type_alias_declaration"):
-            body = n.child_by_field_name("body") if t == "interface_declaration" else n.child_by_field_name("value")
-            if body is not None and body.type in ("object_type", "interface_body"):
-                type_props[_txt(n.child_by_field_name("name"))] = _declared_names(
-                    body if body.type == "object_type" else _as_object_type(body), type_props)
-        if t == "pair" and n.parent is not None and n.parent.type == "object":
-            key = _txt(n.child_by_field_name("key")).strip("'\"")
-            gp = n.parent.parent
-            if key in ("props", "emits") and gp is not None and (
-                    gp.type == "export_statement" or (gp.type == "arguments" and gp.parent is not None
-                                                      and _txt(gp.parent.child_by_field_name("function")) in (
-                                                          "defineComponent", "Vue.extend"))):
-                for nm, ln in _declared_names(n.child_by_field_name("value"), type_props):
-                    syms.append((nm, "prop" if key == "props" else "emit", ln, None))
         if t == "call_expression":
-            fn0 = n.child_by_field_name("function")
             if len(callbacks) < _MAX_CALLS:  # functions handed to another call: watch(src, handler)
                 a2 = n.child_by_field_name("arguments")
                 for arg in (a2.children if a2 is not None else []):
@@ -589,24 +305,6 @@ def _js(root):
                     elif arg.type == "member_expression" and _txt(arg.child_by_field_name("object")) == "this":
                         callbacks.append((_js_caller(n), _txt(arg.child_by_field_name("property")), "this",
                                           arg.start_point[0] + 1))
-            if fn0 is not None and fn0.type == "member_expression" and len(nav_cands) < 300 and _txt(
-                    fn0.child_by_field_name("property")) in ("push", "replace"):
-                a1 = n.child_by_field_name("arguments")
-                tgt = route_target(next((c for c in (a1.children if a1 is not None else [])
-                                         if c.type not in ("(", ")", ",")), None))
-                if tgt:
-                    nav_cands.append((_js_caller(n), _txt(fn0.child_by_field_name("object")), tgt, line))
-            if fn0 is not None and fn0.type == "identifier":
-                f0 = _txt(fn0)
-                if f0 in ("defineProps", "defineEmits"):
-                    macros.append((n, f0))
-                elif len(emit_cands) < 300:
-                    a0 = n.child_by_field_name("arguments")
-                    first = next((c for c in (a0.children if a0 is not None else []) if c.type not in ("(", ")", ",")),
-                                 None)
-                    ev = _string_value(first)
-                    if ev:
-                        emit_cands.append((_js_caller(n), f0, ev, line))
         if t in ("variable_declarator", "formal_parameters", "catch_clause", "for_in_statement"):
             target = {"variable_declarator": "name", "catch_clause": "parameter", "for_in_statement": "left"}.get(t)
             part = n.child_by_field_name(target) if target else n
@@ -625,11 +323,6 @@ def _js(root):
                 types.append((_js_caller(n), _txt(n), line))
         if t == "variable_declarator":
             _js_origin(n, origins)
-        elif t == "member_expression" and len(reads) < _MAX_CALLS:
-            o, prop, par = n.child_by_field_name("object"), n.child_by_field_name("property"), n.parent
-            if o is not None and o.type == "identifier" and prop is not None and not (
-                    par is not None and par.type == "call_expression" and par.child_by_field_name("function") == n):
-                reads.append((_js_caller(n), _txt(o), _txt(prop), line))
         if t in ("function_declaration", "generator_function_declaration"):
             name = n.child_by_field_name("name")
             if name is not None:
@@ -665,7 +358,6 @@ def _js(root):
                 and parent.parent.type == "program"))
             if not top:
                 continue
-            exported = parent.type == "export_statement"
             for d in n.children:
                 if d.type != "variable_declarator":
                     continue
@@ -675,14 +367,7 @@ def _js(root):
                 dline = d.start_point[0] + 1
                 if val is not None and val.type in _FN_VALUES:
                     syms.append((_txt(name), "function", dline, None))
-                elif val is not None and val.type == "call_expression" \
-                        and _txt(val.child_by_field_name("function")) == "defineStore":
-                    syms.append((_txt(name), "store", dline, None))
-                    _pinia_members(val, _txt(name), syms, members)
-                elif val is not None and val.type == "call_expression" and _txt(
-                        val.child_by_field_name("function")) in REF_CALLS:
-                    syms.append((_txt(name), "ref", dline, None))  # ref() / reactive() / computed()
-                elif exported or (val is not None and val.type not in ("call_expression", "await_expression")):
+                else:  # module state: `let count = 0`, `const cache = new Map()`, `const state = make()`
                     syms.append((_txt(name), "variable", dline, None))
         elif t in ("import_statement", "export_statement"):
             src = n.child_by_field_name("source")
@@ -702,25 +387,9 @@ def _js(root):
                 if first is not None:
                     add_import(_txt(first).strip("'\"`"), line)
     idents = [i for i in idents if not (i[0] is not None and i[1] in declared.get(i[0], ()))]
-    emit_vars = {"emit"}
-    for caller, kind, callee, alias, names, ln in origins:
-        if callee == "defineEmits":
-            emit_vars |= {nm for nm, _ in names}
-    for call, mname in macros:
-        _define_macro(call, mname, syms, type_props)
-    emit_calls = [(c, ev, ln) for c, f0, ev, ln in emit_cands if f0 in emit_vars]
-    router_vars = {"router", "$router", "this.$router"}
-    for caller, kind, callee, alias, names, ln in origins:
-        if callee == "useRouter":
-            router_vars |= {nm for nm, _ in names}
-    navs = [(c, tgt[0], tgt[1], tgt[2], ln) for c, obj, tgt, ln in nav_cands if obj in router_vars]
-    routes = _routes(root) if "path" in text_hint(root) else []
-    for full, rname, comp, ln in routes:
-        syms.append((full, "route", ln, None))
-        members.append((None, full, rname))
     syms = [s for s in syms if s[0]]
     syms.sort(key=lambda s: s[2])
-    return (syms, imps[:200], calls, binds, ilines, heritage, members, origins, reads, emit_calls, navs, routes,
+    return (syms, imps[:200], calls, binds, ilines, heritage, [], origins, [], [], [], [],
             callbacks, idents, types)
 
 
