@@ -1,5 +1,29 @@
 # Changelog
 
+## 3.0.0-dev.21
+
+- **CSS variables and classes** (phase 2, step 9; `SCHEMA` 12, an older index is rebuilt
+  automatically). Regex based, so it also works without tree-sitter (template classes need the
+  HTML grammar).
+  - New definitions: CSS custom properties inside `<style>` blocks of `.vue`/`.svelte` files (CSS
+    files already had them) and class selectors (`.btn`, `.card:hover > .title`, nested SCSS) in
+    stylesheets and `<style>` blocks, as `css_class` nodes (`detail` = `scoped` for
+    `<style scoped>` / `<style module>`). Comments, `@media` preludes, attribute values and numbers
+    (`0.5s`) are not mistaken for classes.
+  - `uses_css_var` (D3): every `var(--x)` (CSS, `<style>`, inline `style=`, CSS-in-JS strings) and
+    `getPropertyValue('--x')`, to each definition of the variable (`extracted`); a variable defined
+    nowhere in the repo (a library's) is an `unresolved` lead. `defines_css_var`:
+    `el.style.setProperty('--x', ...)`.
+  - `uses_class` (D4, `inferred`): a template class (`class="a b"`, `:class="{ a: x }"`,
+    `:class="['a']"`) to a selector of that exact name: the component's own `<style>` first, else
+    stylesheets and unscoped `<style>` blocks; another component's scoped style never counts, and
+    classes with no selector (utility CSS) add nothing.
+  - `--impact tokens.css` lists the components using its variables ("uses CSS variable --brand-color
+    at :11"); `--symbol --brand-color` shows `Used by (n)`. Recomputed after every update, so a
+    renamed variable turns its users into leads.
+- Measured: one-file update 8 ms on the fixture (budget 300 ms); DB +10%. Unresolved share: fixture
+  9%, this repo 51%.
+
 ## 3.0.0-dev.20
 
 - **Deeper call resolution** (phase 2, step 8; `SCHEMA` 11, an older index is rebuilt automatically).
