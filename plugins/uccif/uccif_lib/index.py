@@ -26,7 +26,7 @@ from uccif_lib import ts_parse, vue_template
 from uccif_lib.resolve import JS_RESOLVE_EXT, Resolver  # noqa: F401 (re-exported)
 from uccif_lib.paths import LockTimeout, file_lock, now_iso
 
-SCHEMA = 9
+SCHEMA = 10
 MAX_BYTES = 1000000
 QUERY_LINES = 30
 
@@ -176,6 +176,9 @@ def connect(project, write=True):
         CREATE TABLE IF NOT EXISTS tag_uses (path TEXT, tag TEXT, line INTEGER, kind TEXT, name TEXT,
             attr_line INTEGER);
         CREATE INDEX IF NOT EXISTS tag_uses_path ON tag_uses(path);
+        CREATE TABLE IF NOT EXISTS navs (src_id TEXT, src_path TEXT, line INTEGER, kind TEXT, value TEXT,
+            dynamic INTEGER);
+        CREATE INDEX IF NOT EXISTS navs_path ON navs(src_path);
         CREATE TABLE IF NOT EXISTS globals (path TEXT, name TEXT, target TEXT, line INTEGER);
         CREATE INDEX IF NOT EXISTS tags_path ON tags(path);
         CREATE INDEX IF NOT EXISTS globals_path ON globals(path);
@@ -196,7 +199,7 @@ def connect(project, write=True):
     if _meta(con, "schema") not in (None, str(SCHEMA)):
         con.executescript("DELETE FROM files; DELETE FROM symbols; DELETE FROM imports; DELETE FROM calls; "
                          "DELETE FROM nodes; DELETE FROM edges; DELETE FROM bindings; DELETE FROM tags; "
-                         "DELETE FROM globals; DELETE FROM refs; DELETE FROM tag_uses; DELETE FROM meta;")
+                         "DELETE FROM globals; DELETE FROM refs; DELETE FROM tag_uses; DELETE FROM navs; DELETE FROM meta;")
     _set_meta(con, "schema", SCHEMA)
     return con
 
@@ -378,7 +381,7 @@ def _update(project, full, only=None):
     if full:
         con.executescript("DELETE FROM files; DELETE FROM symbols; DELETE FROM imports; DELETE FROM calls; "
                           "DELETE FROM nodes; DELETE FROM edges; DELETE FROM bindings; DELETE FROM tags; "
-                          "DELETE FROM globals; DELETE FROM refs; DELETE FROM tag_uses;")
+                          "DELETE FROM globals; DELETE FROM refs; DELETE FROM tag_uses; DELETE FROM navs;")
     known = {r[0]: (r[1], r[2], r[3]) for r in con.execute("SELECT path, size, mtime, hash FROM files")}
     if only is not None:
         only = {p.replace(os.sep, "/") for p in only if lang_of(p.replace(os.sep, "/"))}
@@ -430,7 +433,8 @@ def _update(project, full, only=None):
                     stem = PurePosixPath(rel).stem
                     res = (res[:2] + (res[2] + [(stem, n, o, ln) for n, o, ln in tpl.calls],) + res[3:8]
                            + (res[8] + [(stem, o, pr, ln) for o, pr, ln in tpl.reads],)
-                           + (res[9] + [(stem, ev, ln) for ev, ln in tpl.emits],))
+                           + (res[9] + [(stem, ev, ln) for ev, ln in tpl.emits],)
+                           + (res[10] + [(stem, k, v, d, ln) for k, v, d, ln in tpl.navs],) + res[11:])
                     tpl_tags[rel] = tpl.tags
                     tpl_uses[rel] = tpl.uses
             ast[rel] = res
@@ -468,7 +472,9 @@ def _update(project, full, only=None):
                     (rel, lang, st.st_size, st.st_mtime, h, int(is_test(rel)), len(rows)))
         _write_graph(con, rel, lang, rows, imps, call_rows, resolver, text, herit_rows, tag_rows, ref_rows,
                      {(m[0], m[1]): m[2] for m in ast[rel][6]} if rel in ast else {},
-                     ast[rel][9] if rel in ast else (), tpl_uses.get(rel, ()))
+                     ast[rel][9] if rel in ast else (), tpl_uses.get(rel, ()),
+                     ast[rel][10] if rel in ast else (),
+                     _resolve_routes(rel, lang, ast[rel], resolver) if rel in ast else ())
     if to_parse or removed or full:
         _through_barrels(con)
         _derive_all(con)
@@ -766,6 +772,7 @@ def _derive_all(con):
     con.execute("DELETE FROM edges WHERE via LIKE '~%'")
     _derive_components(con)
     _derive_links(con)
+    _derive_navs(con)
     _derive_members(con)
     _derive_uses(con)
 
@@ -785,6 +792,73 @@ def _base_chain(con, class_id, depth=5):
         out += nxt
         cur = nxt
     return out
+
+
+def _resolve_routes(rel, lang, parsed, resolver):
+    """[(path, line, component file or None, has a component, component name)] of a router config."""
+    routes = parsed[11] if len(parsed) > 11 else ()
+    if not routes:
+        return []
+    bound, _ = _bind_map(rel, lang, parsed[3], resolver)
+    rows = []
+    for full, _name, comp, line in routes:
+        if comp is None:
+            rows.append((full, line, None, False, None))
+        elif comp[0] == "import":
+            cpath = resolver.resolve(rel, comp[1], lang)
+            rows.append((full, line, cpath, True, PurePosixPath(cpath).stem if cpath else None))
+        else:
+            cpath, orig = bound.get(comp[1], (None, None))
+            rows.append((full, line, cpath, True, (PurePosixPath(cpath).stem if cpath and cpath.endswith(".vue")
+                                                   else orig) if cpath else None))
+    return rows
+
+
+def _route_regex(path):
+    parts = []
+    for seg in path.strip("/").split("/"):
+        if "(" in seg or "*" in seg:
+            parts.append(".*")
+        elif seg.startswith(":"):
+            parts.append("[^/]*" if seg.endswith(("?", "*")) else "[^/]+")
+        else:
+            parts.append(re.escape(seg))
+    return re.compile("^/" + "/".join(parts) + "/?$")
+
+
+def _derive_navs(con):
+    """navigates_to: `router.push('/x')`, `router.push({ name })`, `<RouterLink to>` tied to the route
+    they open. Exact path or name: extracted; a path that only fits a pattern (`/trip/:id`) or has
+    a dynamic part: inferred; no route: an unresolved lead. External URLs and relative targets are
+    ignored."""
+    routes = con.execute("SELECT id, name, path, detail FROM nodes WHERE kind='route'").fetchall()
+    if not routes:
+        return
+    regexes = [(_route_regex(r[1]), r) for r in routes]
+    new = []
+    for sid, sp, line, kind, value, dyn in con.execute("SELECT src_id, src_path, line, kind, value, dynamic "
+                                                      "FROM navs").fetchall():
+        hit, conf = None, "extracted"
+        if kind == "name":
+            hit = next((r for r in routes if r[3] == value), None)
+        else:
+            if not value.startswith("/"):
+                continue
+            v = re.split(r"[?#]", value)[0]
+            v = v if dyn else (v.rstrip("/") or "/")  # a dynamic prefix keeps its trailing slash
+            if not dyn:
+                hit = next((r for r in routes if r[1].rstrip("/") == v or (r[1] == "/" and v == "/")), None)
+            if hit is None:
+                sample = v + ("x" if dyn else "")
+                # catch-all routes (`/:pathMatch(.*)*`) never count: a path only they accept has no real route
+                cands = [r for rx, r in regexes if rx.match(sample) and "(" not in r[1] and "*" not in r[1]]
+                hit = (cands or [None])[0]
+                conf = "inferred"
+        if hit:
+            new.append((sid, hit[0], "navigates_to", line, conf, value, sp, hit[2], "~nav"))
+        else:
+            new.append((sid, None, "navigates_to", line, "unresolved", value, sp, None, "~nav"))
+    con.executemany("INSERT INTO edges VALUES (?,?,?,?,?,?,?,?,?)", new)
 
 
 def _derive_links(con):
@@ -909,7 +983,7 @@ def _derive_components(con):
 def _sym_id(path, name, scope, kind=None):
     """Stable node id. Props and emits get a kind prefix so `title` the prop and `title` the event
     (or a method) never collide."""
-    pre = kind + ":" if kind in ("prop", "emit") else ""
+    pre = kind + ":" if kind in ("prop", "emit", "route") else ""
     return "%s#%s%s%s" % (path, (scope + ".") if scope else "", pre, name)
 
 
@@ -959,7 +1033,7 @@ def _resolve_tags(rel, lang, parsed, tags, resolver):
 
 
 def _write_graph(con, rel, lang, sym_rows, imps, call_rows, resolver, text="", herit_rows=(), tag_rows=(),
-                 ref_rows=(), member_kinds=None, emit_rows=(), use_rows=()):
+                 ref_rows=(), member_kinds=None, emit_rows=(), use_rows=(), nav_rows=(), route_rows=()):
     """Mirror one parsed file into the unified graph: nodes (file + symbols) and edges.
 
     Node ids are stable (`path` for a file, `path#Scope.name` for a symbol) so edges from other
@@ -969,7 +1043,7 @@ def _write_graph(con, rel, lang, sym_rows, imps, call_rows, resolver, text="", h
     nodes = [(rel, "file", PurePosixPath(rel).name, rel, 1, None, None, None, None)]
     for n, k, _, ln, sc, pr in sym_rows:
         nodes.append((_sym_id(rel, n, sc, k), k.replace("-", "_"), n, rel, ln, None, sc, pr,
-                      member_kinds.get((sc, n)) if k == "store_member" else None))
+                      member_kinds.get((sc, n)) if k in ("store_member", "route") else None))
     con.executemany("INSERT OR IGNORE INTO nodes VALUES (?,?,?,?,?,?,?,?,?)", nodes)
     edges = []
     own_ids = {nd[0] for nd in nodes}
@@ -1012,6 +1086,16 @@ def _write_graph(con, rel, lang, sym_rows, imps, call_rows, resolver, text="", h
         edges.append((_caller_id(rel, caller, own), dst, "emits", line, "extracted" if dst else "unresolved", event,
                       rel, rel if dst else None, None))
     con.executemany("INSERT INTO tag_uses VALUES (?,?,?,?,?,?)", [(rel,) + tuple(u) for u in use_rows])
+    con.executemany("INSERT INTO navs VALUES (?,?,?,?,?,?)",
+                    [(_caller_id(rel, c, own), rel, ln, k, v, int(d)) for c, k, v, d, ln in nav_rows])
+    for full, line, cpath, has_comp, cname in route_rows:  # route -> the component it shows
+        rid = _sym_id(rel, full, None, "route")
+        if rid not in own_ids or not has_comp:
+            continue
+        if cpath:
+            edges.append((rid, _dst_node(con, cpath, cname), "routes_to", line, "extracted", full, rel, cpath, None))
+        else:
+            edges.append((rid, None, "routes_to", line, "unresolved", full, rel, None, None))
     con.executemany("INSERT INTO refs VALUES (?,?,?,?,?,?,?)",
                     [(_caller_id(rel, c, own), rel, k, m, ln, op, on) for c, k, m, ln, op, on in ref_rows])
     for tag, line, status, cpath, name in tag_rows:
@@ -1061,6 +1145,7 @@ def _drop(con, rel):
     con.execute("DELETE FROM globals WHERE path=?", (rel,))
     con.execute("DELETE FROM refs WHERE src_path=?", (rel,))
     con.execute("DELETE FROM tag_uses WHERE path=?", (rel,))
+    con.execute("DELETE FROM navs WHERE src_path=?", (rel,))
     con.execute("DELETE FROM nodes WHERE path=?", (rel,))
     con.execute("DELETE FROM edges WHERE src_path=?", (rel,))
     con.execute("DELETE FROM files WHERE path=?", (rel,))
@@ -1210,11 +1295,15 @@ def _relations(con, defs, budget, cap=5):
     renders = con.execute("SELECT detail, dst_path, confidence, line FROM edges WHERE src_id IN %s AND kind IN "
                           "('renders','renders_ext') ORDER BY line" % mark, ids).fetchall()
     used = con.execute("SELECT DISTINCT src_id, src_path, line, kind FROM edges WHERE dst_id IN %s AND kind IN "
-                       "('reads_state','uses_store','uses_composable','passes_prop','listens','emits') "
+                       "('reads_state','uses_store','uses_composable','passes_prop','listens','emits','navigates_to') "
                        "ORDER BY src_path, line" % mark,
                        ids).fetchall()
     rendered = con.execute("SELECT DISTINCT src_id, src_path, line, confidence FROM edges WHERE dst_id IN %s AND "
                            "kind='renders' ORDER BY src_path, line" % mark, ids).fetchall()
+    routed_to = con.execute("SELECT DISTINCT detail, dst_path, line, src_path FROM edges WHERE src_id IN %s AND "
+                            "kind='routes_to' AND dst_path IS NOT NULL ORDER BY line" % mark, ids).fetchall()
+    routed_by = con.execute("SELECT DISTINCT detail, src_path, line FROM edges WHERE dst_id IN %s AND "
+                            "kind='routes_to' ORDER BY src_path, line" % mark, ids).fetchall()
     tested = con.execute("SELECT DISTINCT src_path, line FROM edges WHERE dst_id IN %s AND kind='tests' "
                          "ORDER BY src_path, line" % mark, ids).fetchall()
     sections = []
@@ -1224,6 +1313,11 @@ def _relations(con, defs, budget, cap=5):
     if down:
         sections.append(("Subclasses / implementations (%d)" % len(down), [
             "%s:%d  %s (%s)" % (sp, ln, sid.split("#", 1)[-1], k) for sid, k, sp, ln in down]))
+    if routed_to:
+        sections.append(("Routes to", ["%s  %s" % (d, dp) for d, dp, _, _ in routed_to]))
+    if routed_by:
+        sections.append(("Routed from (%d)" % len(routed_by), ["%s  (%s:%d)" % (d, sp, ln)
+                                                               for d, sp, ln in routed_by]))
     if used:
         sections.append(("Used by (%d)" % len(used), [
             "%s:%d%s  (%s)" % (sp, ln, (" in " + sid[len(sp) + 1:]) if sid.startswith(sp + "#") else "",
@@ -1310,7 +1404,8 @@ def _edge_text(con, src, dst):
         bits.append("calls %s at :%d%s%s" % (c[1], c[0], (" in " + caller) if caller else "",
                                               " (+%d more)" % (n - 1) if n > 1 else ""))
     for k, verb in (("calls_action", "calls store action"), ("reads_state", "reads store state"),
-                    ("uses_store", "uses store"), ("uses_composable", "uses composable")):
+                    ("uses_store", "uses store"), ("uses_composable", "uses composable"),
+                    ("routes_to", "routes to"), ("navigates_to", "navigates to")):
         e = con.execute("SELECT line, detail FROM edges WHERE kind=? AND src_path=? AND dst_path=? "
                         "ORDER BY line LIMIT 1", (k, src, dst)).fetchone()
         if e:
@@ -1325,7 +1420,8 @@ def _edge_text(con, src, dst):
     return "%s%s  %s" % (src, (":%d" % line) if line else "", "; ".join(bits) or "depends on it")
 
 
-DEFAULT_KINDS = ("imports", "calls", "renders", "calls_action", "reads_state", "uses_store", "uses_composable")
+DEFAULT_KINDS = ("imports", "calls", "renders", "calls_action", "reads_state", "uses_store", "uses_composable",
+                 "routes_to", "navigates_to")
 
 
 def _users_of(con, rel, kinds=DEFAULT_KINDS, min_confidence=None):

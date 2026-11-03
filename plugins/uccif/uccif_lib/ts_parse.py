@@ -90,7 +90,10 @@ def parse(text, rel, lang):
     `const {a} = storeToRefs(s)`; reads: [(enclosing function, object variable, property, line)]
     for `obj.prop` that is not a call. Props and emits declared by defineProps / defineEmits (script
     setup, type or runtime form) or `props:` / `emits:` of an options component are symbols of kind
-    prop / emit; emit_calls (tenth item): [(enclosing function, event, line)] for `emit('event')`.
+    prop / emit; emit_calls (tenth item): [(enclosing function, event, line)] for `emit('event')`;
+    navs: [(enclosing function, "path"|"name", value, dynamic, line)] for `router.push/replace(...)`;
+    routes: [(full path, route name, ("ident", x) | ("import", module) | None, line)] of router configs
+    (also symbols of kind route, with the route name in members).
     heritage: [(class or interface name, base name as written, "extends"|"implements", line)];
     a dotted base keeps its dots (`mod.Base`), generic arguments are dropped.
     symbols: [(name, kind, line, scope)]; imports: [raw module strings];
@@ -279,6 +282,103 @@ def _js_origin(d, out):
         out.append((_js_caller(d), kind, callee, alias, names, d.start_point[0] + 1))
 
 
+def route_target(node):
+    """What a router call / `to` attribute points at: (kind, value, dynamic) or None.
+    kind 'path' or 'name'; for a template literal or concatenation `value` is the static prefix and
+    dynamic is True (`/trip/${id}` -> ('path', '/trip/', True))."""
+    if node is None:
+        return None
+    t = node.type
+    if t == "string":
+        v = _string_value(node)
+        return ("path", v, False) if v is not None else None
+    if t == "template_string":
+        prefix = ""
+        for c in node.children:
+            if c.type == "string_fragment":
+                prefix += _txt(c)
+            elif c.type == "template_substitution":
+                return ("path", prefix, True)
+        return ("path", prefix, False)
+    if t == "binary_expression":
+        left = route_target(node.child_by_field_name("left"))
+        return ("path", left[1], True) if left and left[0] == "path" else None
+    if t == "parenthesized_expression":
+        inner = [c for c in node.children if c.type not in ("(", ")")]
+        return route_target(inner[0]) if inner else None
+    if t == "object":
+        found = {}
+        for c in node.children:
+            if c.type == "pair":
+                k = _txt(c.child_by_field_name("key")).strip("'\"")
+                if k in ("name", "path"):
+                    found[k] = route_target(c.child_by_field_name("value"))
+        if found.get("name") and found["name"][0] == "path":
+            return ("name", found["name"][1], found["name"][2])
+        return found.get("path")
+    return None
+
+
+def _route_info(obj):
+    """(path, name, component) of a route-record object literal, or None. component is
+    ('ident', name) or ('import', module) or None."""
+    path = name = comp = None
+    has_target = False
+    for c in obj.children:
+        if c.type != "pair":
+            continue
+        k = _txt(c.child_by_field_name("key")).strip("'\"")
+        v = c.child_by_field_name("value")
+        if k == "path":
+            path = _string_value(v)
+        elif k == "name":
+            name = _string_value(v)
+        elif k in ("component", "components") and v is not None:
+            has_target = True
+            if v.type == "identifier":
+                comp = ("ident", _txt(v))
+            else:
+                for x in _walk(v):
+                    if x.type == "call_expression" and _txt(x.child_by_field_name("function")) == "import":
+                        a = x.child_by_field_name("arguments")
+                        first = next((q for q in (a.children if a is not None else []) if q.type == "string"), None)
+                        if first is not None:
+                            comp = ("import", _string_value(first))
+                        break
+        elif k in ("redirect", "children"):
+            has_target = True
+    return (path, name, comp) if path is not None and has_target else None
+
+
+def _routes(root):
+    """Route records of a router config: [(full path, name, component, line)] with nested `children`
+    joined onto their parent's path."""
+    infos = {}
+    for n in _walk(root):
+        if n.type == "object":
+            info = _route_info(n)
+            if info:
+                infos[n.id] = (n, info)
+    out = []
+    for nid, (n, (path, name, comp)) in infos.items():
+        full, cur = path, n
+        while not full.startswith("/"):
+            par = cur.parent.parent.parent if cur.parent is not None and cur.parent.parent is not None else None
+            if par is None or par.id not in infos or cur.parent.type != "array":
+                full = "/" + full
+                break
+            full = infos[par.id][1][0].rstrip("/") + "/" + full
+            cur = par
+        out.append((full.replace("//", "/"), name, comp, n.start_point[0] + 1))
+    out.sort(key=lambda r: r[3])
+    return out
+
+
+def text_hint(root):
+    """Cheap pre-check so files without any `path` word skip the route scan."""
+    return root.text.decode("utf-8", errors="ignore") if root.end_byte < 400000 else "path"
+
+
 def _as_object_type(body):
     """interface_body shares the shape of object_type for our purposes."""
     return body
@@ -381,7 +481,7 @@ def _js_heritage(n, cname, out):
 def _js(root):
     syms, imps, calls, binds, ilines, heritage = [], [], [], {}, {}, []
     members, origins, reads = [], [], []
-    type_props, emit_cands, macros = {}, [], []
+    type_props, emit_cands, macros, nav_cands = {}, [], [], []
 
     def add_import(raw, line):
         if raw and raw not in imps:
@@ -407,6 +507,13 @@ def _js(root):
                     syms.append((nm, "prop" if key == "props" else "emit", ln, None))
         if t == "call_expression":
             fn0 = n.child_by_field_name("function")
+            if fn0 is not None and fn0.type == "member_expression" and len(nav_cands) < 300 and _txt(
+                    fn0.child_by_field_name("property")) in ("push", "replace"):
+                a1 = n.child_by_field_name("arguments")
+                tgt = route_target(next((c for c in (a1.children if a1 is not None else [])
+                                         if c.type not in ("(", ")", ",")), None))
+                if tgt:
+                    nav_cands.append((_js_caller(n), _txt(fn0.child_by_field_name("object")), tgt, line))
             if fn0 is not None and fn0.type == "identifier":
                 f0 = _txt(fn0)
                 if f0 in ("defineProps", "defineEmits"):
@@ -500,9 +607,18 @@ def _js(root):
     for call, mname in macros:
         _define_macro(call, mname, syms, type_props)
     emit_calls = [(c, ev, ln) for c, f0, ev, ln in emit_cands if f0 in emit_vars]
+    router_vars = {"router", "$router", "this.$router"}
+    for caller, kind, callee, alias, names, ln in origins:
+        if callee == "useRouter":
+            router_vars |= {nm for nm, _ in names}
+    navs = [(c, tgt[0], tgt[1], tgt[2], ln) for c, obj, tgt, ln in nav_cands if obj in router_vars]
+    routes = _routes(root) if "path" in text_hint(root) else []
+    for full, rname, comp, ln in routes:
+        syms.append((full, "route", ln, None))
+        members.append((None, full, rname))
     syms = [s for s in syms if s[0]]
     syms.sort(key=lambda s: s[2])
-    return syms, imps[:200], calls, binds, ilines, heritage, members, origins, reads, emit_calls
+    return syms, imps[:200], calls, binds, ilines, heritage, members, origins, reads, emit_calls, navs, routes
 
 
 def _js_bindings(stmt, raw, binds):
@@ -604,4 +720,4 @@ def _python(root):
         for c in reversed(n.children):
             stack.append((c, nxt_cls, nxt_top, nxt_caller))
     syms.sort(key=lambda s: s[2])
-    return syms, imps[:200], calls, binds, ilines, heritage, [], origins, [], []
+    return syms, imps[:200], calls, binds, ilines, heritage, [], origins, [], [], [], []
