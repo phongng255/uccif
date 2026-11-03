@@ -25,7 +25,7 @@ from pathlib import Path, PurePosixPath
 from uccif_lib import ts_parse
 from uccif_lib.paths import LockTimeout, file_lock, now_iso
 
-SCHEMA = 2
+SCHEMA = 3
 MAX_BYTES = 1000000
 QUERY_LINES = 30
 
@@ -157,11 +157,12 @@ def connect(project, write=True):
             mtime REAL, hash TEXT, is_test INTEGER, n_symbols INTEGER);
         CREATE TABLE IF NOT EXISTS symbols (name TEXT, kind TEXT, path TEXT, line INTEGER,
             scope TEXT, precision TEXT);
-        CREATE TABLE IF NOT EXISTS imports (src TEXT, raw TEXT, target TEXT);
+        CREATE TABLE IF NOT EXISTS imports (src TEXT, raw TEXT, target TEXT, line INTEGER);
         CREATE TABLE IF NOT EXISTS calls (src_path TEXT, src_symbol TEXT, callee_name TEXT,
             callee_path TEXT, line INTEGER);
         CREATE INDEX IF NOT EXISTS call_callee ON calls(callee_name);
         CREATE INDEX IF NOT EXISTS call_src ON calls(src_path);
+        CREATE INDEX IF NOT EXISTS call_cpath ON calls(callee_path);
         CREATE INDEX IF NOT EXISTS sym_name ON symbols(name);
         CREATE INDEX IF NOT EXISTS sym_lname ON symbols(lower(name));
         CREATE INDEX IF NOT EXISTS sym_path ON symbols(path);
@@ -305,7 +306,8 @@ def ctags_symbols(exe, root, paths):
     return res
 
 
-def raw_imports(text, lang):
+def raw_imports(text, lang, lines=None):
+    """Import strings found by regex. If `lines` is a dict it receives {raw: first line}."""
     fam = LANG_FAMILY.get(lang)
     rxs = IMPORT_RES.get(fam, [])
     seen = []
@@ -314,6 +316,8 @@ def raw_imports(text, lang):
             v = m.group(1)
             if v and v not in seen:
                 seen.append(v)
+                if lines is not None:
+                    lines[v] = text.count("\n", 0, m.start(1)) + 1
     return seen[:200]
 
 
@@ -465,19 +469,19 @@ def _update(project, full, only=None):
             syms, precision = list(ast[rel][0]), "ast"
             if lang in ("vue", "svelte"):
                 syms.append((None, "component", 1, None))
-            raws = ast[rel][1]
+            raws, ilines = ast[rel][1], ast[rel][4]
             call_rows = _resolve_calls(rel, lang, ast[rel], resolver)
         else:
-            call_rows = []
+            call_rows, ilines = [], {}
             syms, precision = tagged.get(rel), "ctags"
             if not syms:
                 syms, precision = regex_symbols(text, lang), "approx"
-            raws = raw_imports(text, lang)
+            raws = raw_imports(text, lang, ilines)
         stem = PurePosixPath(rel).stem
         rows = [((n if n is not None else stem), k, rel, ln, sc, precision) for n, k, ln, sc in syms]
         con.executemany("INSERT INTO symbols VALUES (?,?,?,?,?,?)", rows)
-        imps = [(rel, raw, resolver.resolve(rel, raw, lang)) for raw in raws]
-        con.executemany("INSERT INTO imports VALUES (?,?,?)", imps)
+        imps = [(rel, raw, resolver.resolve(rel, raw, lang), ilines.get(raw)) for raw in raws]
+        con.executemany("INSERT INTO imports VALUES (?,?,?,?)", imps)
         con.executemany("INSERT INTO calls VALUES (?,?,?,?,?)", call_rows)
         con.execute("INSERT INTO files VALUES (?,?,?,?,?,?,?)",
                     (rel, lang, st.st_size, st.st_mtime, h, int(is_test(rel)), len(rows)))
@@ -497,7 +501,7 @@ def _resolve_calls(rel, lang, parsed, resolver):
     Resolved through the file's own import bindings, or to this file when it defines the
     name itself (and for `this.x()` / `self.x()`). Anything else keeps callee_path NULL
     ("unresolved"): a lead to verify by reading, not a fact."""
-    syms, _, calls, binds = parsed
+    syms, calls, binds = parsed[0], parsed[2], parsed[3]
     local = {n for n, _, _, _ in syms if n}
     bound = {}
     for name, (raw, orig) in binds.items():
@@ -675,6 +679,171 @@ def query_tests_for(project, path):
     tests = tests_for(con, rel)
     con.close()
     return ["Tests for %s:" % rel] + (["  " + t for t in tests] or ["  none found"])
+
+
+# ---- graph queries ----------------------------------------------------------------
+
+MAX_DEPTH = 6
+MAX_FILES = 300  # stop expanding the impact BFS beyond this many files
+
+
+def _calls_table(con):
+    try:
+        con.execute("SELECT 1 FROM calls LIMIT 1")
+        return True
+    except sqlite3.OperationalError:
+        return False
+
+
+def _edge_text(con, src, dst):
+    """Evidence that `src` depends on `dst`: 'src:LINE imports "raw"; calls f at src:LINE'."""
+    bits, line = [], None
+    r = con.execute("SELECT line, raw FROM imports WHERE src=? AND target=? ORDER BY line LIMIT 1",
+                    (src, dst)).fetchone()
+    if r:
+        line = r[0]
+        bits.append("imports '%s'" % r[1])
+    if _calls_table(con):
+        c = con.execute("SELECT line, callee_name, src_symbol FROM calls WHERE src_path=? AND "
+                        "callee_path=? ORDER BY line LIMIT 1", (src, dst)).fetchone()
+        n = con.execute("SELECT count(*) FROM calls WHERE src_path=? AND callee_path=?",
+                        (src, dst)).fetchone()[0]
+        if c:
+            line = line or c[0]
+            bits.append("calls %s at :%d%s%s" % (c[1], c[0], (" in " + c[2]) if c[2] else "",
+                                                  " (+%d more)" % (n - 1) if n > 1 else ""))
+    return "%s%s  %s" % (src, (":%d" % line) if line else "", "; ".join(bits) or "depends on it")
+
+
+def _users_of(con, rel):
+    """Files that import or call into `rel`."""
+    out = {r[0] for r in con.execute("SELECT DISTINCT src FROM imports WHERE target=?", (rel,))}
+    if _calls_table(con):
+        out |= {r[0] for r in con.execute("SELECT DISTINCT src_path FROM calls WHERE callee_path=?", (rel,))}
+    out.discard(rel)
+    return sorted(out)
+
+
+def _uses_of(con, rel):
+    """Files that `rel` imports or calls into."""
+    out = {r[0] for r in con.execute("SELECT DISTINCT target FROM imports WHERE src=? AND target IS NOT NULL",
+                                     (rel,))}
+    if _calls_table(con):
+        out |= {r[0] for r in con.execute("SELECT DISTINCT callee_path FROM calls WHERE src_path=? AND "
+                                          "callee_path IS NOT NULL", (rel,))}
+    out.discard(rel)
+    return sorted(out)
+
+
+def impact(project, path, depth=3):
+    """Files affected by a change to `path`: BFS over who-imports / who-calls, level by level."""
+    depth = max(1, min(int(depth), MAX_DEPTH))
+    con = connect(project, write=False)
+    rel = _norm(project, path)
+    if not con.execute("SELECT 1 FROM files WHERE path=?", (rel,)).fetchone():
+        con.close()
+        return ["%s is not in the index (not a source file, ignored, or new — retry after saving)." % rel]
+    level_of, parent, levels, truncated = {rel: 0}, {}, [], False
+    frontier = [rel]
+    for d in range(1, depth + 1):
+        nxt = []
+        for f in frontier:
+            for u in _users_of(con, f):
+                if u not in level_of:
+                    if len(level_of) > MAX_FILES:
+                        truncated = True
+                        continue
+                    level_of[u], parent[u] = d, f
+                    nxt.append(u)
+        if not nxt:
+            break
+        levels.append(sorted(nxt))
+        frontier = nxt
+    is_t = {r[0] for r in con.execute("SELECT path FROM files WHERE is_test=1")}
+    affected = [f for lv in levels for f in lv]
+    tests = sorted(({f for f in affected if f in is_t} | set(tests_for(con, rel))) - {rel})
+    n_src = len([f for f in affected if f not in is_t])
+    head = "Impact of %s (depth %d): %d files%s" % (rel, depth, n_src,
+                                                   ", %d tests" % len(tests) if tests else "")
+    lines = [head + (" — truncated at %d files" % MAX_FILES if truncated else "")]
+    if not affected:
+        lines.append("  nothing imports or calls it (within the index)")
+    budget = QUERY_LINES - len(lines) - (1 + min(len(tests), 5) if tests else 0)
+    for i, lv in enumerate(levels, 1):
+        src_files = [f for f in lv if f not in is_t]
+        if not src_files:
+            continue
+        if budget < 2:
+            lines.append("Level %d: %d more files not shown (query a dependent for its own impact)"
+                         % (i, len(src_files)))
+            budget -= 1
+            continue
+        lines.append("Level %d%s:" % (i, " (direct)" if i == 1 else ""))
+        budget -= 1
+        room = max(1, min(len(src_files), budget - (1 if len(levels) > i else 0)))
+        if len(src_files) > room and room > 1:
+            room -= 1  # keep a line for "... +N more"
+        for f in src_files[:room]:
+            via = "" if i == 1 else "  via " + parent[f]
+            lines.append("  " + _edge_text(con, f, parent[f]) + via)
+        budget -= room
+        if len(src_files) > room:
+            lines.append("  ... +%d more" % (len(src_files) - room))
+            budget -= 1
+    if tests:
+        lines.append("Tests to run (%d):" % len(tests))
+        lines.extend("  " + t for t in tests[:5])
+        if len(tests) > 5:
+            lines[-1] += "  (+%d more)" % (len(tests) - 5)
+    con.close()
+    return lines[:QUERY_LINES]
+
+
+def _resolve_node(con, project, arg):
+    """A file path in the index, or the file defining symbol `arg`."""
+    rel = _norm(project, arg)
+    if con.execute("SELECT 1 FROM files WHERE path=?", (rel,)).fetchone():
+        return rel, None
+    r = con.execute("SELECT path, line, kind FROM symbols WHERE name=? ORDER BY kind='method', path LIMIT 1",
+                    (arg,)).fetchone()
+    return (r[0], "%s %s:%d" % (r[2], r[0], r[1])) if r else (None, None)
+
+
+def path_between(project, a, b):
+    """Shortest dependency chain between two files or symbols (A uses ... uses B)."""
+    con = connect(project, write=False)
+    (fa, da), (fb, db) = _resolve_node(con, project, a), _resolve_node(con, project, b)
+    if not fa or not fb:
+        con.close()
+        return ["Not in the index: %s — use a repo-relative file path or an exact symbol name."
+                % ", ".join(x for x, f in ((a, fa), (b, fb)) if not f)]
+    if fa == fb:
+        con.close()
+        return ["%s and %s are in the same file: %s" % (a, b, fa)]
+    for start, goal, flip in ((fa, fb, False), (fb, fa, True)):
+        prev, queue = {start: None}, [start]
+        for cur in queue:
+            if cur == goal or len(prev) > 5000:
+                break
+            for n in _uses_of(con, cur):
+                if n not in prev:
+                    prev[n] = cur
+                    queue.append(n)
+        if goal in prev:
+            chain = [goal]
+            while prev[chain[-1]]:
+                chain.append(prev[chain[-1]])
+            chain.reverse()
+            lines = ["Path %s%s -> %s%s (%d hops, %s uses %s):" % (
+                start, " [%s]" % (db if flip else da) if (db if flip else da) else "",
+                goal, " [%s]" % (da if flip else db) if (da if flip else db) else "",
+                len(chain) - 1, start, goal)]
+            lines.extend("  " + _edge_text(con, x, y) + "  -> " + y for x, y in zip(chain, chain[1:]))
+            con.close()
+            return lines[:QUERY_LINES]
+    con.close()
+    return ["No import/call path between %s and %s in either direction (index covers resolved "
+            "imports and calls only; dynamic use and unresolved calls are invisible)." % (fa, fb)]
 
 
 def status(project):

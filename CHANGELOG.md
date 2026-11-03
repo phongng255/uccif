@@ -1,5 +1,20 @@
 # Changelog
 
+## 3.0.0-dev.10
+
+- **Graph queries** (step 3 of the code-graph roadmap):
+  - `uccif index query --impact <file> [--depth N]` (default 3, max 6): the files that import
+    or call into a file, level by level, each as `file:line` with the import and the call that
+    link it, plus the tests to run. Breadth-first over import edges and, where tree-sitter
+    parsed the file, call edges.
+  - `uccif index query --path <A> <B>`: the shortest import/call chain between two files or
+    symbols (tries A uses B, then B uses A), one `file:line` hop per line.
+  - Both stay within 30 lines (counted "... +N more"), work without tree-sitter (import edges
+    only) and read the index read-only like the other queries.
+- Imports now store their line number (`SCHEMA` 3; an older index is rebuilt automatically).
+- `code-impact-analysis`, `code-impact-analyzer`, `smart-code-search` and the session hint use
+  `--impact` / `--path`.
+
 ## 3.0.0-dev.9
 
 - **Call graph** (step 2 of the code-graph roadmap). With tree-sitter installed, the index
