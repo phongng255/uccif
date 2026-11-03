@@ -44,6 +44,9 @@ def build_parser():
     iu = ix.add_parser("update", help="refresh changed files")
     iu.add_argument("--quiet", action="store_true")
     ix.add_parser("status")
+    ig = ix.add_parser("graph", help="write a self-contained HTML view of the code graph (outside the repo)")
+    ig.add_argument("--out", help="write here instead of the plugin data folder")
+    ig.add_argument("--max-nodes", type=int, default=300, help="most-connected files to draw (default 300)")
     iq = ix.add_parser("query", help="definitions, callers, dependents, impact, paths, tests (≤ 30 lines)")
     g = iq.add_mutually_exclusive_group(required=True)
     g.add_argument("--symbol")
@@ -114,6 +117,24 @@ def _index_cmd(args):
         return 0
     if args.action == "status":
         print("\n".join(index.status(proj)))
+        return 0
+    if args.action == "graph":
+        from uccif_lib import graph
+        try:
+            index.update(proj, wait=2 if index.exists(proj) else 60)
+        except (OSError, sqlite3.Error):
+            pass  # sandbox: hooks keep the index current
+        try:
+            target, data = graph.write(proj, args.out, args.max_nodes)
+        except index.IndexUnavailable as e:
+            print("Code index unavailable (%s). It is built by the session-start hook." % e)
+            return 0
+        except OSError as e:
+            print("Cannot write the graph: %s" % e)
+            return 1
+        print("Graph: %d of %d files, %d links -> %s" % (data["shown"], data["total_files"],
+                                                         len(data["edges"]), target.as_posix()))
+        print("Open that file in a browser. It is self-contained and not part of the repo.")
         return 0
     if args.action == "query":
         # Refresh first so edits made outside Claude are never missed. Inside Claude

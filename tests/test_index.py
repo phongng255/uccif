@@ -398,3 +398,76 @@ def test_cli_impact_and_path(project, repo, monkeypatch, capsys):
     assert "Impact of core.ts (depth 1)" in capsys.readouterr().out
     assert cli.main(["index", "query", "--path", "app.ts", "core.ts"]) == 0
     assert "Path app.ts -> core.ts" in capsys.readouterr().out
+
+
+# ---- graph view -----------------------------------------------------------------
+
+def test_graph_data_nodes_edges_and_caps(project, repo, monkeypatch):
+    _ts_or_skip(monkeypatch)
+    from uccif_lib import graph
+    make_chain(repo)
+    index.update(project)
+    d = graph.graph_data(project)
+    ids = [n["id"] for n in d["nodes"]]
+    assert set(ids) == {"core.ts", "mid.ts", "top.ts", "app.ts", "core.test.ts"}  # island.ts has no links
+    assert d["total_files"] == 6 and d["isolated"] == 1 and d["shown"] == 5
+    by = {n["id"]: i for i, n in enumerate(d["nodes"])}
+    edges = {(a, b): f for a, b, f in d["edges"]}
+    assert edges[(by["mid.ts"], by["core.ts"])] == 3  # import + call
+    assert edges[(by["core.test.ts"], by["core.ts"])] == 1  # import only
+    assert next(n for n in d["nodes"] if n["id"] == "core.test.ts")["test"] is True
+    assert graph.group_of("src/stores/cart.ts") == "stores" and graph.group_of("main.py") == "(root)"
+    assert graph.group_of("app/models.py") == "app"
+    for i in range(14):
+        write(repo, "m%d.ts" % i, "import { base } from './core'\n")
+    index.update(project)
+    capped = graph.graph_data(project, max_nodes=10)
+    assert capped["shown"] == 10 and all(a < 10 and b < 10 for a, b, _ in capped["edges"])
+    assert capped["nodes"][0]["id"] == "core.ts"  # most connected first
+
+
+def test_graph_render_is_self_contained_and_escaped():
+    from uccif_lib import graph
+    data = {"nodes": [{"id": "a/</script><b>.ts", "g": "a", "lang": "typescript", "test": False, "sym": 1, "deg": 1}],
+            "edges": [], "total_files": 1, "shown": 1, "isolated": 0}
+    html = graph.render(data, "x <y> code graph")
+    assert html.count("</script>") == 1  # only the page's own closing tag
+    assert "\\u003c/script>" in html and "x &lt;y> code graph" in html
+    assert "http://" not in html and "https://" not in html and "src=" not in html
+
+
+def test_graph_written_outside_repo_and_falls_back_when_read_only(project, repo, monkeypatch, capsys):
+    from uccif_lib import cli, graph
+    make_chain(repo)
+    index.update(project)
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "chain")
+    target, _ = graph.write(project)
+    assert target == project.data_dir / "index" / "graph.html" and target.read_text(encoding="utf-8").startswith("<!doctype html>")
+    import subprocess
+    status = subprocess.run(["git", "status", "--porcelain"], cwd=str(repo), capture_output=True, text=True).stdout
+    assert status.strip() == ""  # nothing new inside the repo
+
+    from pathlib import Path
+    real = Path.write_text
+
+    def deny_data_dir(self, *a, **k):
+        if project.data_dir in self.parents:
+            raise PermissionError("sandbox")
+        return real(self, *a, **k)
+    monkeypatch.setattr(Path, "write_text", deny_data_dir)
+    assert cli.main(["index", "graph"]) == 0
+    out = capsys.readouterr().out
+    assert ".claude/uccif/.local/graph.html" in out and "Graph: 5 of 6 files" in out
+    assert (project.local_dir / "graph.html").exists()
+    status = subprocess.run(["git", "status", "--porcelain", "--untracked-files=all"], cwd=str(repo),
+                            capture_output=True, text=True).stdout
+    assert "graph.html" not in status  # git-ignored through .claude/uccif/.gitignore
+
+
+def test_cli_graph_out_option(project, repo, tmp_path, capsys):
+    from uccif_lib import cli
+    make_chain(repo)
+    out = tmp_path / "x" / "g.html"
+    assert cli.main(["index", "graph", "--out", str(out), "--max-nodes", "50"]) == 0
+    assert out.exists() and "Graph: 5 of 6 files" in capsys.readouterr().out.replace("\\", "/")

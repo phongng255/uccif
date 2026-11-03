@@ -1,5 +1,19 @@
 # Changelog
 
+## 3.0.0-dev.11
+
+- **Graph view** (step 4 of the code-graph roadmap): `uccif index graph [--out FILE]
+  [--max-nodes N]` writes one self-contained HTML page (no network, no libraries) with the
+  most-connected files (default 300) as dots and resolved imports/calls as lines. Click a dot
+  for what it uses and what uses it (with the `--impact` command to run next), search by
+  name, hide tests or call edges, pan and zoom; light and dark themes.
+- The page is written next to the index (outside the repo); where that is read-only (Claude
+  Code's Bash sandbox) it goes to the git-ignored `.claude/uccif/.local/`. Nothing tracked is
+  touched. Meant for a person to open; Claude keeps using `--impact` / `--path`.
+- Known limit (index, not the view): Python absolute imports only resolve from `src/`,
+  `lib/`, `app/` or the repo root, so a package under another folder (e.g. `plugins/x/pkg`)
+  shows no links.
+
 ## 3.0.0-dev.10
 
 - **Graph queries** (step 3 of the code-graph roadmap):
