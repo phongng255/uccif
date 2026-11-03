@@ -23,9 +23,10 @@ from collections import Counter
 from pathlib import Path, PurePosixPath
 
 from uccif_lib import ts_parse
+from uccif_lib.resolve import JS_RESOLVE_EXT, Resolver  # noqa: F401 (re-exported)
 from uccif_lib.paths import LockTimeout, file_lock, now_iso
 
-SCHEMA = 4
+SCHEMA = 5
 MAX_BYTES = 1000000
 QUERY_LINES = 30
 
@@ -41,7 +42,6 @@ LANG_EXT = {
 JS_LIKE = ("typescript", "javascript", "vue", "svelte")
 SKIP_SUFFIXES = (".min.js", ".min.css", ".map", ".d.ts.map", ".bundle.js")
 TEST_DIRS = {"test", "tests", "__tests__", "spec", "specs", "e2e"}
-JS_RESOLVE_EXT = (".ts", ".tsx", ".js", ".jsx", ".vue", ".mjs", ".cjs", ".mts", ".svelte", ".d.ts")
 KEYWORDS = {"if", "for", "while", "switch", "catch", "return", "function", "constructor",
             "else", "do", "try", "with", "new", "typeof", "await", "super"}
 
@@ -167,7 +167,9 @@ def connect(project, write=True):
         CREATE TABLE IF NOT EXISTS nodes (id TEXT PRIMARY KEY, kind TEXT, name TEXT, path TEXT, line INTEGER,
             end_line INTEGER, scope TEXT, precision TEXT);
         CREATE TABLE IF NOT EXISTS edges (src_id TEXT, dst_id TEXT, kind TEXT, line INTEGER,
-            confidence TEXT, detail TEXT, src_path TEXT, dst_path TEXT);
+            confidence TEXT, detail TEXT, src_path TEXT, dst_path TEXT, via TEXT);
+        CREATE TABLE IF NOT EXISTS bindings (path TEXT, name TEXT, orig TEXT, raw TEXT, line INTEGER);
+        CREATE INDEX IF NOT EXISTS bind_path ON bindings(path);
         CREATE INDEX IF NOT EXISTS node_path ON nodes(path);
         CREATE INDEX IF NOT EXISTS edge_src ON edges(src_path, kind);
         CREATE INDEX IF NOT EXISTS edge_dst ON edges(dst_path, kind);
@@ -183,7 +185,7 @@ def connect(project, write=True):
     """)
     if _meta(con, "schema") not in (None, str(SCHEMA)):
         con.executescript("DELETE FROM files; DELETE FROM symbols; DELETE FROM imports; DELETE FROM calls; "
-                         "DELETE FROM nodes; DELETE FROM edges; DELETE FROM meta;")
+                         "DELETE FROM nodes; DELETE FROM edges; DELETE FROM bindings; DELETE FROM meta;")
     _set_meta(con, "schema", SCHEMA)
     return con
 
@@ -333,80 +335,6 @@ def raw_imports(text, lang, lines=None):
     return seen[:200]
 
 
-class Resolver:
-    """Map an import string to a repo file (or None for external packages)."""
-
-    def __init__(self, files):
-        self.files = set(files)
-        self.py_roots = [""] + [d for d in ("src", "lib", "app") if any(f.startswith(d + "/") for f in files)]
-        self.py_names = set()
-        for f in self.files:
-            if f.endswith((".py", ".pyi")):
-                pp = PurePosixPath(f)
-                self.py_names.update(pp.parent.parts)
-                self.py_names.add(pp.stem)
-
-    def internal(self, raw, lang):
-        """Does this import string look like it names a file in this repo (even if we could not
-        place it)? False means a package: known, just not ours."""
-        if raw.startswith((".", "@/", "~/")):
-            return True
-        if LANG_FAMILY.get(lang) == "python":
-            return raw.split(".")[0] in self.py_names
-        return False
-
-    def _try_js(self, base):
-        base = str(PurePosixPath(base))
-        cands = [base] + [base + e for e in JS_RESOLVE_EXT] + \
-                [base + "/index" + e for e in JS_RESOLVE_EXT]
-        return next((c for c in cands if c in self.files), None)
-
-    def resolve(self, src, raw, lang):
-        fam = LANG_FAMILY.get(lang)
-        here = PurePosixPath(src).parent
-        if fam in ("js", "style"):
-            if raw.startswith(("@/", "~/")):
-                target = "src/" + raw[2:]
-            elif raw.startswith(".") or (fam == "style" and "://" not in raw and not raw.startswith("~")):
-                target = os.path.normpath(str(here / raw)).replace(os.sep, "/")
-            else:
-                return None  # a package, not a repo file
-            if target.startswith("../"):
-                return None
-            hit = self._try_js(target)
-            if hit or fam == "js":
-                return hit
-            p = PurePosixPath(target)  # scss partials: _name.scss
-            for cand in (target + ".scss", str(p.parent / ("_" + p.name + ".scss")), target + ".css",
-                         target + ".less"):
-                cand = os.path.normpath(cand).replace(os.sep, "/")
-                if cand in self.files:
-                    return cand
-            return None
-        if fam == "python":
-            dots = len(raw) - len(raw.lstrip("."))
-            mod = raw.lstrip(".").replace(".", "/")
-            bases = []
-            if dots:
-                base = here
-                for _ in range(dots - 1):
-                    base = base.parent
-                bases.append(str(base / mod) if mod else str(base))
-            else:
-                bases = [(r + "/" + mod) if r else mod for r in self.py_roots]
-            for b in bases:
-                b = os.path.normpath(b).replace(os.sep, "/").lstrip("./")
-                for cand in (b + ".py", b + "/__init__.py"):
-                    if cand in self.files:
-                        return cand
-            return None
-        if fam == "rust":
-            for cand in (str(here / (raw + ".rs")), str(here / raw / "mod.rs")):
-                if cand in self.files:
-                    return cand
-        return None
-
-
 # ---- build / update ---------------------------------------------------------------
 
 def _read(root, rel):
@@ -438,7 +366,7 @@ def _update(project, full, only=None):
     con = connect(project)
     if full:
         con.executescript("DELETE FROM files; DELETE FROM symbols; DELETE FROM imports; DELETE FROM calls; "
-                          "DELETE FROM nodes; DELETE FROM edges;")
+                          "DELETE FROM nodes; DELETE FROM edges; DELETE FROM bindings;")
     known = {r[0]: (r[1], r[2], r[3]) for r in con.execute("SELECT path, size, mtime, hash FROM files")}
     if only is not None:
         only = {p.replace(os.sep, "/") for p in only if lang_of(p.replace(os.sep, "/"))}
@@ -487,7 +415,7 @@ def _update(project, full, only=None):
             ast[rel] = res
     need_ctags = [r for r, _, _, _ in to_parse if r not in ast]
     tagged = ctags_symbols(exe, root, need_ctags) if exe and need_ctags else {}
-    resolver = Resolver(current)
+    resolver = Resolver(current, root)
     for rel in removed:
         _drop(con, rel)
         _unresolve_incoming(con, rel)
@@ -514,8 +442,9 @@ def _update(project, full, only=None):
         con.executemany("INSERT INTO calls VALUES (?,?,?,?,?)", [r[:5] for r in call_rows])
         con.execute("INSERT INTO files VALUES (?,?,?,?,?,?,?)",
                     (rel, lang, st.st_size, st.st_mtime, h, int(is_test(rel)), len(rows)))
-        _write_graph(con, rel, lang, rows, imps, call_rows, resolver)
+        _write_graph(con, rel, lang, rows, imps, call_rows, resolver, text)
     if to_parse or removed or full:
+        _through_barrels(con)
         _set_meta(con, "updated_at", now_iso())
         _set_meta(con, "symbol_tool", tool)
         if full or not _meta(con, "built_at"):
@@ -551,7 +480,7 @@ def _resolve_calls(rel, lang, parsed, resolver):
     local = {n for n, _, _, _ in syms if n}
     bound, pkg = {}, set()
     for name, (raw, orig) in binds.items():
-        if not resolver.internal(raw, lang):
+        if not resolver.internal(raw, lang, rel):
             pkg.add(name)
         target = None
         if lang == "python" and orig != "*" and raw.strip(".") == "":
@@ -579,11 +508,134 @@ def _resolve_calls(rel, lang, parsed, resolver):
     return rows
 
 
+_JS_IMPORT = re.compile(r"""\bimport\s+(?:type\s+)?(?:([\w$]+)\s*,?\s*)?(?:\{([^}]*)\}|\*\s*as\s+([\w$]+))?"""
+                        r"""\s*from\s*['"]([^'"]+)['"]""")
+_JS_REEXPORT = re.compile(r"""\bexport\s+(?:type\s+)?(?:\*\s*(?:as\s+([\w$]+)\s*)?|\{([^}]*)\}\s*)"""
+                          r"""from\s*['"]([^'"]+)['"]""")
+_PY_FROM = re.compile(r"^[ \t]*from\s+(\.*[\w.]*)\s+import\s+(\([^)]*\)|[^\n#]+)", re.M)
+
+
+def _names(clause):
+    """'a, b as c, type d' -> [(orig, local)]."""
+    out = []
+    for part in clause.replace("(", "").replace(")", "").replace("\\", "").split(","):
+        part = part.strip()
+        if part.startswith("type "):
+            part = part[5:].strip()
+        if not part:
+            continue
+        orig, _, local = part.partition(" as ")
+        orig, local = orig.strip(), (local.strip() or orig.strip())
+        if re.match(r"^[\w$*]+$", orig) and re.match(r"^[\w$*]+$", local):
+            out.append((orig, local))
+    return out
+
+
+def bindings_of(text, lang, rel):
+    """([(local name, exported name, raw, line)], [(raw, orig, exported as, line)]).
+    The first list says which name in this file comes from which import; the second is what
+    this file re-exports (barrels: `export * from`, `export { a as b } from`; for Python, every
+    `from x import y` in an `__init__.py`)."""
+    binds, rex = [], []
+    if not text:
+        return binds, rex
+    fam = LANG_FAMILY.get(lang)
+    src = _script_part(text, lang)
+    line_of = lambda pos: src.count("\n", 0, pos) + 1  # noqa: E731
+    if fam == "js":
+        for m in _JS_IMPORT.finditer(src):
+            default, named, ns, raw = m.groups()
+            ln = line_of(m.start())
+            if default:
+                binds.append((default, "default", raw, ln))
+            if ns:
+                binds.append((ns, "*", raw, ln))
+            for orig, local in _names(named or ""):
+                binds.append((local, orig, raw, ln))
+        for m in _JS_REEXPORT.finditer(src):
+            ns, named, raw = m.groups()
+            ln = line_of(m.start())
+            if named is None:
+                rex.append((raw, "*", ns or "*", ln))
+            for orig, local in _names(named or ""):
+                rex.append((raw, orig, local, ln))
+    elif fam == "python":
+        init = PurePosixPath(rel).name == "__init__.py"
+        for m in _PY_FROM.finditer(src):
+            raw, ln = m.group(1), line_of(m.start())
+            for orig, local in _names(m.group(2)):
+                binds.append((local, orig, raw, ln))
+                if init:
+                    rex.append((raw, orig, local if orig != "*" else "*", ln))
+    return binds[:300], rex[:300]
+
+
+def _through_barrels(con):
+    """Derived edges that see through barrel files (index.ts re-exports, package __init__.py).
+
+    `import { formatMoney } from '@/utils'` resolves to utils/index.ts; if that file only
+    re-exports it, add an `imports` edge (and re-point calls) to the file that defines it,
+    with `via` = the barrel. Recomputed from scratch after every update that changed
+    anything, so it can never go stale; the direct edges to the barrel stay as they are."""
+    con.execute("DELETE FROM edges WHERE via IS NOT NULL")
+    rex = {}
+    for src, dst, detail in con.execute("SELECT src_path, dst_path, detail FROM edges "
+                                        "WHERE kind='re_exports' AND dst_path IS NOT NULL"):
+        orig, _, name = detail.partition(" as ")
+        rex.setdefault(src, []).append((dst, orig, name))
+    if not rex:
+        return
+    defs = {}
+
+    def names_in(path):
+        if path not in defs:
+            defs[path] = {r[0] for r in con.execute("SELECT name FROM nodes WHERE path=? AND kind<>'file'", (path,))}
+        return defs[path]
+
+    def find(path, name, seen):
+        """(file, name) that really defines `name` as seen from `path`, or None."""
+        if (path, name) in seen or len(seen) > 30:
+            return None
+        seen.add((path, name))
+        if name in names_in(path):
+            return path, name
+        for dst, orig, alias in rex.get(path, ()):
+            if alias == "*" and orig == "*":
+                hit = find(dst, name, seen)
+                if hit:
+                    return hit
+            elif alias == name:
+                return (dst, name) if orig == "*" else (find(dst, orig, seen) or (dst, orig))
+        return None
+
+    new, seen_pairs = [], set()
+    for barrel in rex:
+        for f, raw, line in con.execute("SELECT src_path, detail, line FROM edges WHERE kind='imports' "
+                                        "AND dst_path=? AND via IS NULL", (barrel,)).fetchall():
+            for (orig,) in con.execute("SELECT orig FROM bindings WHERE path=? AND raw=?", (f, raw)).fetchall():
+                if orig in ("*", "default"):
+                    continue
+                hit = find(barrel, orig, set())
+                if hit and hit[0] not in (barrel, f) and (f, hit[0]) not in seen_pairs:
+                    seen_pairs.add((f, hit[0]))
+                    new.append((f, hit[0], "imports", line, "extracted", raw, f, hit[0], barrel))
+        for sid, line, name, f in con.execute("SELECT src_id, line, detail, src_path FROM edges WHERE kind='calls' "
+                                             "AND dst_path=? AND via IS NULL", (barrel,)).fetchall():
+            if name in names_in(barrel):
+                continue
+            hit = find(barrel, name, set())
+            if hit and hit[0] != barrel:
+                r = con.execute("SELECT id FROM nodes WHERE path=? AND name=? AND kind<>'file' LIMIT 1",
+                                hit).fetchone()
+                new.append((sid, r[0] if r else hit[0], "calls", line, "extracted", hit[1], f, hit[0], barrel))
+    con.executemany("INSERT INTO edges VALUES (?,?,?,?,?,?,?,?,?)", new)
+
+
 def _sym_id(path, name, scope):
     return "%s#%s%s" % (path, (scope + ".") if scope else "", name)
 
 
-def _write_graph(con, rel, lang, sym_rows, imps, call_rows, resolver):
+def _write_graph(con, rel, lang, sym_rows, imps, call_rows, resolver, text=""):
     """Mirror one parsed file into the unified graph: nodes (file + symbols) and edges.
 
     Node ids are stable (`path` for a file, `path#Scope.name` for a symbol) so edges from other
@@ -596,11 +648,11 @@ def _write_graph(con, rel, lang, sym_rows, imps, call_rows, resolver):
     edges = []
     for src, raw, target, line in imps:
         if target:
-            edges.append((rel, target, "imports", line, "extracted", raw, rel, target))
-        elif resolver.internal(raw, lang):  # looks like a repo file we could not place
-            edges.append((rel, None, "imports", line, "unresolved", raw, rel, None))
+            edges.append((rel, target, "imports", line, "extracted", raw, rel, target, None))
+        elif resolver.internal(raw, lang, rel):  # looks like a repo file we could not place
+            edges.append((rel, None, "imports", line, "unresolved", raw, rel, None, None))
         else:  # a package: fully known, just not in the repo
-            edges.append((rel, None, "imports_ext", line, "extracted", raw, rel, None))
+            edges.append((rel, None, "imports_ext", line, "extracted", raw, rel, None, None))
     own = {r[0] for r in con.execute("SELECT id FROM nodes WHERE path=?", (rel,))}
     for _, caller, callee, cpath, line, ext in call_rows:
         sid = _sym_id(rel, caller, None) if caller else rel
@@ -618,12 +670,18 @@ def _write_graph(con, rel, lang, sym_rows, imps, call_rows, resolver):
                 dst = cpath  # target already parsed and has no such symbol
             else:
                 dst = _sym_id(cpath, callee, None)  # target not parsed yet; corrected when it is
-            edges.append((sid, dst, "calls", line, "extracted", callee, rel, cpath))
+            edges.append((sid, dst, "calls", line, "extracted", callee, rel, cpath, None))
         elif ext:  # a function from an installed package: fully known, just not in the repo
-            edges.append((sid, None, "calls_ext", line, "extracted", callee, rel, None))
+            edges.append((sid, None, "calls_ext", line, "extracted", callee, rel, None, None))
         else:
-            edges.append((sid, None, "calls", line, "unresolved", callee, rel, None))
-    con.executemany("INSERT INTO edges VALUES (?,?,?,?,?,?,?,?)", edges)
+            edges.append((sid, None, "calls", line, "unresolved", callee, rel, None, None))
+    binds, rexports = bindings_of(text, lang, rel)
+    con.executemany("INSERT INTO bindings VALUES (?,?,?,?,?)", [(rel,) + b for b in binds])
+    for raw, orig, name, line in rexports:
+        target = resolver.resolve(rel, raw, lang)
+        edges.append((rel, target, "re_exports", line, "extracted" if target else "unresolved",
+                      "%s as %s" % (orig, name), rel, target, None))
+    con.executemany("INSERT INTO edges VALUES (?,?,?,?,?,?,?,?,?)", edges)
     # edges from other files into this one: re-point to the symbol now defined here (by name),
     # or to the file when the symbol is gone / was guessed before this file was parsed
     con.execute("UPDATE edges SET dst_id=COALESCE((SELECT n.id FROM nodes n WHERE n.path=edges.dst_path "
@@ -639,6 +697,7 @@ def _unresolve_incoming(con, rel):
 
 
 def _drop(con, rel):
+    con.execute("DELETE FROM bindings WHERE path=?", (rel,))
     con.execute("DELETE FROM nodes WHERE path=?", (rel,))
     con.execute("DELETE FROM edges WHERE src_path=?", (rel,))
     con.execute("DELETE FROM files WHERE path=?", (rel,))
@@ -704,8 +763,8 @@ def dependents(con, rel):
 def tests_for(con, rel):
     """Test files that import `rel`, plus tests named after it (x.test.ts, test_x.py, ...)."""
     direct = [r[0] for r in con.execute(
-        "SELECT DISTINCT i.src FROM imports i JOIN files f ON f.path=i.src WHERE i.target=? AND f.is_test=1",
-        (rel,))]
+        "SELECT DISTINCT e.src_path FROM edges e JOIN files f ON f.path=e.src_path "
+        "WHERE e.kind='imports' AND e.dst_path=? AND f.is_test=1", (rel,))]
     stem = PurePosixPath(rel).stem
     names = {stem + ".test", stem + ".spec", "test_" + stem, stem + "_test", stem}
     by_name = [r[0] for r in con.execute("SELECT path FROM files WHERE is_test=1 AND path<>?", (rel,))
@@ -815,11 +874,11 @@ MAX_FILES = 300  # stop expanding the impact BFS beyond this many files
 def _edge_text(con, src, dst):
     """Evidence that `src` depends on `dst`: 'src:LINE imports "raw"; calls f at src:LINE'."""
     bits, line = [], None
-    r = con.execute("SELECT line, detail FROM edges WHERE kind='imports' AND src_path=? AND dst_path=? "
-                    "ORDER BY line LIMIT 1", (src, dst)).fetchone()
+    r = con.execute("SELECT line, detail, via FROM edges WHERE kind='imports' AND src_path=? AND dst_path=? "
+                    "ORDER BY via IS NOT NULL, line LIMIT 1", (src, dst)).fetchone()
     if r:
         line = r[0]
-        bits.append("imports '%s'" % r[1])
+        bits.append("imports '%s'%s" % (r[1], (" via " + r[2]) if r[2] else ""))
     c = con.execute("SELECT line, detail, src_id FROM edges WHERE kind='calls' AND src_path=? AND dst_path=? "
                     "ORDER BY line LIMIT 1", (src, dst)).fetchone()
     if c:

@@ -143,18 +143,20 @@ def test_package_calls_are_external_not_unresolved(project, vue_app, monkeypatch
     assert "Possibly called by" not in "\n".join(index.query_symbol(project, "ref"))
 
 
-def test_python_repo_import_we_cannot_place_stays_unresolved(project, repo):
+def test_python_package_roots_and_unplaceable_imports(project, repo):
     from conftest import git
     (repo / "plugins" / "x" / "pkg").mkdir(parents=True)
     (repo / "plugins" / "x" / "pkg" / "__init__.py").write_text("")
     (repo / "plugins" / "x" / "pkg" / "core.py").write_text("def f():\n    pass\n")
-    (repo / "plugins" / "x" / "pkg" / "cli.py").write_text("from pkg.core import f\nimport os\n")
+    (repo / "plugins" / "x" / "pkg" / "cli.py").write_text("from pkg.core import f\nfrom pkg.missing import g\nimport os\n")
     git(repo, "add", "-A")
     git(repo, "commit", "-q", "-m", "py")
     index.update(project)
     con = index.connect(project, write=False)
     e = {(x[2], x[4], x[5]) for x in _edges(con, src_path="plugins/x/pkg/cli.py")}
-    assert ("imports", "unresolved", "pkg.core") in e  # known limit C4: shown as a lead, not hidden
+    # C4: plugins/x is a package root (pkg/ has __init__.py, plugins/x/ has none)
+    assert ("imports", "extracted", "pkg.core") in e
+    assert ("imports", "unresolved", "pkg.missing") in e  # repo-looking but absent: a lead, not a package
     assert ("imports_ext", "extracted", "os") in e
 
 

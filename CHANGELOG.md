@@ -1,5 +1,32 @@
 # Changelog
 
+## 3.0.0-dev.14
+
+- **Import resolution rewritten** (phase 2, step 3), now in `uccif_lib/resolve.py`
+  (`SCHEMA` 5; an older index is rebuilt automatically).
+  - **JS/TS aliases from config (C5):** the nearest `tsconfig.json` / `jsconfig.json`
+    (`baseUrl`, `paths`, relative `extends`; comments and trailing commas allowed) and
+    `vite.config.*` `resolve.alias` (object form and `{ find, replacement }`, with
+    `fileURLToPath(new URL(...))` or `path.resolve(__dirname, ...)`). "Nearest" means the
+    folder with a package.json / tsconfig / vite config, so a monorepo package keeps its own
+    aliases. With no config `@/` and `~/` still mean `src/`.
+  - **Python (C4):** besides the repo root, `src/`, `lib/` and `app/`, package roots declared
+    in `pyproject.toml` / `setup.cfg`, the parent of every top-level package (a folder with
+    `__init__.py`), and the importing file's own folder (scripts, pytest siblings). This repo
+    went from 28 unresolved imports to 1-2% of edges.
+  - **Barrels (A2):** `export * from`, `export { a as b } from` (and Python `__init__.py`
+    `from .x import y`) are stored as `re_exports` edges. After each update that changed
+    anything, derived edges with `via` = the barrel link importers and callers straight to the
+    file that defines the name, so `--impact` on `utils/format.ts` finds `ExpenseList.vue`
+    ("imports '@/utils' via src/utils/index.ts"), and tests that import through a barrel count
+    as tests for the real file. Derived edges are recomputed from scratch each time, so they
+    cannot go stale; the direct edge to the barrel stays.
+- New `bindings` table (which local name comes from which import) feeds the barrel pass.
+- Measured: one-file update 6-7 ms (budget 300 ms; the barrel pass is a few queries on small
+  repos, to be re-measured on a real app); DB +10-15%.
+- Unresolved share: vue-app 28%, this repo 68% with tree-sitter (method calls on local
+  variables, roadmap C1; 1% without it). No remaining import gaps in the fixture.
+
 ## 3.0.0-dev.13
 
 - **Unified code graph** (phase 2, step 2): two new tables, written alongside the existing

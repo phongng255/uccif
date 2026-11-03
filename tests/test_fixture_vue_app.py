@@ -44,13 +44,15 @@ def test_alias_imports_resolve(project, vue_app):
     assert "src/main.ts" in index.dependents(con, "src/App.vue")
 
 
-def test_barrel_chain_today(project, vue_app):
-    """`@/utils` resolves to the barrel, so the real files behind it show only the barrel as
-    importer. Roadmap A2 (re-exports) makes ExpenseList/ExpenseForm/useMoney reach format.ts."""
+def test_barrel_chain(project, vue_app):
+    """`@/utils` resolves to the barrel; A2 follows its re-exports to the defining files."""
     con = _con(project)
     assert "src/utils/index.ts" in index.dependents(con, "src/utils/format.ts")
     assert "src/components/ExpenseList.vue" in index.dependents(con, "src/utils/index.ts")
-    assert "src/components/ExpenseList.vue" not in index.dependents(con, "src/utils/format.ts")
+    assert "src/components/ExpenseList.vue" in index.dependents(con, "src/utils/format.ts")  # export *
+    assert "src/components/ExpenseForm.vue" in index.dependents(con, "src/utils/id.ts")  # export { newId }
+    assert "src/components/ExpenseForm.vue" not in index.dependents(con, "src/utils/format.ts")
+    assert "tests/math.spec.ts" in index.tests_for(con, "src/utils/format.ts")
 
 
 def test_query_limits(project, vue_app):
