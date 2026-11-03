@@ -1,5 +1,18 @@
 # Changelog
 
+## 3.0.0-dev.25
+
+- **Graph view upgrade** (phase 2, step 13), still one self-contained HTML page:
+  - Links carry every edge family between two files: imports, calls, components (renders /
+    props / emits), stores, routes, css, types, variables, inheritance. A checkbox per family
+    (with its count) filters them, and an `inferred` toggle hides links that rest only on name or
+    pattern matches (drawn dashed). The side panel names the families of each link.
+  - `uccif index graph --mode components`: the Vue render tree (components only, `renders` edges).
+  - `uccif index graph --file <path>`: function level for one file: its functions, components,
+    props, emits, store members… and the symbols they touch one hop away, coloured by file, each
+    with `file:line` and the `--impact <name>` command to run.
+  - Checked in Chromium on the fixture in all three modes: no script errors.
+
 ## 3.0.0-dev.24
 
 - **Graph queries** (phase 2, step 12), all read-only, at most 30 lines, `file:line` on every row:

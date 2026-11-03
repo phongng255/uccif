@@ -47,6 +47,9 @@ def build_parser():
     ig = ix.add_parser("graph", help="write a self-contained HTML view of the code graph (outside the repo)")
     ig.add_argument("--out", help="write here instead of the plugin data folder")
     ig.add_argument("--max-nodes", type=int, default=300, help="most-connected files to draw (default 300)")
+    ig.add_argument("--mode", choices=("files", "components"), default="files",
+                    help="files (default) or the Vue component render tree")
+    ig.add_argument("--file", help="function-level view of one file: its symbols and what they touch")
     iq = ix.add_parser("query", help="definitions, callers, dependents, impact, paths, tests (≤ 30 lines)")
     g = iq.add_mutually_exclusive_group(required=True)
     g.add_argument("--symbol")
@@ -134,15 +137,17 @@ def _index_cmd(args):
         except (OSError, sqlite3.Error):
             pass  # sandbox: hooks keep the index current
         try:
-            target, data = graph.write(proj, args.out, args.max_nodes)
+            target, data = graph.write(proj, args.out, args.max_nodes, "symbols" if args.file else args.mode,
+                                       args.file)
         except index.IndexUnavailable as e:
             print("Code index unavailable (%s). It is built by the session-start hook." % e)
             return 0
         except OSError as e:
             print("Cannot write the graph: %s" % e)
             return 1
-        print("Graph: %d of %d files, %d links -> %s" % (data["shown"], data["total_files"],
-                                                         len(data["edges"]), target.as_posix()))
+        unit = {"symbols": "symbols", "components": "components"}.get(data["mode"], "files")
+        print("Graph: %d of %d %s, %d links -> %s" % (data["shown"], data["total_files"], unit,
+                                                      len(data["edges"]), target.as_posix()))
         print("Open that file in a browser. It is self-contained and not part of the repo.")
         return 0
     if args.action == "query":

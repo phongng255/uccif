@@ -82,7 +82,7 @@ files first, read the index read-only and answer in at most 30 lines, each with 
 | `--route R` | the component a route shows and the code that navigates to it |
 | `--css-var=--x` | where a CSS variable is defined and used |
 | `--cochange P` | files git history changes together with P |
-| `uccif index graph` | a self-contained HTML view of the graph |
+| `uccif index graph [--mode components] [--file P]` | a self-contained HTML view: files, the component tree, or one file's functions; filter by edge kind |
 
 Edges carry a confidence: `extracted` (found through an explicit import / declaration),
 `inferred` (matched by name or pattern, shown with `~inferred` and hidden by default when certain
@@ -94,6 +94,6 @@ edges exist) and `unresolved` (a name we could not place: a lead to check, never
 |---|---|
 | 3.0 | task/resume, token line, logs, `/uccif:init`, CORE RULES via hooks, 3 agents, code index, LSP config, drift detection, tests + CI |
 | 3.1 | `[src:]` doc-claims check |
-| 3.0-dev.11+ | code graph: optional tree-sitter parsing (done), call edges (done), multi-level `--impact` and `--path` queries (done), HTML graph view `uccif index graph` (done); phase 2 (nodes/edges model, Vue/Pinia/router edges, deeper resolution) in progress, step 0 fixture + benchmark done, nodes/edges model with confidence done, config-driven aliases + barrels + Python roots done, extends/implements + contains + function-level tests done, Vue template edges (`renders`, template calls) done, Pinia stores + composables + variable origins done, props/emits + vue-router done, callbacks + late resolution + built-in methods done, CSS variables + classes done, type references + variable reads/writes done, git co-change done, new graph queries done |
+| 3.0-dev.11+ | code graph: optional tree-sitter parsing (done), call edges (done), multi-level `--impact` and `--path` queries (done), HTML graph view `uccif index graph` (done); phase 2 (nodes/edges model, Vue/Pinia/router edges, deeper resolution) in progress, step 0 fixture + benchmark done, nodes/edges model with confidence done, config-driven aliases + barrels + Python roots done, extends/implements + contains + function-level tests done, Vue template edges (`renders`, template calls) done, Pinia stores + composables + variable origins done, props/emits + vue-router done, callbacks + late resolution + built-in methods done, CSS variables + classes done, type references + variable reads/writes done, git co-change done, new graph queries done, graph view with kind filters / component tree / function level done |
 | 3.2 | optional `uccif-codeintel` plugin (Serena, more languages) |
 | 3.3 | `uccif-strict` (blocking gates), only if needed |
