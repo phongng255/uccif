@@ -25,7 +25,7 @@ from pathlib import Path, PurePosixPath
 from uccif_lib import ts_parse
 from uccif_lib.paths import LockTimeout, file_lock, now_iso
 
-SCHEMA = 3
+SCHEMA = 4
 MAX_BYTES = 1000000
 QUERY_LINES = 30
 
@@ -145,7 +145,11 @@ def connect(project, write=True):
         if os.name == "nt" and not uri.startswith("file:/"):
             uri = "file:/" + uri[5:]
         try:
-            return sqlite3.connect(uri, uri=True, timeout=5)
+            con = sqlite3.connect(uri, uri=True, timeout=5)
+            if _meta(con, "schema") != str(SCHEMA):
+                con.close()
+                raise IndexUnavailable("built by another version; rebuilds on the next update")
+            return con
         except sqlite3.Error as e:
             raise IndexUnavailable(str(e))
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -160,6 +164,14 @@ def connect(project, write=True):
         CREATE TABLE IF NOT EXISTS imports (src TEXT, raw TEXT, target TEXT, line INTEGER);
         CREATE TABLE IF NOT EXISTS calls (src_path TEXT, src_symbol TEXT, callee_name TEXT,
             callee_path TEXT, line INTEGER);
+        CREATE TABLE IF NOT EXISTS nodes (id TEXT PRIMARY KEY, kind TEXT, name TEXT, path TEXT, line INTEGER,
+            end_line INTEGER, scope TEXT, precision TEXT);
+        CREATE TABLE IF NOT EXISTS edges (src_id TEXT, dst_id TEXT, kind TEXT, line INTEGER,
+            confidence TEXT, detail TEXT, src_path TEXT, dst_path TEXT);
+        CREATE INDEX IF NOT EXISTS node_path ON nodes(path);
+        CREATE INDEX IF NOT EXISTS edge_src ON edges(src_path, kind);
+        CREATE INDEX IF NOT EXISTS edge_dst ON edges(dst_path, kind);
+        CREATE INDEX IF NOT EXISTS edge_detail ON edges(detail);
         CREATE INDEX IF NOT EXISTS call_callee ON calls(callee_name);
         CREATE INDEX IF NOT EXISTS call_src ON calls(src_path);
         CREATE INDEX IF NOT EXISTS call_cpath ON calls(callee_path);
@@ -171,7 +183,7 @@ def connect(project, write=True):
     """)
     if _meta(con, "schema") not in (None, str(SCHEMA)):
         con.executescript("DELETE FROM files; DELETE FROM symbols; DELETE FROM imports; DELETE FROM calls; "
-                         "DELETE FROM meta;")
+                         "DELETE FROM nodes; DELETE FROM edges; DELETE FROM meta;")
     _set_meta(con, "schema", SCHEMA)
     return con
 
@@ -327,6 +339,21 @@ class Resolver:
     def __init__(self, files):
         self.files = set(files)
         self.py_roots = [""] + [d for d in ("src", "lib", "app") if any(f.startswith(d + "/") for f in files)]
+        self.py_names = set()
+        for f in self.files:
+            if f.endswith((".py", ".pyi")):
+                pp = PurePosixPath(f)
+                self.py_names.update(pp.parent.parts)
+                self.py_names.add(pp.stem)
+
+    def internal(self, raw, lang):
+        """Does this import string look like it names a file in this repo (even if we could not
+        place it)? False means a package: known, just not ours."""
+        if raw.startswith((".", "@/", "~/")):
+            return True
+        if LANG_FAMILY.get(lang) == "python":
+            return raw.split(".")[0] in self.py_names
+        return False
 
     def _try_js(self, base):
         base = str(PurePosixPath(base))
@@ -410,7 +437,8 @@ def _update(project, full, only=None):
     root = project.root
     con = connect(project)
     if full:
-        con.executescript("DELETE FROM files; DELETE FROM symbols; DELETE FROM imports; DELETE FROM calls;")
+        con.executescript("DELETE FROM files; DELETE FROM symbols; DELETE FROM imports; DELETE FROM calls; "
+                          "DELETE FROM nodes; DELETE FROM edges;")
     known = {r[0]: (r[1], r[2], r[3]) for r in con.execute("SELECT path, size, mtime, hash FROM files")}
     if only is not None:
         only = {p.replace(os.sep, "/") for p in only if lang_of(p.replace(os.sep, "/"))}
@@ -462,6 +490,7 @@ def _update(project, full, only=None):
     resolver = Resolver(current)
     for rel in removed:
         _drop(con, rel)
+        _unresolve_incoming(con, rel)
     for rel, st, h, text in to_parse:
         _drop(con, rel)
         lang = lang_of(rel)
@@ -482,9 +511,10 @@ def _update(project, full, only=None):
         con.executemany("INSERT INTO symbols VALUES (?,?,?,?,?,?)", rows)
         imps = [(rel, raw, resolver.resolve(rel, raw, lang), ilines.get(raw)) for raw in raws]
         con.executemany("INSERT INTO imports VALUES (?,?,?,?)", imps)
-        con.executemany("INSERT INTO calls VALUES (?,?,?,?,?)", call_rows)
+        con.executemany("INSERT INTO calls VALUES (?,?,?,?,?)", [r[:5] for r in call_rows])
         con.execute("INSERT INTO files VALUES (?,?,?,?,?,?,?)",
                     (rel, lang, st.st_size, st.st_mtime, h, int(is_test(rel)), len(rows)))
+        _write_graph(con, rel, lang, rows, imps, call_rows, resolver)
     if to_parse or removed or full:
         _set_meta(con, "updated_at", now_iso())
         _set_meta(con, "symbol_tool", tool)
@@ -495,6 +525,22 @@ def _update(project, full, only=None):
     return {"files": len(current), "parsed": len(to_parse), "removed": len(removed),
             "ms": int((time.time() - t0) * 1000), "tool": tool}
 
+# Language built-ins: calls to these are known (not repo code), so they are external, not leads.
+PY_BUILTINS = frozenset(n for n in dir(__import__("builtins")) if not n.startswith("_"))
+JS_GLOBALS = frozenset((
+    "console", "Math", "JSON", "Object", "Array", "Promise", "Number", "String", "Boolean", "Date",
+    "Symbol", "Reflect", "Intl", "window", "document", "globalThis", "navigator", "localStorage",
+    "sessionStorage", "Error", "Map", "Set", "WeakMap", "RegExp", "URL", "BigInt",
+    "setTimeout", "clearTimeout", "setInterval", "clearInterval", "requestAnimationFrame",
+    "parseInt", "parseFloat", "isNaN", "isFinite", "fetch", "structuredClone", "queueMicrotask",
+    "encodeURIComponent", "decodeURIComponent", "alert", "confirm"))
+
+
+def _builtin(lang, name, obj):
+    if lang == "python":
+        return obj is None and name in PY_BUILTINS
+    return (obj if obj is not None else name) in JS_GLOBALS
+
 
 def _resolve_calls(rel, lang, parsed, resolver):
     """Best-effort: attach each call to the repo file defining its callee.
@@ -503,8 +549,10 @@ def _resolve_calls(rel, lang, parsed, resolver):
     ("unresolved"): a lead to verify by reading, not a fact."""
     syms, calls, binds = parsed[0], parsed[2], parsed[3]
     local = {n for n, _, _, _ in syms if n}
-    bound = {}
+    bound, pkg = {}, set()
     for name, (raw, orig) in binds.items():
+        if not resolver.internal(raw, lang):
+            pkg.add(name)
         target = None
         if lang == "python" and orig != "*" and raw.strip(".") == "":
             target = resolver.resolve(rel, raw + orig, lang)  # from . import mod
@@ -514,6 +562,8 @@ def _resolve_calls(rel, lang, parsed, resolver):
     rows = []
     for caller, name, obj, line in calls:
         path, callee = None, name
+        ext = ((name in pkg) if obj is None else (obj in pkg)) or (
+            _builtin(lang, name, obj) and name not in local and name not in bound)
         if obj is None:
             if name in bound and bound[name][0]:
                 path = bound[name][0]
@@ -525,11 +575,72 @@ def _resolve_calls(rel, lang, parsed, resolver):
             path = rel if name in local else None
         elif obj in bound and bound[obj][1] == "*":
             path = bound[obj][0]
-        rows.append((rel, caller, callee, path, line))
+        rows.append((rel, caller, callee, path, line, ext and path is None))
     return rows
 
 
+def _sym_id(path, name, scope):
+    return "%s#%s%s" % (path, (scope + ".") if scope else "", name)
+
+
+def _write_graph(con, rel, lang, sym_rows, imps, call_rows, resolver):
+    """Mirror one parsed file into the unified graph: nodes (file + symbols) and edges.
+
+    Node ids are stable (`path` for a file, `path#Scope.name` for a symbol) so edges from other
+    files survive this file being re-parsed. Edge confidence: extracted = found through an
+    explicit import/declaration; unresolved = a name we saw but could not place (dst NULL)."""
+    nodes = [(rel, "file", PurePosixPath(rel).name, rel, 1, None, None, None)]
+    for n, k, _, ln, sc, pr in sym_rows:
+        nodes.append((_sym_id(rel, n, sc), k.replace("-", "_"), n, rel, ln, None, sc, pr))
+    con.executemany("INSERT OR IGNORE INTO nodes VALUES (?,?,?,?,?,?,?,?)", nodes)
+    edges = []
+    for src, raw, target, line in imps:
+        if target:
+            edges.append((rel, target, "imports", line, "extracted", raw, rel, target))
+        elif resolver.internal(raw, lang):  # looks like a repo file we could not place
+            edges.append((rel, None, "imports", line, "unresolved", raw, rel, None))
+        else:  # a package: fully known, just not in the repo
+            edges.append((rel, None, "imports_ext", line, "extracted", raw, rel, None))
+    own = {r[0] for r in con.execute("SELECT id FROM nodes WHERE path=?", (rel,))}
+    for _, caller, callee, cpath, line, ext in call_rows:
+        sid = _sym_id(rel, caller, None) if caller else rel
+        if "." in (caller or ""):
+            scope, _, nm = caller.rpartition(".")
+            sid = _sym_id(rel, nm, scope)
+        if sid not in own:
+            sid = rel
+        if cpath:
+            hit = con.execute("SELECT id FROM nodes WHERE path=? AND name=? AND kind<>'file' LIMIT 1",
+                              (cpath, callee)).fetchone()
+            if hit:
+                dst = hit[0]
+            elif con.execute("SELECT 1 FROM nodes WHERE id=?", (cpath,)).fetchone():
+                dst = cpath  # target already parsed and has no such symbol
+            else:
+                dst = _sym_id(cpath, callee, None)  # target not parsed yet; corrected when it is
+            edges.append((sid, dst, "calls", line, "extracted", callee, rel, cpath))
+        elif ext:  # a function from an installed package: fully known, just not in the repo
+            edges.append((sid, None, "calls_ext", line, "extracted", callee, rel, None))
+        else:
+            edges.append((sid, None, "calls", line, "unresolved", callee, rel, None))
+    con.executemany("INSERT INTO edges VALUES (?,?,?,?,?,?,?,?)", edges)
+    # edges from other files into this one: re-point to the symbol now defined here (by name),
+    # or to the file when the symbol is gone / was guessed before this file was parsed
+    con.execute("UPDATE edges SET dst_id=COALESCE((SELECT n.id FROM nodes n WHERE n.path=edges.dst_path "
+                "AND n.name=edges.detail AND n.kind<>'file' LIMIT 1), dst_path) "
+                "WHERE dst_path=? AND dst_id<>dst_path AND dst_id NOT IN (SELECT id FROM nodes WHERE path=?)",
+                (rel, rel))
+
+
+def _unresolve_incoming(con, rel):
+    """A file was deleted: edges that pointed into it become unresolved instead of dangling."""
+    con.execute("UPDATE edges SET dst_id=NULL, dst_path=NULL, confidence='unresolved' WHERE dst_path=?",
+                (rel,))
+
+
 def _drop(con, rel):
+    con.execute("DELETE FROM nodes WHERE path=?", (rel,))
+    con.execute("DELETE FROM edges WHERE src_path=?", (rel,))
     con.execute("DELETE FROM files WHERE path=?", (rel,))
     con.execute("DELETE FROM symbols WHERE path=?", (rel,))
     con.execute("DELETE FROM imports WHERE src=?", (rel,))
@@ -572,8 +683,22 @@ def _refs(project, name, limit=10):
     return len(rows), rows[:limit]
 
 
+CONFIDENCE = {"extracted": 2, "inferred": 1, "unresolved": 0}
+
+
+def _conf_ok(min_confidence):
+    """Confidence levels at or above `min_confidence` (default: everything that has a target)."""
+    floor = CONFIDENCE.get(min_confidence or "inferred", 1)
+    return [c for c, r in CONFIDENCE.items() if r >= max(floor, 1)]
+
+
+def _in(values):
+    return "(%s)" % ",".join("?" * len(values))
+
+
 def dependents(con, rel):
-    return [r[0] for r in con.execute("SELECT DISTINCT src FROM imports WHERE target=? ORDER BY src", (rel,))]
+    return [r[0] for r in con.execute(
+        "SELECT DISTINCT src_path FROM edges WHERE kind='imports' AND dst_path=? ORDER BY src_path", (rel,))]
 
 
 def tests_for(con, rel):
@@ -617,22 +742,22 @@ def query_symbol(project, name):
 
 
 def _called_by(con, defs, budget, cap=8):
-    """'Called by' lines from the call graph (only files parsed with tree-sitter have calls)."""
+    """'Called by' lines from the call edges (only files parsed with tree-sitter have calls)."""
     if budget < 3 or not defs:
         return []
     exact = {(n, p) for n, _, p, _, _, _ in defs}
     names = {n for n, _ in exact}
-    rows = []
-    try:
-        for n in names:
-            rows += [(n,) + r for r in con.execute(
-                "SELECT callee_path, src_path, src_symbol, line FROM calls WHERE callee_name=? "
-                "ORDER BY src_path, line", (n,))]
-    except sqlite3.OperationalError:  # index from an older schema, upgraded by the next update
-        return []
-    sure = [(sp, ss, ln) for n, cp, sp, ss, ln in rows if cp and (n, cp) in exact]
-    # callee_path NULL: same name, receiver unknown (e.g. `store.add()`); keep apart and mark
-    maybe = [(sp, ss, ln) for n, cp, sp, ss, ln in rows if not cp]
+    sure, maybe = [], []
+    for n in sorted(names):
+        for cp, sp, sid, ln, conf in con.execute(
+                "SELECT dst_path, src_path, src_id, line, confidence FROM edges WHERE kind='calls' "
+                "AND detail=? ORDER BY src_path, line", (n,)):
+            caller = sid[len(sp) + 1:] if sid.startswith(sp + "#") else None
+            if conf == "unresolved":
+                # same name, receiver unknown (e.g. `store.add()`); keep apart and mark
+                maybe.append((sp, caller, ln))
+            elif (n, cp) in exact:
+                sure.append((sp, caller, ln))
     out = []
     for label, items in (("Called by", sure), ("Possibly called by (receiver unresolved)", maybe)):
         room = budget - len(out) - 1  # minus this section's header
@@ -687,55 +812,47 @@ MAX_DEPTH = 6
 MAX_FILES = 300  # stop expanding the impact BFS beyond this many files
 
 
-def _calls_table(con):
-    try:
-        con.execute("SELECT 1 FROM calls LIMIT 1")
-        return True
-    except sqlite3.OperationalError:
-        return False
-
-
 def _edge_text(con, src, dst):
     """Evidence that `src` depends on `dst`: 'src:LINE imports "raw"; calls f at src:LINE'."""
     bits, line = [], None
-    r = con.execute("SELECT line, raw FROM imports WHERE src=? AND target=? ORDER BY line LIMIT 1",
-                    (src, dst)).fetchone()
+    r = con.execute("SELECT line, detail FROM edges WHERE kind='imports' AND src_path=? AND dst_path=? "
+                    "ORDER BY line LIMIT 1", (src, dst)).fetchone()
     if r:
         line = r[0]
         bits.append("imports '%s'" % r[1])
-    if _calls_table(con):
-        c = con.execute("SELECT line, callee_name, src_symbol FROM calls WHERE src_path=? AND "
-                        "callee_path=? ORDER BY line LIMIT 1", (src, dst)).fetchone()
-        n = con.execute("SELECT count(*) FROM calls WHERE src_path=? AND callee_path=?",
+    c = con.execute("SELECT line, detail, src_id FROM edges WHERE kind='calls' AND src_path=? AND dst_path=? "
+                    "ORDER BY line LIMIT 1", (src, dst)).fetchone()
+    if c:
+        n = con.execute("SELECT count(*) FROM edges WHERE kind='calls' AND src_path=? AND dst_path=?",
                         (src, dst)).fetchone()[0]
-        if c:
-            line = line or c[0]
-            bits.append("calls %s at :%d%s%s" % (c[1], c[0], (" in " + c[2]) if c[2] else "",
-                                                  " (+%d more)" % (n - 1) if n > 1 else ""))
+        caller = c[2][len(src) + 1:] if c[2].startswith(src + "#") else None
+        line = line or c[0]
+        bits.append("calls %s at :%d%s%s" % (c[1], c[0], (" in " + caller) if caller else "",
+                                              " (+%d more)" % (n - 1) if n > 1 else ""))
     return "%s%s  %s" % (src, (":%d" % line) if line else "", "; ".join(bits) or "depends on it")
 
 
-def _users_of(con, rel):
-    """Files that import or call into `rel`."""
-    out = {r[0] for r in con.execute("SELECT DISTINCT src FROM imports WHERE target=?", (rel,))}
-    if _calls_table(con):
-        out |= {r[0] for r in con.execute("SELECT DISTINCT src_path FROM calls WHERE callee_path=?", (rel,))}
+def _users_of(con, rel, kinds=("imports", "calls"), min_confidence=None):
+    """Files that import or call into `rel` (over edges of `kinds` at or above `min_confidence`)."""
+    conf = _conf_ok(min_confidence)
+    out = {r[0] for r in con.execute(
+        "SELECT DISTINCT src_path FROM edges WHERE dst_path=? AND kind IN %s AND confidence IN %s"
+        % (_in(kinds), _in(conf)), (rel,) + tuple(kinds) + tuple(conf))}
     out.discard(rel)
     return sorted(out)
 
 
-def _uses_of(con, rel):
+def _uses_of(con, rel, kinds=("imports", "calls"), min_confidence=None):
     """Files that `rel` imports or calls into."""
-    out = {r[0] for r in con.execute("SELECT DISTINCT target FROM imports WHERE src=? AND target IS NOT NULL",
-                                     (rel,))}
-    if _calls_table(con):
-        out |= {r[0] for r in con.execute("SELECT DISTINCT callee_path FROM calls WHERE src_path=? AND "
-                                          "callee_path IS NOT NULL", (rel,))}
+    conf = _conf_ok(min_confidence)
+    out = {r[0] for r in con.execute(
+        "SELECT DISTINCT dst_path FROM edges WHERE src_path=? AND dst_path IS NOT NULL AND kind IN %s "
+        "AND confidence IN %s" % (_in(kinds), _in(conf)), (rel,) + tuple(kinds) + tuple(conf))}
     out.discard(rel)
     return sorted(out)
 
 
-def impact(project, path, depth=3):
+def impact(project, path, depth=3, kinds=("imports", "calls"), min_confidence=None):
     """Files affected by a change to `path`: BFS over who-imports / who-calls, level by level."""
     depth = max(1, min(int(depth), MAX_DEPTH))
     con = connect(project, write=False)
@@ -748,7 +865,7 @@ def impact(project, path, depth=3):
     for d in range(1, depth + 1):
         nxt = []
         for f in frontier:
-            for u in _users_of(con, f):
+            for u in _users_of(con, f, kinds, min_confidence):
                 if u not in level_of:
                     if len(level_of) > MAX_FILES:
                         truncated = True
@@ -853,13 +970,14 @@ def status(project):
     files = con.execute("SELECT count(*) FROM files").fetchone()[0]
     syms = con.execute("SELECT count(*) FROM symbols").fetchone()[0]
     imps = con.execute("SELECT count(*), count(target) FROM imports").fetchone()
-    try:
-        edges = con.execute("SELECT count(*), count(callee_path) FROM calls").fetchone()
-    except sqlite3.OperationalError:
-        edges = (0, 0)
+    edges = con.execute("SELECT count(*), count(dst_path) FROM edges WHERE kind='calls'").fetchone()
+    conf = dict(con.execute("SELECT confidence, count(*) FROM edges GROUP BY confidence"))
     langs = Counter(dict(con.execute("SELECT lang, count(*) FROM files GROUP BY lang").fetchall()))
     out = ["Index: %d files, %d symbols, %d imports (%d resolved to repo files), %d call edges (%d resolved)"
            % (files, syms, imps[0], imps[1], edges[0], edges[1]),
+           "Graph: %d nodes, %d edges (%s)" % (con.execute("SELECT count(*) FROM nodes").fetchone()[0],
+                                               sum(conf.values()),
+                                               ", ".join("%s %d" % (c, conf.get(c, 0)) for c in CONFIDENCE)),
            "Languages: " + ", ".join("%s %d" % kv for kv in langs.most_common(6)),
            "Symbols from: %s (precision ast > ctags > approx) · built %s · updated %s" % (_meta(con, "symbol_tool"), _meta(con, "built_at"),
                                                        _meta(con, "updated_at")),
