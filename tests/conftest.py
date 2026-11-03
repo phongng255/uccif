@@ -82,3 +82,24 @@ def run_hook(event, data, raw=None):
 def hook_log(project):
     from uccif_lib import log
     return log.read(project, "hooks.jsonl")
+
+
+VUE_APP = Path(__file__).resolve().parent / "fixtures" / "vue-app"
+
+
+def copy_vue_app(dest):
+    """Copy the fixed Vue 3 + Pinia + router fixture into `dest` and commit it."""
+    import shutil
+    for src in sorted(VUE_APP.rglob("*")):
+        if src.is_file():
+            target = Path(dest) / src.relative_to(VUE_APP)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(str(src), str(target))
+    git(dest, "add", "-A")
+    git(dest, "commit", "-q", "-m", "vue-app fixture")
+
+
+@pytest.fixture
+def vue_app(repo):
+    copy_vue_app(repo)
+    return repo
