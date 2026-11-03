@@ -1,8 +1,8 @@
 {
   "name": "uccif",
   "displayName": "UCCIF",
-  "version": "3.0.0-dev.31",
-  "description": "Install once, then in any repository: a self-updating code index, LSP config, task memory, token reporting, project docs with drift detection, and a token-saving workflow. Never blocks.",
+  "version": "3.0.0-dev.34",
+  "description": "Install once, then in any repository: CodeGraph setup (code graph for Claude via MCP), project skills generated from the graph, LSP config, task memory, token reporting, project docs with drift detection, and a token-saving workflow. Never blocks.",
   "author": {
     "name": "phongng255",
     "url": "https://github.com/phongng255"
@@ -10,7 +10,13 @@
   "homepage": "https://github.com/phongng255/uccif",
   "repository": "https://github.com/phongng255/uccif",
   "license": "MIT",
-  "keywords": ["workflow", "context", "tokens", "resume", "code-intelligence"],
+  "keywords": [
+    "workflow",
+    "context",
+    "tokens",
+    "resume",
+    "code-intelligence"
+  ],
   "userConfig": {
     "reply_language": {
       "type": "string",
@@ -22,6 +28,12 @@
       "type": "boolean",
       "title": "Token line after each turn",
       "description": "Show one line with real token usage (read from the transcript) after each reply.",
+      "default": true
+    },
+    "auto_setup": {
+      "type": "boolean",
+      "title": "Automatic project setup",
+      "description": "When the CodeGraph CLI is installed: index each project in the background (codegraph init) and write project skills (.claude/skills/<project>-map, -bugfix, -mod-*) from the index, refreshed when the structure changes.",
       "default": true
     }
   }

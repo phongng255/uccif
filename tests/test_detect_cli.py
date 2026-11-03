@@ -34,7 +34,7 @@ def test_detect_web_app(project, repo):
     assert d["node"]["scripts"]["test"] == "vitest"
     assert not d["large_repo"] and d["uccif_v2"] == [] and not d["claude_md_block"]
     assert set(d["lsp"]) == {"typescript"} and d["lsp"]["typescript"]["install"].startswith("npm")
-    assert d["no_lsp"] == ["vue"]  # no LSP configured: covered by the index, nothing to ask
+    assert d["no_lsp"] == ["vue"]  # no LSP configured: covered by CodeGraph, nothing to ask
 
 
 def test_detect_finds_uccif_v2(project, repo):
@@ -50,6 +50,14 @@ def test_doctor_warns_on_fresh_project(project):
     assert ok is False
     assert any("session-start never ran" in l for l in lines)
     assert any("no .claude/uccif/summary.md" in l for l in lines)
+    assert any("not indexed by CodeGraph" in l for l in lines)
+
+
+def test_detect_reports_codegraph_state(project, repo):
+    (repo / ".codegraph").mkdir()
+    (repo / ".gitignore").write_text(".codegraph/\n")
+    cg = detect.detect(project)["codegraph"]
+    assert cg["indexed"] is True and cg["gitignored"] is True
 
 
 def git_bash():

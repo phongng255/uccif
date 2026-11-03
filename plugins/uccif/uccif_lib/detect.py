@@ -13,7 +13,7 @@ from collections import Counter
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from uccif_lib import __version__, log
+from uccif_lib import __version__, codegraph, log
 from uccif_lib.paths import data_root
 
 SKIP_DIRS = {".git", "node_modules", "vendor", ".venv", "venv", "env", "dist", "build",
@@ -53,6 +53,20 @@ def list_files(root):
     return files
 
 
+def source_files(root):
+    """Tracked + untracked source files (posix paths) that exist in the working tree."""
+    out = []
+    for f in list_files(root):
+        f = f.replace(os.sep, "/")
+        if Path(f).suffix in LANG_EXT and os.path.isfile(os.path.join(str(root), f)):
+            out.append(f)
+    return sorted(out)
+
+
+def language_counts(root):
+    return dict(Counter(LANG_EXT[Path(f).suffix] for f in source_files(root)))
+
+
 def _package_json(root):
     try:
         data = json.loads((root / "package.json").read_text(encoding="utf-8"))
@@ -87,6 +101,7 @@ def detect(project):
                  for n in ("summary.md", "architecture.md", "decisions.md", "known-issues.md")},
         "claude_md_block": _has_block(root / "CLAUDE.md"),
         "uccif_v2": _v2_traces(root),
+        "codegraph": dict(codegraph.state(project), gitignored=codegraph.gitignored(project)),
         "lsp": _lsp_status(langs),
         "no_lsp": sorted(l for l in langs if l not in _lsp_status(langs)
                          and l not in ("css", "scss", "less")),
@@ -128,7 +143,7 @@ def _v2_traces(root):
 
 def _lsp_status(langs):
     """Only languages this plugin configures an LSP for (.lsp.json). Others are listed
-    under `no_lsp`: the code index covers them and there is nothing to install."""
+    under `no_lsp`: CodeGraph covers them and there is nothing to install."""
     from uccif_lib.hooks import LSP_BUNDLED
     out = {}
     for lang in langs:
@@ -190,21 +205,23 @@ def doctor(project):
     check(errors == 0, "no hook errors in 7 days", "%d hook errors in 7 days: uccif log hooks --only-errors" % errors)
     check(slow == 0, "no slow hooks", "%d slow hook runs in 7 days" % slow)
 
-    from uccif_lib import index, ts_parse
-    av = ts_parse.availability()
-    if any(av.values()):
-        info("tree-sitter active for: %s (precise symbols and imports)"
-             % ", ".join(k for k, v in av.items() if v))
-    else:
-        info("tree-sitter not installed: symbols come from ctags/regex (approximate). Optional: "
-             "pip install tree-sitter tree-sitter-javascript tree-sitter-typescript tree-sitter-python")
-    langs = index.languages(project)
-    missing = [g for g in ("go", "rust", "java") if langs.get(g) and not av.get(g)]
-    if missing:
-        info("%s files are indexed by regex only (approximate, no calls). Optional: pip install %s"
-             % (", ".join(missing), " ".join("tree-sitter-" + g for g in missing)))
-    idx = index.status(project)
-    check(index.exists(project), idx[0], idx[0])
+    from uccif_lib.rules import load_user_rules, user_rule_files
+    loaded = {p: (len(shown), hidden) for _, p, shown, hidden in load_user_rules(project)}
+    for scope, path in user_rule_files(project):
+        if path in loaded:
+            n_shown, hidden = loaded[path]
+            info("user rules loaded (%s): %s, %d lines%s" % (scope, path.as_posix(), n_shown + hidden,
+                                                             ", first %d injected" % n_shown if hidden else ""))
+        else:
+            info("no user rules for %s (optional: %s)" % (scope, path.as_posix()))
+
+    cg = codegraph.state(project)
+    check(bool(cg["cli"]), "codegraph CLI: %s" % cg["cli"],
+          "codegraph CLI not installed (run the uccif:codegraph skill)")
+    check(cg["mcp"], "codegraph MCP server wired into Claude Code",
+          "codegraph MCP server not wired (`codegraph install --target=claude --location=global --yes`)")
+    check(cg["indexed"], "project indexed by CodeGraph (.codegraph/)",
+          "project not indexed by CodeGraph (`codegraph init --yes`)")
     d = detect(project)
     check(d["claude_md_block"], "CLAUDE.md has UCCIF block", "CLAUDE.md has no UCCIF block (run uccif:init)")
     check(d["docs"]["summary.md"], "project docs present", "no .claude/uccif/summary.md (run uccif:init)")
@@ -214,6 +231,6 @@ def doctor(project):
               "LSP for %s missing: install %s with `%s`, then /reload-plugins"
               % (lang, s["binary"], s["install"]))
     if d["no_lsp"]:
-        info("no LSP configured for %s; the code index covers these files (nothing to install)"
+        info("no LSP configured for %s; CodeGraph covers these files (nothing to install)"
              % ", ".join(d["no_lsp"]))
     return ok, lines

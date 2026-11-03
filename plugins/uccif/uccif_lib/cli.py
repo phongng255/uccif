@@ -4,9 +4,7 @@ import argparse
 import json
 import sys
 
-import sqlite3
-
-from uccif_lib import SCHEMA_VERSION, __version__, detect, drift, hooks, index, log, task, usage
+from uccif_lib import SCHEMA_VERSION, __version__, codegraph, detect, drift, hooks, log, task, usage
 from uccif_lib.paths import data_root_source, resolve_project
 
 
@@ -39,34 +37,19 @@ def build_parser():
     cl.add_argument("--issue", action="append")
     cl.add_argument("--no-findings", action="store_true")
 
-    ix = sub.add_parser("index", help="code index (SQLite, outside the repo)").add_subparsers(dest="action")
-    ix.add_parser("build", help="full rebuild")
-    iu = ix.add_parser("update", help="refresh changed files")
-    iu.add_argument("--quiet", action="store_true")
-    ix.add_parser("status")
-    ig = ix.add_parser("graph", help="write a self-contained HTML view of the code graph (outside the repo)")
-    ig.add_argument("--out", help="write here instead of the plugin data folder")
-    ig.add_argument("--max-nodes", type=int, default=300, help="most-connected files to draw (default 300)")
-    ig.add_argument("--file", help="function-level view of one file: its symbols and what they touch")
-    iq = ix.add_parser("query", help="definitions, callers, dependents, impact, paths, tests (≤ 30 lines)")
-    g = iq.add_mutually_exclusive_group(required=True)
-    g.add_argument("--symbol")
-    g.add_argument("--file")
-    g.add_argument("--tests-for")
-    g.add_argument("--impact", metavar="FILE|SYMBOL", help="what a change to FILE or SYMBOL reaches, level by level")
-    g.add_argument("--path", nargs=2, metavar=("FROM", "TO"), help="shortest import/call chain between two files or symbols")
-    g.add_argument("--cochange", metavar="FILE", help="files that changed together with FILE in git history")
-    iq.add_argument("--depth", type=int, default=3, help="levels for --impact (default 3, max %d)" % index.MAX_DEPTH)
-    iq.add_argument("--kinds", help="edge kinds for --impact, comma separated; groups: code, types, vars")
-    iq.add_argument("--min-confidence", choices=("extracted", "inferred"),
-                    help="for --impact; default: extracted edges, inferred ones only when nothing is certain")
+    sub.add_parser("codegraph", help="CodeGraph state for this project as JSON (cli, indexed, mcp)")
+    sk = sub.add_parser("skills", help="project skills generated from the CodeGraph index").add_subparsers(dest="action")
+    sg = sk.add_parser("generate", help="write/refresh .claude/skills/<project>-map, -bugfix, -mod-*")
+    sg.add_argument("--force", action="store_true", help="also overwrite generated files you edited")
+    sg.add_argument("--dry-run", action="store_true", help="show what would change, write nothing")
+    sk.add_parser("list", help="generated skills present in .claude/skills/")
 
     dr = sub.add_parser("drift", help="structural changes that make docs stale").add_subparsers(dest="action")
     dr.add_parser("check")
     dr.add_parser("show")
     dr.add_parser("ack", help="docs updated: store the current shape")
 
-    sub.add_parser("maintain", help="background upkeep: index update + drift check")
+    sub.add_parser("maintain", help="background upkeep: drift check")
 
     h = sub.add_parser("hook", help="run a hook handler (reads hook JSON on stdin)")
     h.add_argument("event")
@@ -104,85 +87,6 @@ def _log_cmd(args):
     return 0
 
 
-def _index_cmd(args):
-    proj = resolve_project()
-    if args.action in ("build", "update"):
-        try:
-            st = index.update(proj, full=args.action == "build", wait=60)
-        except (OSError, sqlite3.Error) as e:
-            print("Cannot write the index from this shell (%s): Claude Code's sandbox denies writes "
-                  "under ~/.claude. Hooks rebuild it automatically; nothing to do." % e)
-            return 0
-        if st is None:
-            print("Index is being updated by another process; try again shortly.")
-            return 0
-        if not getattr(args, "quiet", False):
-            print("Index: %(files)d files, %(parsed)d parsed, %(removed)d removed in %(ms)d ms "
-                  "(symbols: %(tool)s)" % st)
-        return 0
-    if args.action == "status":
-        print("\n".join(index.status(proj)))
-        return 0
-    if args.action == "graph":
-        from uccif_lib import graph
-        try:
-            index.update(proj, wait=2 if index.exists(proj) else 60)
-        except (OSError, sqlite3.Error):
-            pass  # sandbox: hooks keep the index current
-        try:
-            target, data = graph.write(proj, args.out, args.max_nodes, "symbols" if args.file else "files",
-                                       args.file)
-        except index.IndexUnavailable as e:
-            print("Code index unavailable (%s). It is built by the session-start hook." % e)
-            return 0
-        except OSError as e:
-            print("Cannot write the graph: %s" % e)
-            return 1
-        unit = "symbols" if data["mode"] == "symbols" else "files"
-        print("Graph: %d of %d %s, %d links -> %s" % (data["shown"], data["total_files"], unit,
-                                                      len(data["edges"]), target.as_posix()))
-        print("Open that file in a browser. It is self-contained and not part of the repo.")
-        return 0
-    if args.action == "query":
-        # Refresh first so edits made outside Claude are never missed. Inside Claude
-        # Code's Bash sandbox this write is denied; hooks keep the index current anyway.
-        try:
-            index.update(proj, wait=2 if index.exists(proj) else 60)
-        except (OSError, sqlite3.Error):
-            pass
-        try:
-            if args.symbol:
-                lines = index.query_symbol(proj, args.symbol)
-            elif args.file:
-                lines = index.query_file(proj, args.file)
-            elif args.impact:
-                from uccif_lib import queries
-                kinds = queries.parse_kinds(args.kinds) or index.DEFAULT_KINDS
-                con = index.connect(proj, write=False)
-                is_file = con.execute("SELECT 1 FROM files WHERE path=?",
-                                      (index._norm(proj, args.impact),)).fetchone()
-                con.close()
-                if is_file:
-                    lines = index.impact(proj, args.impact, args.depth, kinds, args.min_confidence)
-                else:
-                    lines = queries.impact_symbol(proj, args.impact, args.depth, kinds, args.min_confidence)
-            elif args.cochange:
-                from uccif_lib import queries
-                lines = queries.cochange(proj, args.cochange)
-            elif args.path:
-                lines = index.path_between(proj, args.path[0], args.path[1])
-            else:
-                lines = index.query_tests_for(proj, args.tests_for)
-        except index.IndexUnavailable as e:
-            lines = ["Code index unavailable (%s). It is built by the session-start hook; "
-                     "use bounded Grep/Glob meanwhile." % e]
-        except ValueError as e:  # --kinds with an unknown name
-            lines = [str(e)]
-        print("\n".join(lines))
-        return 0
-    return 2
-
-
 def _drift_cmd(args):
     proj = resolve_project()
     if args.action == "check":
@@ -200,10 +104,31 @@ def _drift_cmd(args):
 
 
 def maintain():
-    """Background upkeep run by hooks: refresh the index, then check drift."""
+    """Background upkeep run by hooks: drift check; with auto_setup on, index the project with
+    CodeGraph when its CLI is installed and refresh the generated project skills when the
+    project's shape changed. CodeGraph keeps its own index in sync after that."""
     proj = resolve_project()
-    index.update(proj, wait=30)
     drift.check(proj)
+    if hooks.options()["auto_setup"]:
+        from uccif_lib import skillgen
+        codegraph.auto_init(proj)
+        skillgen.auto(proj)
+    return 0
+
+
+def _skills_cmd(args):
+    from uccif_lib import skillgen
+    proj = resolve_project()
+    if args.action == "list":
+        names = skillgen.generated(proj)
+        print("\n".join(names) if names else "No generated project skills yet (`uccif skills generate`).")
+        return 0
+    try:
+        res = skillgen.generate(proj, force=args.force, dry_run=args.dry_run)
+    except skillgen.NoIndex as e:
+        print("Cannot generate skills: %s. Run the uccif:codegraph skill first." % e)
+        return 1
+    print("\n".join(skillgen.report(res)))
     return 0
 
 
@@ -274,8 +199,13 @@ def main(argv=None):
             return 0
         if args.cmd == "log" and args.action:
             return _log_cmd(args)
-        if args.cmd == "index" and args.action:
-            return _index_cmd(args)
+        if args.cmd == "skills" and args.action:
+            return _skills_cmd(args)
+        if args.cmd == "codegraph":
+            proj = resolve_project()
+            st = dict(codegraph.state(proj), gitignored=codegraph.gitignored(proj), package=codegraph.PACKAGE)
+            print(json.dumps(st, indent=1))
+            return 0
         if args.cmd == "drift" and args.action:
             return _drift_cmd(args)
         if args.cmd == "maintain":

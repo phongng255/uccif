@@ -83,7 +83,7 @@ def test_session_start_marks_previous_unclean(base, project):
 
 def test_user_prompt_submit(base, project):
     _, out = run_hook("user-prompt-submit", dict(base, prompt="hello"))
-    assert ctx(out).startswith("Reply in vi. Do ops work yourself. To find code, `uccif index query` first")
+    assert ctx(out).startswith("Reply in vi. Do ops work yourself. To find code, query CodeGraph first")
     task.start(project, "Fix login", "bug")
     _, out = run_hook("user-prompt-submit", dict(base, prompt="go on"))
     lines = ctx(out).splitlines()
@@ -192,28 +192,52 @@ def _src(project, rel, text):
     return p
 
 
-def test_session_start_builds_index_and_edit_updates_it(base, project):
-    from uccif_lib import index
+def _cg_env(monkeypatch, project, cli=False, mcp=False, indexed=False):
+    from uccif_lib import codegraph
+    home = project.root.parent / "home"
+    home.mkdir(exist_ok=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setattr(codegraph, "cli", lambda: "/usr/bin/codegraph" if cli else None)
+    if mcp:
+        (home / ".claude.json").write_text(json.dumps(
+            {"mcpServers": {"codegraph": {"command": "codegraph", "args": ["serve", "--mcp"]}}}))
+    if indexed:
+        (project.root / ".codegraph").mkdir(exist_ok=True)
+
+
+def test_session_start_offers_codegraph_when_missing(base, project, monkeypatch):
+    _cg_env(monkeypatch, project)
+    _, out = run_hook("session-start", dict(base, source="startup"))
+    text = ctx(out)
+    assert "CodeGraph is not installed" in text and "uccif:codegraph" in text
+    assert "never `npx codegraph`" in text
+
+
+def test_session_start_cli_without_index(base, project, monkeypatch):
+    _cg_env(monkeypatch, project, cli=True)
+    _, out = run_hook("session-start", dict(base, source="startup"))
+    assert "indexed in the background" in ctx(out) and "codegraph init --yes" in ctx(out)
+
+
+def test_session_start_codegraph_active(base, project, monkeypatch):
+    _cg_env(monkeypatch, project, cli=True, mcp=True, indexed=True)
+    _, out = run_hook("session-start", dict(base, source="startup"))
+    assert "CodeGraph is active" in ctx(out) and "`codegraph_explore` MCP tool FIRST" in ctx(out)
+
+
+def test_session_start_index_without_mcp(base, project, monkeypatch):
+    _cg_env(monkeypatch, project, cli=True, indexed=True)
+    _, out = run_hook("session-start", dict(base, source="startup"))
+    assert "not wired into Claude Code" in ctx(out)
+
+
+def test_post_tool_use_records_task_file(base, project):
+    task.start(project, "Fix login", "bug")
     _src(project, "src/a.ts", "export function alpha() {}\n")
-    _, out = run_hook("session-start", dict(base, source="startup"))
-    assert "being built in the background" in ctx(out)
-    assert index.exists(project)  # UCCIF_SYNC=1: built inline
-    _, out = run_hook("session-start", dict(base, source="startup"))
-    assert "Code index ready" in ctx(out)
-    _src(project, "src/a.ts", "export function alpha() {}\nexport function beta() {}\n")
     run_hook("post-tool-use", dict(base, tool_name="Edit",
                                    tool_input={"file_path": str(project.root / "src" / "a.ts")}))
-    assert "function beta" in "\n".join(index.query_symbol(project, "beta"))
-    assert hook_log(project)[-1]["indexed"] is True
-
-
-def test_stop_refreshes_index_for_out_of_band_changes(base, project):
-    from uccif_lib import index
-    _src(project, "src/a.ts", "export function alpha() {}\n")
-    index.update(project)
-    _src(project, "src/b.ts", "export function gamma() {}\n")  # e.g. written by a Bash command
-    run_hook("stop", dict(base))
-    assert "function gamma" in "\n".join(index.query_symbol(project, "gamma"))
+    assert hook_log(project)[-1]["rule"] == "task-files"
 
 
 def test_drift_reaches_claude_then_ack_clears_it(base, project):
@@ -246,7 +270,7 @@ def test_lsp_offer_once_per_binary(base, project, monkeypatch):
     for i in range(3):
         _src(project, "app/m%d.py" % i, "def f%d():\n    pass\n" % i)
     monkeypatch.setattr(H.shutil, "which", lambda b: None)
-    _, out = run_hook("session-start", dict(base, source="startup"))  # index built inline first
+    _, out = run_hook("session-start", dict(base, source="startup"))
     assert "pyright-langserver" in ctx(out) and "npm install -g pyright" in ctx(out)
     _, out = run_hook("session-start", dict(base, source="startup"))
     assert "pyright-langserver" not in ctx(out)  # asked once only

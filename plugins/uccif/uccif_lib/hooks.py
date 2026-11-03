@@ -19,9 +19,9 @@ import sys
 import time
 from pathlib import Path
 
-from uccif_lib import drift, index, log, task, usage
+from uccif_lib import codegraph, detect, drift, log, skillgen, task, usage
 from uccif_lib.paths import CORE_MARKER, data_root, read_json, resolve_project, write_json
-from uccif_lib.rules import core_rules
+from uccif_lib.rules import core_rules, user_rules
 
 SLOW_MS = {"session-start": 3000, "user-prompt-submit": 300, "pre-tool-use": 300,
            "post-tool-use": 500, "stop": 1000}
@@ -29,9 +29,9 @@ EDIT_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
 SEARCH_CMD = re.compile(r"(^|[\s|;&(])(grep|rg|ag|find|fd|ack)\s")
 # Bash commands each UCCIF agent may run; anything else is logged as would_block.
 AGENT_BASH = {
-    "project-analyst": (r"^uccif\s",),
-    "code-impact-analyzer": (r"^uccif\s",),
-    "change-reviewer": (r"^git\s+(diff|show|log|status)\b",),
+    "project-analyst": (r"^uccif\s", r"^codegraph\s"),
+    "code-impact-analyzer": (r"^uccif\s", r"^codegraph\s"),
+    "change-reviewer": (r"^git\s+(diff|show|log|status)\b", r"^codegraph\s", r"^git\s+diff\b.*\|\s*codegraph\s"),
 }
 DEFAULTS = {"context_window": "auto", "clear_hint_tokens": 80000,
             "checkpoint_tokens": 150000, "long_session_tokens": 3000000}
@@ -51,7 +51,8 @@ def options():
     cached = read_json(data_root() / CORE_MARKER, {})
     lang = os.environ.get("CLAUDE_PLUGIN_OPTION_REPLY_LANGUAGE") or cached.get("reply_language") or "vi"
     report = _bool(os.environ.get("CLAUDE_PLUGIN_OPTION_TOKEN_REPORT"), cached.get("token_report", True))
-    return {"reply_language": lang, "token_report": report}
+    setup = _bool(os.environ.get("CLAUDE_PLUGIN_OPTION_AUTO_SETUP"), cached.get("auto_setup", True))
+    return {"reply_language": lang, "token_report": report, "auto_setup": setup}
 
 
 def project_config(project):
@@ -69,7 +70,7 @@ ENTRY = Path(__file__).resolve().parent.parent / "scripts" / "uccif_main.py"
 
 
 def spawn(args, project):
-    """Run `uccif <args>` detached so a hook returns at once (index build, drift).
+    """Run `uccif <args>` detached so a hook returns at once (drift check).
     UCCIF_SYNC=1 runs it inline instead (tests, debugging)."""
     env = dict(os.environ, UCCIF_DATA_DIR=str(data_root()), CLAUDE_PROJECT_DIR=str(project.root))
     if os.environ.get("UCCIF_SYNC") == "1":
@@ -87,7 +88,7 @@ def spawn(args, project):
 
 def lsp_offer(project):
     """One line asking Claude to offer a missing language server, once per binary per machine."""
-    langs = index.languages(project)
+    langs = detect.language_counts(project.root)
     total = sum(langs.values()) or 1
     offered_path = data_root() / "lsp_offered.json"
     offered = read_json(offered_path, {}) or {}
@@ -100,7 +101,7 @@ def lsp_offer(project):
         offered[binary] = {"ts": time.time(), "project": str(project.root)}
         write_json(offered_path, offered)
         return ("The %s language server (%s) is not installed, so precise go-to-definition/references "
-                "fall back to the code index. Ask the user once, in your next reply, whether to install it "
+                "fall back to CodeGraph / Grep. Ask the user once, in your next reply, whether to install it "
                 "with `%s` (then /reload-plugins). If they agree, run it yourself." % (lang, binary, cmd))
     return None
 
@@ -139,17 +140,25 @@ def on_session_start(data, project):
         with open(env_file, "a", encoding="utf-8") as f:
             f.write("export UCCIF_DATA_DIR=%s\n" % quoted)
 
-    parts = []
+    parts, n_user = [], 0
     if source in ("startup", "clear", "compact"):
         parts.append(core_rules(opts["reply_language"]))
-    ready = index.exists(project)
-    spawn(["maintain"], project)  # build/refresh the code index and check drift in the background
-    if ready:
-        parts.append("Code index ready: `uccif index query --symbol X | --file P | --impact P|X | --path A B | "
-                     "--tests-for P | --cochange P` "
-                     "(refreshes itself; never read the .db).")
-    else:
-        parts.append("Code index is being built in the background; `uccif index query` waits for it.")
+        try:  # the user's own rules, right after the core (never fails the hook)
+            extra = user_rules(project)
+        except Exception:
+            extra = ""
+        if extra:
+            parts.append(extra)
+            n_user = extra.count("USER RULES (")
+    spawn(["maintain"], project)  # drift check, CodeGraph index + project skills in the background
+    parts.append(codegraph.context_line(project))
+    mine = skillgen.generated(project)
+    if mine:
+        maps = [n for n in mine if n.endswith("-map")]
+        fixes = [n for n in mine if n.endswith("-bugfix")]
+        parts.append("Project skills generated from CodeGraph in .claude/skills/: %s%s, %d module skills. "
+                     "Use the map skill to know where code lives and the bugfix skill for any reported bug."
+                     % (", ".join(maps + fixes), "" if maps else " (no map)", len(mine) - len(maps) - len(fixes)))
     offer = lsp_offer(project)
     if offer:
         parts.append(offer)
@@ -162,7 +171,10 @@ def on_session_start(data, project):
     lines = task.summary_lines(project)
     if lines:
         parts.append("\n".join(lines) + "\nIf the user's request continues it, use the uccif:resume skill.")
-    return _ctx("SessionStart", "\n\n".join(parts)), {"rule": "context", "target": source}
+    fields = {"rule": "context", "target": source}
+    if n_user:
+        fields["user_rules"] = n_user
+    return _ctx("SessionStart", "\n\n".join(parts)), fields
 
 
 def on_user_prompt_submit(data, project):
@@ -174,8 +186,9 @@ def on_user_prompt_submit(data, project):
     if stale:
         lines.append("Project docs are stale (.claude/uccif/): " + "; ".join(stale) +
                      ". Update only those sections when convenient, then run `uccif drift ack`.")
-    lines.append("Reply in %s. Do ops work yourself. To find code, `uccif index query` first; "
-                 "code changes follow the uccif task flow." % lang)
+    lines.append("Reply in %s. Do ops work yourself. To find code, query CodeGraph first "
+                 "(`codegraph_explore`, or `codegraph explore` in Bash); code changes follow the uccif task flow."
+                 % lang)
     return _ctx("UserPromptSubmit", "\n".join(lines)), {"rule": "quick" if quick else "reminder",
                                                        "drift": len(stale) or None}
 
@@ -197,11 +210,7 @@ def on_post_tool_use(data, project):
     if not rel or rel.startswith(".claude/"):
         return None, {"decision": "skip", "target": path}
     added = task.add_modified(project, rel)
-    st = index.update(project, wait=0.3, paths=[rel]) if index.exists(project) else None
-    if st and st.get("derived_stale"):
-        spawn(["maintain"], project)  # big repo: derived edges catch up in the background
-    return None, {"rule": "task-files" if added else "no-task", "target": rel,
-                  "indexed": bool(st and st["parsed"])}
+    return None, {"rule": "task-files" if added else "no-task", "target": rel}
 
 
 def on_post_tool_use_failure(data, project):
@@ -235,7 +244,7 @@ def on_subagent_stop(data, project):
 def on_stop(data, project):
     if data.get("stop_hook_active"):
         return None, {"decision": "skip", "rule": "rerun"}
-    # catch edits made by Bash, by the user, or by git pull/checkout this turn
+    # structural changes made by Bash, by the user, or by git pull/checkout this turn
     spawn(["maintain"], project)
     cfg = project_config(project)
     window = cfg["context_window"] if isinstance(cfg["context_window"], int) else "auto"

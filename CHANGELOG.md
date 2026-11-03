@@ -1,5 +1,59 @@
 # Changelog
 
+## 3.0.0-dev.34
+
+- **Project skills from the CodeGraph graph** (`skillgen.py`, `uccif skills generate|list`), for any
+  language and framework: `.claude/skills/<project>-map` (modules with size and role, entry points,
+  routes, most-used symbols, commands), `<project>-bugfix` (shortest path from a symptom to a tested
+  fix with CodeGraph and the project's own test commands) and `<project>-mod-*` (one per sizeable
+  module: key files / symbols with `file:line`, routes, neighbours, tests). Modules come from the
+  directory tree (container dirs such as `src/`, `packages/`, `internal/` are opened up, large dirs
+  split); facts from `.codegraph/codegraph.db`, opened read-only. Dot-dirs and non-code files
+  (yaml, json, markdown ...) are not modules.
+- Safe regeneration: a sha marker per file; only unedited generated files are rewritten (`--force`
+  overrides), the `<!-- uccif:notes -->` block is kept, files without the marker are never touched,
+  skills of modules that disappeared are removed when unedited and without notes.
+- **Automatic setup** (new option `auto_setup`, default on): `uccif maintain` (SessionStart / Stop,
+  in the background) runs `codegraph init --yes` when the CLI is installed and the project has no
+  index (one run at a time, a failure retried after a day), keeps `.codegraph/` out of git through
+  `.git/info/exclude`, and regenerates the project skills when the project's shape changes.
+  SessionStart names the generated skills.
+- `stack.py`: test runners and commands per package of a monorepo (`cd backend && python -m pytest
+  -q`, `cd web && npx vitest run <file>`), Makefile / justfile targets, go / cargo / maven / gradle /
+  rspec / phpunit / flutter / mix / dotnet defaults.
+
+## 3.0.0-dev.33
+
+- **Own code index and graph removed** (`index.py`, `graph.py`, `queries.py`, the tree-sitter
+  parsers, `uccif index …`, their tests and the tree-sitter CI job). CodeGraph
+  (`@colbymchenry/codegraph`) is the code index now.
+- New skill **`uccif:codegraph`**: installs the CodeGraph CLI, wires its MCP server into Claude
+  Code (`codegraph install --target=claude --location=global --yes`), indexes the project
+  (`codegraph init --yes`), git-ignores `.codegraph/` and checks `codegraph status`.
+- SessionStart reports CodeGraph's state (missing / CLI only / index without MCP / active) and
+  tells Claude to query `codegraph_explore` before Grep/Read; the UserPromptSubmit reminder, CORE
+  RULE 2, the search / impact skills and the agents use CodeGraph commands. Agents may run
+  `codegraph …` in Bash.
+- `uccif codegraph` prints the state as JSON; `uccif detect` and `uccif doctor` include it.
+- `npx codegraph` is never suggested: the unscoped npm package is unrelated (a test guards it).
+
+## 3.0.0-dev.32
+
+- **Your own rules, without touching the plugin:** `<project>/.claude/uccif/rules.md` (one
+  project, commit it) and `~/.claude/uccif/rules.md` (every project). SessionStart appends them
+  after the CORE RULES at startup, `/clear` and after compaction (the compaction path is
+  SessionStart's `compact` source, where the core rules are re-injected too): every-project file
+  first, then the project's. At most 15 non-empty lines per file (`<!-- -->` comments do not
+  count, lines over 300 characters are cut); a longer file ends with
+  `(+N more lines, see <file>)`. A missing, empty or unreadable file is skipped and the hook still
+  exits 0; with no files the output is unchanged.
+- `uccif doctor` lists the rule files it loads (and where the optional ones would go).
+- `/uccif:init` creates an empty project `rules.md` holding only commented examples, never
+  overwriting one.
+- README: "Extend it yourself" lists where rules, skills (`.claude/skills/<name>/SKILL.md`),
+  agents (`.claude/agents/<name>.md`) and fixed instructions (`CLAUDE.md`) go.
+- Tests run with a temporary home directory, so a real `~/.claude/uccif/rules.md` never leaks in.
+
 ## 3.0.0-dev.31
 
 - **The framework layer is gone** (asked for by the user): UCCIF is one core that fits any project,

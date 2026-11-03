@@ -50,9 +50,9 @@ def _deps(root):
 
 
 def fingerprint(project, files=None):
-    from uccif_lib.index import list_source_files
+    from uccif_lib.detect import source_files
     root = project.root
-    files = files if files is not None else list_source_files(root)
+    files = files if files is not None else source_files(root)
     dirs = set()
     for f in files:
         parts = PurePosixPath(f).parts[:-1]

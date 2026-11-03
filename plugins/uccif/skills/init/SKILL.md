@@ -11,9 +11,10 @@ at the lowest token cost. Read little, write short, mark every claim.
 
 ## Steps
 
-1. **Mechanical survey.** Run `uccif detect` (JSON) and `uccif index status`; use
-   `uccif index query --file <entry>` to map imports instead of opening files. Do not re-derive what it reports
-   (languages, manifests, scripts, test dirs, entry candidates, LSP status, v2 traces).
+1. **Mechanical survey.** `uccif detect` (JSON); `detect.codegraph.indexed` false → run the
+   `uccif:codegraph` skill first. Then read the generated `<project>-map` skill (modules, routes,
+   entry points, commands) and map the rest with `codegraph explore` / `codegraph files`, not by
+   opening files. Do not re-derive what these report.
 2. **Choose the reader.**
    - `large_repo: false` → survey yourself.
    - `large_repo: true` → delegate to the `uccif:project-analyst` agent, one call per top-level
@@ -51,12 +52,15 @@ at the lowest token cost. Read little, write short, mark every claim.
    - Keep `.claude/data/project/*` — copy useful facts into the new docs (re-tag them).
    - The old v2 CLAUDE.md block (CORE RULES, workflow) is replaced by the v3 block in step 6.
    - Suggest, not perform, removing `.claude/scripts/uccif.py` and `.claude/data/` afterwards.
-8. **Baseline.** After writing the docs run `uccif drift ack`, so later structural changes
+8. **User rules file.** Only if `.claude/uccif/rules.md` is missing, create it holding one
+   comment: `<!-- Project rules for Claude, one per line, max 15 loaded after the core rules. e.g.
+   Run npm run lint before saying a change is done. Every project: ~/.claude/uccif/rules.md -->`.
+9. **Baseline.** After writing the docs run `uccif drift ack`, so later structural changes
    (new module, new dependency) are reported to you automatically.
-9. **Check.** Run `uccif doctor`; report its WARN lines only (INFO lines need nothing).
+10. **Check.** Run `uccif doctor`; report its WARN lines only (INFO lines need nothing).
    LSP: only a language in `detect.lsp` with `installed: false` is worth one question —
    offer its `install` command; never install unasked. Languages in `detect.no_lsp` (e.g. vue)
-   have no LSP in this plugin and are covered by the code index: do not mention or ask.
+   have no LSP in this plugin and are covered by CodeGraph: do not mention or ask.
 
 ## Output to the user (in their language)
 

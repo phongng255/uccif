@@ -59,7 +59,7 @@ AGENTS = sorted((PLUGIN / "agents").glob("*.md"))
 
 def test_expected_components_exist():
     assert {p.parent.name for p in SKILLS} == {
-        "init", "task-context", "smart-code-search", "code-impact-analysis", "code-review", "resume"}
+        "init", "task-context", "smart-code-search", "code-impact-analysis", "code-review", "resume", "codegraph"}
     assert {p.stem for p in AGENTS} == {"project-analyst", "code-impact-analyzer", "change-reviewer"}
 
 
@@ -93,3 +93,14 @@ def test_core_rules_at_most_8():
 
 def test_no_claude_md_at_plugin_root():
     assert not (PLUGIN / "CLAUDE.md").exists()  # never loaded as context
+
+
+def test_no_unscoped_npx_codegraph():
+    # `codegraph` on npm is an unrelated package; only @colbymchenry/codegraph is CodeGraph.
+    import re as _re
+    for path in list(PLUGIN.rglob("*.md")) + list(PLUGIN.rglob("*.py")):
+        text = "\n".join(l for l in path.read_text(encoding="utf-8").splitlines()
+                          if "never" not in l.lower())  # warnings against it are fine
+        for m in _re.finditer(r"npx\s+(?:-y\s+)?(\S+)", text):
+            if "codegraph" in m.group(1):
+                assert m.group(1).startswith("@colbymchenry/codegraph"), path
