@@ -11,8 +11,9 @@ at the lowest token cost. Read little, write short, mark every claim.
 
 ## Steps
 
-1. **Mechanical survey.** Run `uccif detect` (JSON) and `uccif index status`; use
-   `uccif index query --file <entry>` to map imports instead of opening files. Do not re-derive what it reports
+1. **Mechanical survey.** Run `uccif detect` (JSON). If `detect.codegraph.indexed` is false,
+   run the `uccif:codegraph` skill first. Use `codegraph explore "<entry> dependencies"` /
+   `codegraph files` to map the code instead of opening files. Do not re-derive what it reports
    (languages, manifests, scripts, test dirs, entry candidates, LSP status, v2 traces).
 2. **Choose the reader.**
    - `large_repo: false` → survey yourself.
@@ -59,7 +60,7 @@ at the lowest token cost. Read little, write short, mark every claim.
 10. **Check.** Run `uccif doctor`; report its WARN lines only (INFO lines need nothing).
    LSP: only a language in `detect.lsp` with `installed: false` is worth one question —
    offer its `install` command; never install unasked. Languages in `detect.no_lsp` (e.g. vue)
-   have no LSP in this plugin and are covered by the code index: do not mention or ask.
+   have no LSP in this plugin and are covered by CodeGraph: do not mention or ask.
 
 ## Output to the user (in their language)
 

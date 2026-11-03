@@ -3,9 +3,10 @@
 A Claude Code plugin marketplace. Install the core plugin `uccif` once; from then on, in
 **any** repository, with nothing to run by hand:
 
-- a **code index** (SQLite, outside the repo) that Claude queries before grepping:
-  definitions, dependents, imports, related tests — built in the background at session start
-  and kept current after every edit, every turn and every `git pull`;
+- **CodeGraph setup** ([@colbymchenry/codegraph](https://github.com/colbymchenry/codegraph)):
+  the `uccif:codegraph` skill installs the CLI, wires its MCP server into Claude Code and
+  indexes the project (`.codegraph/`, SQLite, tree-sitter); hooks then tell Claude to query
+  `codegraph_explore` before any Grep/Read;
 - **LSP** for TypeScript/JavaScript and Python (Claude offers to install a missing server once);
 - **CORE RULES** and a token-saving workflow injected by hooks at every session and prompt;
 - **task memory** (`uccif task …`) that survives `/clear`, compaction and new sessions;
@@ -41,7 +42,8 @@ tried in a real Claude Code session. Language servers and MCP servers are never 
 | Data | Location |
 |---|---|
 | Framework code | `${CLAUDE_PLUGIN_ROOT}` |
-| Code index, logs, metrics | `${CLAUDE_PLUGIN_DATA}/projects/<path-hash>/` (outside the repo; written by hooks) |
+| Logs, metrics | `${CLAUDE_PLUGIN_DATA}/projects/<path-hash>/` (outside the repo; written by hooks) |
+| Code graph | `<project>/.codegraph/` (CodeGraph's own; git-ignored) |
 | Task memory, history, drift baseline | `<project>/.claude/uccif/.local/` (git-ignored; writable from Claude's sandboxed Bash) |
 | Project docs, decisions, known issues | `<project>/.claude/uccif/` (commit these) |
 
@@ -86,30 +88,37 @@ is bumped (`plugins/uccif/.claude-plugin/plugin.json` and `uccif_lib/__init__.py
 a test checks it). While developing, load the working tree with `claude --plugin-dir` instead
 of reinstalling.
 
-## Code graph queries
+## CodeGraph
 
-Claude runs these itself (the session hint and the skills point to them); they refresh changed
-files first, read the index read-only and answer in at most 30 lines, each with `file:line`.
+UCCIF has no code index of its own any more: [CodeGraph](https://github.com/colbymchenry/codegraph)
+is the index. After installing UCCIF, the first session says whether CodeGraph is missing, not
+wired or not indexed for this project, and Claude offers to run the `uccif:codegraph` skill, which
+runs:
 
-| Query | Answers |
-|---|---|
-| `uccif index query --symbol X` | definitions, callers, subclasses, users (callbacks, types, reads/writes), tests |
-| `--file P` | symbols, imports, imported-by, tests, files often changed with it |
-| `--impact P` or `--impact X` | what a change to a file or a symbol reaches, level by level, plus tests to run; `--kinds code,types,vars`, `--min-confidence inferred`, `--depth N` |
-| `--path A B` | shortest dependency chain between two files or symbols |
-| `--cochange P` | files git history changes together with P |
-| `uccif index graph [--file P]` | a self-contained HTML view: files, or one file's functions; filter by edge kind |
+```bash
+npm install -g @colbymchenry/codegraph
+```
 
-Edges carry a confidence: `extracted` (found through an explicit import / declaration),
-`inferred` (matched by name or pattern, shown with `~inferred` and hidden by default when certain
-edges exist) and `unresolved` (a name we could not place: a lead to check, never a fact).
+```bash
+codegraph install --target=claude --location=global --yes
+```
+
+```bash
+codegraph init --yes
+```
+
+then adds `.codegraph/` to `.gitignore` and checks `codegraph status`. Restart Claude Code once
+afterwards so the `codegraph_explore` MCP tool loads. `uccif codegraph` prints the current state.
+
+Do not use `npx codegraph`: the unscoped npm package `codegraph` is an unrelated project with no
+CLI. The real one is `@colbymchenry/codegraph` (`npx -y @colbymchenry/codegraph` runs its installer).
 
 ## Roadmap
 
 | Version | Content |
 |---|---|
-| 3.0 | task/resume, token line, logs, `/uccif:init`, CORE RULES via hooks, 3 agents, code index, LSP config, drift detection, tests + CI |
+| 3.0 | task/resume, token line, logs, `/uccif:init`, CORE RULES via hooks, 3 agents, CodeGraph setup, LSP config, drift detection, tests + CI |
 | 3.1 | `[src:]` doc-claims check |
 | 3.0-dev.11+ | code graph: optional tree-sitter parsing (done), call edges (done), multi-level `--impact` and `--path` queries (done), HTML graph view `uccif index graph` (done); phase 2 (nodes/edges model, Vue/Pinia/router edges, deeper resolution) in progress, step 0 fixture + benchmark done, nodes/edges model with confidence done, config-driven aliases + barrels + Python roots done, extends/implements + contains + function-level tests done, Vue template edges (`renders`, template calls) done, Pinia stores + composables + variable origins done, props/emits + vue-router done, callbacks + late resolution + built-in methods done, CSS variables + classes done, type references + variable reads/writes done, git co-change done, new graph queries done, graph view with kind filters / component tree / function level done, Go / Rust / Java (layer E) done; framework layer (Vue templates, Pinia, vue-router, CSS links) removed in dev.31: UCCIF is one framework-neutral core, project-specific knowledge goes in your own rules / skills / agents |
-| 3.2 | optional `uccif-codeintel` plugin (Serena, more languages) |
+| 3.0-dev.33 | own code index and graph removed; CodeGraph setup skill + hooks that route code lookups to it |
 | 3.3 | `uccif-strict` (blocking gates), only if needed |

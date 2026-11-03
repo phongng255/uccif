@@ -7,18 +7,15 @@ description: Use to find where a function, class, component, style or config is 
 
 ## Order (cheapest precise source first)
 
-1. **Code index** — `uccif index query --symbol <Name>` (definitions, callers, dependents, files
-   that mention it), `--file <path>` (symbols, imports, imported-by, tests), `--tests-for <path>`,
-   `--impact <path|symbol> [--depth N] [--kinds ...]` (what a change reaches, level by level),
-   `--path <A> <B>` (how two files/symbols connect), `--cochange <path>` (files git history
-   changes together).
-   It refreshes changed files itself and answers in ≤ 30 lines. Never read the `.db`.
-   `~approx` marks regex-extracted symbols, `~inferred` an edge matched by name or pattern;
-   "Possibly called by" means the receiver could not be resolved: confirm these by reading the
-   cited line.
+1. **CodeGraph** — the `codegraph_explore` MCP tool (in Bash / subagents:
+   `codegraph explore "<question>"`). One call answers "where is X", "how does X work", "what
+   calls X", "how does A reach B": the relevant symbols' source with line numbers, call paths
+   and blast radius. Treat the returned source as already read. Narrower CLI:
+   `codegraph node <symbol|file>`, `codegraph callers|callees <symbol>`, `codegraph query <name>`.
+   No `.codegraph/` index or no CLI → run the `uccif:codegraph` skill first.
 2. **LSP** (go to definition / find references) when a language server is active for the
-   file — exact for overloads, re-exports and same-name symbols the index cannot tell apart.
-3. **Docs map**: `.claude/uccif/architecture.md` — which module owns a concept the index has
+   file — exact for overloads and same-name symbols.
+3. **Docs map**: `.claude/uccif/architecture.md` — which module owns a concept the graph has
    no name for.
 4. **Grep / Glob tools**, bounded: a path or glob parameter, a type filter, and a result limit.
    Put exclusions in the tool parameters, never inside the regex. If those tools do not

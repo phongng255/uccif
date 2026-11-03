@@ -1,5 +1,20 @@
 # Changelog
 
+## 3.0.0-dev.33
+
+- **Own code index and graph removed** (`index.py`, `graph.py`, `queries.py`, the tree-sitter
+  parsers, `uccif index …`, their tests and the tree-sitter CI job). CodeGraph
+  (`@colbymchenry/codegraph`) is the code index now.
+- New skill **`uccif:codegraph`**: installs the CodeGraph CLI, wires its MCP server into Claude
+  Code (`codegraph install --target=claude --location=global --yes`), indexes the project
+  (`codegraph init --yes`), git-ignores `.codegraph/` and checks `codegraph status`.
+- SessionStart reports CodeGraph's state (missing / CLI only / index without MCP / active) and
+  tells Claude to query `codegraph_explore` before Grep/Read; the UserPromptSubmit reminder, CORE
+  RULE 2, the search / impact skills and the agents use CodeGraph commands. Agents may run
+  `codegraph …` in Bash.
+- `uccif codegraph` prints the state as JSON; `uccif detect` and `uccif doctor` include it.
+- `npx codegraph` is never suggested: the unscoped npm package is unrelated (a test guards it).
+
 ## 3.0.0-dev.32
 
 - **Your own rules, without touching the plugin:** `<project>/.claude/uccif/rules.md` (one

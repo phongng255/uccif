@@ -1,8 +1,8 @@
 {
   "name": "uccif",
   "displayName": "UCCIF",
-  "version": "3.0.0-dev.32",
-  "description": "Install once, then in any repository: a self-updating code index, LSP config, task memory, token reporting, project docs with drift detection, and a token-saving workflow. Never blocks.",
+  "version": "3.0.0-dev.33",
+  "description": "Install once, then in any repository: CodeGraph setup (code graph for Claude via MCP), LSP config, task memory, token reporting, project docs with drift detection, and a token-saving workflow. Never blocks.",
   "author": {
     "name": "phongng255",
     "url": "https://github.com/phongng255"

@@ -7,7 +7,7 @@ The project's CLAUDE.md UCCIF block holds only project-specific facts
 CORE_RULES = """\
 UCCIF CORE RULES
 1. Do the work yourself. Run commands, read output and logs, start/stop processes (long-running ones in the background), write data files. Hand the user only what needs their hands or eyes: GUI actions in other apps, device testing, logins, typing secrets. Never ask the user to run a command you can run.
-2. Two kinds of work. Ops (run, inspect, configure, read logs; no source edits) -> just do it. Code changes -> matching uccif skill -> `uccif task start "<title>" --type <type>` -> find code (`uccif index query`, LSP when active, then bounded Grep/Glob, then read only the needed range) -> Edit -> related tests -> `uccif task checkpoint` / `uccif task close`. The flow saves tokens and survives /clear and compaction; it is never a gate.
+2. Two kinds of work. Ops (run, inspect, configure, read logs; no source edits) -> just do it. Code changes -> matching uccif skill -> `uccif task start "<title>" --type <type>` -> find code (CodeGraph `codegraph_explore` first, LSP when active, then bounded Grep/Glob, then read only the needed range) -> Edit -> related tests -> `uccif task checkpoint` / `uccif task close`. The flow saves tokens and survives /clear and compaction; it is never a gate.
 3. Evidence: never claim how code behaves, or that something is fixed/deployed/missing, without something you checked in this task (file:line, command output, git status).
 4. Ask first only for: installing packages, deploy, git push, calls to external services, deleting user data. One "yes" = one action.
 5. Stuck after 2 failed fixes -> gather evidence (logs, repro) before trying again.

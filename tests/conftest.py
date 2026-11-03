@@ -12,7 +12,7 @@ PLUGIN = REPO / "plugins" / "uccif"
 sys.path.insert(0, str(PLUGIN))
 
 ENV_VARS = ("UCCIF_DATA_DIR", "UCCIF_SYNC", "CLAUDE_PLUGIN_DATA", "CLAUDE_PROJECT_DIR", "CLAUDE_ENV_FILE",
-            "CLAUDE_PLUGIN_OPTION_REPLY_LANGUAGE", "CLAUDE_PLUGIN_OPTION_TOKEN_REPORT", "UCCIF_NO_TREE_SITTER")
+            "CLAUDE_PLUGIN_OPTION_REPLY_LANGUAGE", "CLAUDE_PLUGIN_OPTION_TOKEN_REPORT")
 
 
 def git(cwd, *args):
@@ -27,7 +27,6 @@ def data_dir(tmp_path, monkeypatch):
     d = tmp_path / "data"
     monkeypatch.setenv("UCCIF_DATA_DIR", str(d))
     monkeypatch.setenv("UCCIF_SYNC", "1")  # background upkeep runs inline in tests
-    monkeypatch.setenv("UCCIF_NO_TREE_SITTER", "1")  # regex/ctags path by default; ts tests opt in
     home = tmp_path / "home"  # never read the real ~/.claude/uccif/rules.md
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
@@ -87,23 +86,3 @@ def hook_log(project):
     from uccif_lib import log
     return log.read(project, "hooks.jsonl")
 
-
-VUE_APP = Path(__file__).resolve().parent / "fixtures" / "vue-app"
-
-
-def copy_vue_app(dest):
-    """Copy the fixed JS/TS fixture app (it has .vue files, read for their <script>) into `dest` and commit it."""
-    import shutil
-    for src in sorted(VUE_APP.rglob("*")):
-        if src.is_file():
-            target = Path(dest) / src.relative_to(VUE_APP)
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(str(src), str(target))
-    git(dest, "add", "-A")
-    git(dest, "commit", "-q", "-m", "vue-app fixture")
-
-
-@pytest.fixture
-def vue_app(repo):
-    copy_vue_app(repo)
-    return repo

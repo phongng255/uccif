@@ -19,10 +19,10 @@ The module/directory path, and optionally what the caller needs to know about it
 
 1. List the module's files (Glob). Identify entry points, public exports, config.
 2. Read the entry points and at most ~25 representative files, using offset/limit.
-3. Trace main dependencies with `uccif index query --file <entry>` (imports, imported-by,
-   often-changed-with, tests; `--impact <entry>` for what depends on it); Grep only for what the
-   index cannot show.
-4. Bash only for `uccif …` commands (e.g. `uccif index query`, `uccif detect`). Nothing else.
+3. Trace main dependencies with `codegraph explore "<module> entry points and dependencies"`,
+   `codegraph files <dir>` and `codegraph node <entry file>`; Grep only for what the graph
+   cannot show.
+4. Bash only for `codegraph …` and `uccif …` commands (e.g. `uccif detect`). Nothing else.
 
 # Output format (Markdown, ≤ 40 lines, nothing else)
 
