@@ -20,6 +20,8 @@ The plugin **never blocks** a tool call or a stop: every hook exits 0.
 
 ## Install
 
+Vietnamese guide (cài đặt và sử dụng, Claude Code + Antigravity): [docs/HUONG_DAN_SU_DUNG.md](docs/HUONG_DAN_SU_DUNG.md).
+
 ```
 /plugin marketplace add phongng255/uccif
 /plugin install uccif@uccif
