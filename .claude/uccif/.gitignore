@@ -1,0 +1,2 @@
+# UCCIF per-checkout state (task memory, drift); never commit
+.local/
