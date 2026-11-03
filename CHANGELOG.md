@@ -1,5 +1,20 @@
 # Changelog
 
+## 3.0.0-dev.26
+
+- **Fewer false leads** (the unresolved share on this repo was 50%, over the plan's 30% limit;
+  now 25%; the vue-app fixture stays at 8%):
+  - Python `from pkg import module` and `from . import module` now bind the name as a namespace,
+    so `module.func()` resolves to `pkg/module.py#func` (before, only a bare `module()` call did).
+    This alone resolved several hundred calls here (`index.update()`, `task.load()` ...).
+  - A built-in method (`execute`, `append`, `get` ...) called on a variable that came from a repo
+    function or class we could not tie it to (`con = connect(); con.execute()`, where `connect`
+    returns `sqlite3.connect(...)`) is `calls_ext` unless the repo defines such a method; anything
+    else stays an `unresolved` lead.
+  - Methods of pytest's built-in fixtures (`monkeypatch`, `capsys`, `tmp_path`, ...) are external.
+- What remains unresolved: method calls on parameters whose type the code does not write
+  (`n.child_by_field_name()`), and built-in names the repo also defines (kept as leads on purpose).
+
 ## 3.0.0-dev.25
 
 - **Graph view upgrade** (phase 2, step 13), still one self-contained HTML page:

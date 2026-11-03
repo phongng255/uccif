@@ -552,9 +552,14 @@ isoformat strftime total_seconds timestamp group groups groupdict finditer finda
 add_argument add_parser parse_args set_defaults print_help getvalue acquire release put task_done join""".split())
 
 
+# pytest's built-in fixtures, received as test parameters: their methods are pytest's, not the repo's.
+PYTEST_FIXTURES = frozenset(("monkeypatch", "capsys", "capfd", "caplog", "tmp_path", "tmpdir", "request",
+                             "recwarn", "pytestconfig", "tmp_path_factory", "mocker"))
+
+
 def _builtin(lang, name, obj):
     if lang == "python":
-        return obj is None and name in PY_BUILTINS
+        return (obj is None and name in PY_BUILTINS) or obj in PYTEST_FIXTURES
     return (obj if obj is not None else name) in JS_GLOBALS
 
 
@@ -565,8 +570,12 @@ def _bind_map(rel, lang, binds, resolver):
         if not resolver.internal(raw, lang, rel):
             pkg.add(name)
         target = None
-        if lang == "python" and orig != "*" and raw.strip(".") == "":
-            target = resolver.resolve(rel, raw + orig, lang)  # from . import mod
+        if lang == "python" and orig not in ("*", "default"):
+            # `from . import mod` / `from pkg import mod`: a submodule is a namespace (mod.func())
+            sub = resolver.resolve(rel, (raw + orig) if raw.strip(".") == "" else (raw + "." + orig), lang)
+            if sub is not None:
+                bound[name] = (sub, "*")
+                continue
         if target is None:
             target = resolver.resolve(rel, raw, lang)
         bound[name] = (target, orig)
@@ -1139,7 +1148,19 @@ def _derive_members(con):
     base classes), or a function returned by a composable (inferred)."""
     refs = con.execute("SELECT src_id, src_path, kind, member, line, origin_path, origin_name FROM refs "
                        "WHERE kind IN ('call','read')").fetchall()
-    new = []
+    new, defined = [], {}
+
+    def unknown(sid, member, line, sp):
+        """A method we could not tie to the origin: a built-in one (`con.execute()` on what
+        `sqlite3.connect()` returned) is external unless the repo defines it; else a lead."""
+        if member in BUILTIN_METHODS:
+            if member not in defined:
+                defined[member] = bool(con.execute("SELECT 1 FROM nodes WHERE name=? AND kind IN "
+                                                   "('function','method') LIMIT 1", (member,)).fetchone())
+            if not defined[member]:
+                new.append((sid, None, "calls_ext", line, "extracted", member, sp, None, "~member"))
+                return
+        new.append((sid, None, "calls", line, "unresolved", member, sp, None, "~member"))
     for sid, sp, kind, member, line, op, on in refs:
         o = con.execute("SELECT id, kind FROM nodes WHERE path=? AND name=? AND kind<>'file' AND scope IS NULL "
                         "ORDER BY kind='store' DESC, kind='class' DESC LIMIT 1", (op, on)).fetchone()
@@ -1159,7 +1180,7 @@ def _derive_members(con):
                 if kind == "call":
                     new.append((sid, None, "calls_ext", line, "extracted", member, sp, None, "~member"))
             elif kind == "call":
-                new.append((sid, None, "calls", line, "unresolved", member, sp, None, "~member"))
+                unknown(sid, member, line, sp)
         elif o and o[1] == "class" and kind == "call":
             found = None
             for cid in [o[0]] + _base_chain(con, o[0]):
@@ -1171,7 +1192,7 @@ def _derive_members(con):
             if found:
                 edge("calls", found[0], found[1], "extracted")
             else:
-                new.append((sid, None, "calls", line, "unresolved", member, sp, None, "~member"))
+                unknown(sid, member, line, sp)
         elif kind == "call":
             hit = con.execute("SELECT id FROM nodes WHERE path=? AND name=? AND kind IN "
                               "('function','variable','constant','method') AND id<>? LIMIT 1",
@@ -1179,7 +1200,7 @@ def _derive_members(con):
             if hit:
                 edge("calls", hit[0], op, "inferred")
             else:
-                new.append((sid, None, "calls", line, "unresolved", member, sp, None, "~member"))
+                unknown(sid, member, line, sp)
     con.executemany("INSERT INTO edges VALUES (?,?,?,?,?,?,?,?,?)", new)
 
 
