@@ -93,7 +93,8 @@ def parse(text, rel, lang):
     prop / emit; emit_calls (tenth item): [(enclosing function, event, line)] for `emit('event')`;
     navs: [(enclosing function, "path"|"name", value, dynamic, line)] for `router.push/replace(...)`;
     routes: [(full path, route name, ("ident", x) | ("import", module) | None, line)] of router configs
-    (also symbols of kind route, with the route name in members).
+    (also symbols of kind route, with the route name in members); callbacks (13th):
+    [(enclosing function, name, "this" | None, line)] for identifiers passed as call arguments.
     heritage: [(class or interface name, base name as written, "extends"|"implements", line)];
     a dotted base keeps its dots (`mod.Base`), generic arguments are dropped.
     symbols: [(name, kind, line, scope)]; imports: [raw module strings];
@@ -481,7 +482,7 @@ def _js_heritage(n, cname, out):
 def _js(root):
     syms, imps, calls, binds, ilines, heritage = [], [], [], {}, {}, []
     members, origins, reads = [], [], []
-    type_props, emit_cands, macros, nav_cands = {}, [], [], []
+    type_props, emit_cands, macros, nav_cands, callbacks = {}, [], [], [], []
 
     def add_import(raw, line):
         if raw and raw not in imps:
@@ -507,6 +508,14 @@ def _js(root):
                     syms.append((nm, "prop" if key == "props" else "emit", ln, None))
         if t == "call_expression":
             fn0 = n.child_by_field_name("function")
+            if len(callbacks) < _MAX_CALLS:  # functions handed to another call: watch(src, handler)
+                a2 = n.child_by_field_name("arguments")
+                for arg in (a2.children if a2 is not None else []):
+                    if arg.type == "identifier":
+                        callbacks.append((_js_caller(n), _txt(arg), None, arg.start_point[0] + 1))
+                    elif arg.type == "member_expression" and _txt(arg.child_by_field_name("object")) == "this":
+                        callbacks.append((_js_caller(n), _txt(arg.child_by_field_name("property")), "this",
+                                          arg.start_point[0] + 1))
             if fn0 is not None and fn0.type == "member_expression" and len(nav_cands) < 300 and _txt(
                     fn0.child_by_field_name("property")) in ("push", "replace"):
                 a1 = n.child_by_field_name("arguments")
@@ -618,7 +627,8 @@ def _js(root):
         members.append((None, full, rname))
     syms = [s for s in syms if s[0]]
     syms.sort(key=lambda s: s[2])
-    return syms, imps[:200], calls, binds, ilines, heritage, members, origins, reads, emit_calls, navs, routes
+    return (syms, imps[:200], calls, binds, ilines, heritage, members, origins, reads, emit_calls, navs, routes,
+            callbacks)
 
 
 def _js_bindings(stmt, raw, binds):
@@ -646,7 +656,7 @@ def _js_bindings(stmt, raw, binds):
 
 def _python(root):
     syms, imps, calls, binds, ilines, heritage = [], [], [], {}, {}, []
-    origins = []
+    origins, callbacks = [], []
 
     def add_import(raw, line):
         if raw and raw not in imps:
@@ -694,6 +704,12 @@ def _python(root):
                 cname = ""
             if cname and cname not in KEYWORD_CALLS:
                 calls.append((caller, cname, obj, n.start_point[0] + 1))
+            args = n.child_by_field_name("arguments")
+            for arg in (args.children if args is not None and len(callbacks) < _MAX_CALLS else []):
+                if arg.type == "keyword_argument":
+                    arg = arg.child_by_field_name("value")
+                if arg is not None and arg.type == "identifier":
+                    callbacks.append((caller, _txt(arg), None, arg.start_point[0] + 1))
         elif t == "assignment" and top:
             left = n.child_by_field_name("left")
             if left is not None and left.type == "identifier" and _CONST_RE.match(_txt(left)):
@@ -720,4 +736,4 @@ def _python(root):
         for c in reversed(n.children):
             stack.append((c, nxt_cls, nxt_top, nxt_caller))
     syms.sort(key=lambda s: s[2])
-    return syms, imps[:200], calls, binds, ilines, heritage, [], origins, [], [], [], []
+    return syms, imps[:200], calls, binds, ilines, heritage, [], origins, [], [], [], [], callbacks
