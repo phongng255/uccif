@@ -198,6 +198,9 @@ def doctor(project):
     else:
         info("tree-sitter not installed: symbols come from ctags/regex (approximate). Optional: "
              "pip install tree-sitter tree-sitter-javascript tree-sitter-typescript tree-sitter-python")
+    if any(av.values()) and not ts_parse.html_available() and index.languages(project).get("vue"):
+        info("Vue templates are not read (components rendered, functions called in templates). Optional: "
+             "pip install tree-sitter-html")
     idx = index.status(project)
     check(index.exists(project), idx[0], idx[0])
     d = detect(project)

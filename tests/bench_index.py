@@ -70,7 +70,7 @@ def bench(target, repeat):
             counts["edges"] = con.execute("SELECT count(*) FROM edges").fetchone()[0]
             # edges that point at the repo or at a package are fully known; "unresolved" are leads
             un = con.execute("SELECT count(*) FROM edges WHERE confidence='unresolved'").fetchone()[0]
-            ours = con.execute("SELECT count(*) FROM edges WHERE kind NOT IN ('imports_ext', 'calls_ext', 'extends_ext', 'implements_ext', 'contains', 'tests')").fetchone()[0]
+            ours = con.execute("SELECT count(*) FROM edges WHERE kind NOT IN ('imports_ext', 'calls_ext', 'extends_ext', 'implements_ext', 'renders_ext', 'contains', 'tests')").fetchone()[0]
             counts["unresolved_pct"] = round(100.0 * un / ours) if ours else 0
         except Exception:
             counts.update(nodes=0, edges=0, unresolved_pct=0)
@@ -78,7 +78,9 @@ def bench(target, repeat):
         db_kb = index.db_path(project).stat().st_size / 1024
 
         sources = sorted(r for r in index.list_source_files(repo))
-        pick = next((s for s in sources if not index.is_test(s)), None)
+        # the slowest path is a .vue file (script + template + derived passes), so prefer one
+        pick = next((s for s in sources if s.endswith(".vue")), None) or \
+            next((s for s in sources if not index.is_test(s)), None)
         touch, noop = [], []
         for i in range(repeat):
             noop.append(_ms(lambda: index.update(project))[0])

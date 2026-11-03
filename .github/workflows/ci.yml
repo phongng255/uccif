@@ -31,7 +31,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install pytest tree-sitter tree-sitter-javascript tree-sitter-typescript tree-sitter-python
+      - run: pip install pytest tree-sitter tree-sitter-javascript tree-sitter-typescript tree-sitter-python tree-sitter-html
       - run: python -m pytest -q
 
   validate:
