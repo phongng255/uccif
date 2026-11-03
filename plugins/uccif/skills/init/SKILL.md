@@ -11,7 +11,8 @@ at the lowest token cost. Read little, write short, mark every claim.
 
 ## Steps
 
-1. **Mechanical survey.** Run `uccif detect` (JSON). Do not re-derive what it reports
+1. **Mechanical survey.** Run `uccif detect` (JSON) and `uccif index status`; use
+   `uccif index query --file <entry>` to map imports instead of opening files. Do not re-derive what it reports
    (languages, manifests, scripts, test dirs, entry candidates, LSP status, v2 traces).
 2. **Choose the reader.**
    - `large_repo: false` → survey yourself.
@@ -50,7 +51,9 @@ at the lowest token cost. Read little, write short, mark every claim.
    - Keep `.claude/data/project/*` — copy useful facts into the new docs (re-tag them).
    - The old v2 CLAUDE.md block (CORE RULES, workflow) is replaced by the v3 block in step 6.
    - Suggest, not perform, removing `.claude/scripts/uccif.py` and `.claude/data/` afterwards.
-8. **Check.** Run `uccif doctor`; report its WARN lines. Missing LSP → name the binary and
+8. **Baseline.** After writing the docs run `uccif drift ack`, so later structural changes
+   (new module, new dependency) are reported to you automatically.
+9. **Check.** Run `uccif doctor`; report its WARN lines. Missing LSP → name the binary and
    plugin from `detect.lsp` and ask whether the user wants to install them; never install.
 
 ## Output to the user (in their language)

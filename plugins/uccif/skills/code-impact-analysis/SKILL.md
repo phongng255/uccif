@@ -8,8 +8,9 @@ description: Use before a refactor, rename, or any change to a shared interface,
 ## Steps
 
 1. Name the change precisely: file, symbol, kind (rename / signature / behaviour / removal).
-2. Find dependents with LSP references; fall back to `uccif:smart-code-search`
-   (imports + usages by name; also string references such as routes, events, config keys).
+2. Find dependents: `uccif index query --file <file>` (imported-by, tests) and
+   `--symbol <name>` (files that mention it), then LSP references when active; add string
+   references (routes, events, config keys) with a bounded Grep.
 3. Small and clear (≤ 4 dependents, one module) → do it yourself.
    Otherwise delegate to the `uccif:code-impact-analyzer` agent with the file, symbol and kind,
    then **re-read every H/M row's `file:line` yourself** before editing — agent output is a

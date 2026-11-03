@@ -186,6 +186,9 @@ def doctor(project):
     check(errors == 0, "no hook errors in 7 days", "%d hook errors in 7 days: uccif log hooks --only-errors" % errors)
     check(slow == 0, "no slow hooks", "%d slow hook runs in 7 days" % slow)
 
+    from uccif_lib import index
+    idx = index.status(project)
+    check(index.exists(project), idx[0], idx[0])
     d = detect(project)
     check(d["claude_md_block"], "CLAUDE.md has UCCIF block", "CLAUDE.md has no UCCIF block (run uccif:init)")
     check(d["docs"]["summary.md"], "project docs present", "no .claude/uccif/summary.md (run uccif:init)")

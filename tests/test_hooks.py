@@ -83,13 +83,13 @@ def test_session_start_marks_previous_unclean(base, project):
 
 def test_user_prompt_submit(base, project):
     _, out = run_hook("user-prompt-submit", dict(base, prompt="hello"))
-    assert ctx(out) == "Reply in vi. Do ops work yourself."
+    assert ctx(out).startswith("Reply in vi. Do ops work yourself. To find code, `uccif index query` first")
     task.start(project, "Fix login", "bug")
     _, out = run_hook("user-prompt-submit", dict(base, prompt="go on"))
     lines = ctx(out).splitlines()
     assert len(lines) <= 3 and lines[0].startswith("Open task T-001")
     _, out = run_hook("user-prompt-submit", dict(base, prompt="#quick fix typo"))
-    assert ctx(out) == "Reply in vi. Do ops work yourself."
+    assert len(ctx(out).splitlines()) == 1 and ctx(out).startswith("Reply in vi.")
 
 
 @pytest.mark.parametrize("agent,cmd,decision", [
@@ -183,3 +183,70 @@ def test_instructions_loaded_checks_block(base, project):
     md.write_text("<!-- UCCIF:BEGIN -->\nx\n<!-- UCCIF:END -->\n")
     run_hook("instructions-loaded", dict(base, file_path=str(md), memory_type="Project"))
     assert hook_log(project)[0]["target"] == "present"
+
+
+def _src(project, rel, text):
+    p = project.root / rel
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(text)
+    return p
+
+
+def test_session_start_builds_index_and_edit_updates_it(base, project):
+    from uccif_lib import index
+    _src(project, "src/a.ts", "export function alpha() {}\n")
+    _, out = run_hook("session-start", dict(base, source="startup"))
+    assert "being built in the background" in ctx(out)
+    assert index.exists(project)  # UCCIF_SYNC=1: built inline
+    _, out = run_hook("session-start", dict(base, source="startup"))
+    assert "Code index ready" in ctx(out)
+    _src(project, "src/a.ts", "export function alpha() {}\nexport function beta() {}\n")
+    run_hook("post-tool-use", dict(base, tool_name="Edit",
+                                   tool_input={"file_path": str(project.root / "src" / "a.ts")}))
+    assert "function beta" in "\n".join(index.query_symbol(project, "beta"))
+    assert hook_log(project)[-1]["indexed"] is True
+
+
+def test_stop_refreshes_index_for_out_of_band_changes(base, project):
+    from uccif_lib import index
+    _src(project, "src/a.ts", "export function alpha() {}\n")
+    index.update(project)
+    _src(project, "src/b.ts", "export function gamma() {}\n")  # e.g. written by a Bash command
+    run_hook("stop", dict(base))
+    assert "function gamma" in "\n".join(index.query_symbol(project, "gamma"))
+
+
+def test_drift_reaches_claude_then_ack_clears_it(base, project):
+    from uccif_lib import drift
+    _src(project, "src/a.ts", "export const a = 1\n")
+    run_hook("session-start", dict(base, source="startup"))  # baseline
+    _src(project, "src/payments/pay.ts", "export const p = 1\n")
+    run_hook("stop", dict(base))
+    _, out = run_hook("user-prompt-submit", dict(base, prompt="hi"))
+    assert "stale" not in ctx(out)  # no docs yet: nothing to keep in sync
+    _src(project, ".claude/uccif/summary.md", "# x\n")
+    drift.ack(project)
+    _src(project, "src/orders/o.ts", "export const o = 1\n")
+    (project.root / "package.json").write_text('{"dependencies": {"pinia": "2"}}')
+    run_hook("stop", dict(base))
+    _, out = run_hook("user-prompt-submit", dict(base, prompt="hi"))
+    text = ctx(out)
+    assert "new source dirs: src/orders" in text and "added pinia" in text and "uccif drift ack" in text
+    edit = dict(base, tool_name="Edit", tool_input={"file_path": str(project.root / "src" / "a.ts")})
+    _src(project, "src/a.ts", "export const a = 2\n")  # a change inside code is not drift
+    run_hook("post-tool-use", edit)
+    drift.ack(project)
+    run_hook("stop", dict(base))
+    _, out = run_hook("user-prompt-submit", dict(base, prompt="hi"))
+    assert "stale" not in ctx(out)
+
+
+def test_lsp_offer_once_per_binary(base, project, monkeypatch):
+    from uccif_lib import hooks as H
+    for i in range(3):
+        _src(project, "app/m%d.py" % i, "def f%d():\n    pass\n" % i)
+    monkeypatch.setattr(H.shutil, "which", lambda b: None)
+    _, out = run_hook("session-start", dict(base, source="startup"))  # index built inline first
+    assert "pyright-langserver" in ctx(out) and "npm install -g pyright" in ctx(out)
+    _, out = run_hook("session-start", dict(base, source="startup"))
+    assert "pyright-langserver" not in ctx(out)  # asked once only

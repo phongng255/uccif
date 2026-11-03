@@ -17,8 +17,9 @@ File, symbol, and the kind of change (rename / signature / behaviour / removal).
 # Steps
 
 1. Read the symbol's definition.
-2. Find usages: imports of the file, references by name, and string references (routes,
-   event names, config keys, template usage). Grep with path/type filters.
+2. Find usages: start with `uccif index query --file <file>` and `--symbol <name>`
+   (imported-by, mentioning files, tests), then string references (routes, event names,
+   config keys, template usage) with Grep using path/type filters.
 3. Read each usage site briefly (offset/limit) to classify how it depends on the symbol.
 4. Find tests covering the symbol or its callers.
 5. Bash only for `uccif …` commands. Nothing else.

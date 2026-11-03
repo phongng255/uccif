@@ -1,12 +1,17 @@
 # UCCIF — Universal Claude Code Intelligence Framework
 
-A Claude Code plugin marketplace. The core plugin `uccif` gives Claude, in any repository:
+A Claude Code plugin marketplace. Install the core plugin `uccif` once; from then on, in
+**any** repository, with nothing to run by hand:
 
-- **CORE RULES** injected by hooks at session start, after `/clear` and after compaction
-  (nothing to paste, nothing to keep in sync);
+- a **code index** (SQLite, outside the repo) that Claude queries before grepping:
+  definitions, dependents, imports, related tests — built in the background at session start
+  and kept current after every edit, every turn and every `git pull`;
+- **LSP** for TypeScript/JavaScript and Python (Claude offers to install a missing server once);
+- **CORE RULES** and a token-saving workflow injected by hooks at every session and prompt;
 - **task memory** (`uccif task …`) that survives `/clear`, compaction and new sessions;
-- **a real token line** after each reply, read from the transcript — never estimated;
-- **project docs** (`.claude/uccif/summary.md`, `architecture.md`) written once by `/uccif:init`;
+- **project docs** (`.claude/uccif/`) written once by `/uccif:init`, with **drift detection**
+  that tells Claude which section to update when the project's structure changes;
+- a **real token line** after each reply, read from the transcript — never estimated;
 - read-only **agents** for module analysis, impact analysis and change review;
 - **logs** of every hook run and session (`uccif log hooks|sessions`).
 
@@ -33,7 +38,7 @@ has not yet been verified in a real session. Language servers and MCP servers ar
 | Data | Location |
 |---|---|
 | Framework code | `${CLAUDE_PLUGIN_ROOT}` |
-| Task state, history, logs, metrics | `${CLAUDE_PLUGIN_DATA}/projects/<path-hash>/` (outside the repo) |
+| Code index, task state, history, logs, metrics, drift baseline | `${CLAUDE_PLUGIN_DATA}/projects/<path-hash>/` (outside the repo) |
 | Project docs, decisions, known issues | `<project>/.claude/uccif/` (commit these) |
 
 The per-project key is the repo path; the root commit is stored with it, so a renamed or
@@ -61,7 +66,7 @@ of reinstalling.
 
 | Version | Content |
 |---|---|
-| 3.0 | task/resume, token line, logs, `/uccif:init`, CORE RULES via hooks, 3 agents, tests + CI |
-| 3.1 | drift detection + `[src:]` doc-claims |
-| 3.2 | `codeintel` layer (LSP / Serena / tree-sitter index / ctags), `uccif-codeintel` plugin |
+| 3.0 | task/resume, token line, logs, `/uccif:init`, CORE RULES via hooks, 3 agents, code index, LSP config, drift detection, tests + CI |
+| 3.1 | `[src:]` doc-claims check |
+| 3.2 | optional `uccif-codeintel` plugin (Serena, tree-sitter indexers) |
 | 3.3 | `uccif-strict` (blocking gates), only if needed |

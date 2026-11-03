@@ -7,15 +7,19 @@ description: Use to find where a function, class, component, style or config is 
 
 ## Order (cheapest precise source first)
 
-1. **LSP** (go to definition / find references) when a language server is active for the file.
-2. **Docs map**: `.claude/uccif/architecture.md` — which module owns the concept.
-3. **Grep / Glob tools**, bounded: a path or glob parameter, a type filter, and a result limit.
+1. **Code index** — `uccif index query --symbol <Name>` (definitions, dependents, files that
+   mention it), `--file <path>` (symbols, imports, imported-by, tests), `--tests-for <path>`.
+   It refreshes changed files itself and answers in ≤ 30 lines. Never read the `.db`.
+   `~approx` marks regex-extracted symbols: confirm by reading the cited line.
+2. **LSP** (go to definition / find references) when a language server is active for the
+   file — exact for overloads, re-exports and same-name symbols the index cannot tell apart.
+3. **Docs map**: `.claude/uccif/architecture.md` — which module owns a concept the index has
+   no name for.
+4. **Grep / Glob tools**, bounded: a path or glob parameter, a type filter, and a result limit.
    Put exclusions in the tool parameters, never inside the regex. If those tools do not
    exist in this session, use `rg -n --glob '!node_modules' --glob '!dist' '<pattern>' <dir> | head -40`
    (quote globs; zsh fails on unquoted ones).
-4. **Read** only the needed range (offset/limit), never a whole large file for one function.
-
-`uccif index query` arrives in v3.2; until then skip it.
+5. **Read** only the needed range (offset/limit), never a whole large file for one function.
 
 ## Rules
 

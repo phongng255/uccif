@@ -11,7 +11,7 @@ REPO = Path(__file__).resolve().parent.parent
 PLUGIN = REPO / "plugins" / "uccif"
 sys.path.insert(0, str(PLUGIN))
 
-ENV_VARS = ("UCCIF_DATA_DIR", "CLAUDE_PLUGIN_DATA", "CLAUDE_PROJECT_DIR", "CLAUDE_ENV_FILE",
+ENV_VARS = ("UCCIF_DATA_DIR", "UCCIF_SYNC", "CLAUDE_PLUGIN_DATA", "CLAUDE_PROJECT_DIR", "CLAUDE_ENV_FILE",
             "CLAUDE_PLUGIN_OPTION_REPLY_LANGUAGE", "CLAUDE_PLUGIN_OPTION_TOKEN_REPORT")
 
 
@@ -26,6 +26,7 @@ def data_dir(tmp_path, monkeypatch):
         monkeypatch.delenv(var, raising=False)
     d = tmp_path / "data"
     monkeypatch.setenv("UCCIF_DATA_DIR", str(d))
+    monkeypatch.setenv("UCCIF_SYNC", "1")  # background upkeep runs inline in tests
     return d
 
 

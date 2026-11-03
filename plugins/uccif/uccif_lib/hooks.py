@@ -13,11 +13,13 @@ Rules for every handler:
 import json
 import os
 import re
+import shutil
+import subprocess
 import sys
 import time
 from pathlib import Path
 
-from uccif_lib import log, task, usage
+from uccif_lib import drift, index, log, task, usage
 from uccif_lib.paths import CORE_MARKER, data_root, read_json, resolve_project, write_json
 from uccif_lib.rules import core_rules
 
@@ -58,6 +60,51 @@ def project_config(project):
     return cfg
 
 
+LSP_BUNDLED = {  # languages the plugin's .lsp.json configures -> (binary, install command)
+    "typescript": ("typescript-language-server", "npm install -g typescript-language-server typescript"),
+    "javascript": ("typescript-language-server", "npm install -g typescript-language-server typescript"),
+    "python": ("pyright-langserver", "npm install -g pyright"),
+}
+ENTRY = Path(__file__).resolve().parent.parent / "scripts" / "uccif_main.py"
+
+
+def spawn(args, project):
+    """Run `uccif <args>` detached so a hook returns at once (index build, drift).
+    UCCIF_SYNC=1 runs it inline instead (tests, debugging)."""
+    env = dict(os.environ, UCCIF_DATA_DIR=str(data_root()), CLAUDE_PROJECT_DIR=str(project.root))
+    if os.environ.get("UCCIF_SYNC") == "1":
+        from uccif_lib import cli
+        cli.main(list(args))
+        return
+    kw = {"stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL,
+          "cwd": str(project.root), "env": env}
+    if os.name == "nt":
+        kw["creationflags"] = 0x00000008 | 0x00000200  # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+    else:
+        kw["start_new_session"] = True
+    subprocess.Popen([sys.executable, str(ENTRY)] + list(args), **kw)
+
+
+def lsp_offer(project):
+    """One line asking Claude to offer a missing language server, once per binary per machine."""
+    langs = index.languages(project)
+    total = sum(langs.values()) or 1
+    offered_path = data_root() / "lsp_offered.json"
+    offered = read_json(offered_path, {}) or {}
+    for lang, count in sorted(langs.items(), key=lambda kv: -kv[1]):
+        if lang not in LSP_BUNDLED or (count < 20 and count / total < 0.1):
+            continue
+        binary, cmd = LSP_BUNDLED[lang]
+        if shutil.which(binary) or binary in offered:
+            continue
+        offered[binary] = {"ts": time.time(), "project": str(project.root)}
+        write_json(offered_path, offered)
+        return ("The %s language server (%s) is not installed, so precise go-to-definition/references "
+                "fall back to the code index. Ask the user once, in your next reply, whether to install it "
+                "with `%s` (then /reload-plugins). If they agree, run it yourself." % (lang, binary, cmd))
+    return None
+
+
 def _ctx(event, text):
     return {"hookSpecificOutput": {"hookEventName": event, "additionalContext": text}}
 
@@ -93,6 +140,16 @@ def on_session_start(data, project):
     parts = []
     if source in ("startup", "clear", "compact"):
         parts.append(core_rules(opts["reply_language"]))
+    ready = index.exists(project)
+    spawn(["maintain"], project)  # build/refresh the code index and check drift in the background
+    if ready:
+        parts.append("Code index ready: `uccif index query --symbol X | --file P | --tests-for P` "
+                     "(refreshes itself; never read the .db).")
+    else:
+        parts.append("Code index is being built in the background; `uccif index query` waits for it.")
+    offer = lsp_offer(project)
+    if offer:
+        parts.append(offer)
     docs = project.docs_dir
     if (docs / "summary.md").exists():
         parts.append("Project docs: .claude/uccif/ (summary.md, architecture.md). Read only the section you need.")
@@ -110,8 +167,14 @@ def on_user_prompt_submit(data, project):
     lang = options()["reply_language"]
     quick = "#quick" in prompt
     lines = [] if quick else task.summary_lines(project)
-    lines.append("Reply in %s. Do ops work yourself." % lang)
-    return _ctx("UserPromptSubmit", "\n".join(lines)), {"rule": "quick" if quick else "reminder"}
+    stale = drift.pending(project)
+    if stale:
+        lines.append("Project docs are stale (.claude/uccif/): " + "; ".join(stale) +
+                     ". Update only those sections when convenient, then run `uccif drift ack`.")
+    lines.append("Reply in %s. Do ops work yourself. To find code, `uccif index query` first; "
+                 "code changes follow the uccif task flow." % lang)
+    return _ctx("UserPromptSubmit", "\n".join(lines)), {"rule": "quick" if quick else "reminder",
+                                                       "drift": len(stale) or None}
 
 
 def on_pre_tool_use(data, project):
@@ -131,7 +194,9 @@ def on_post_tool_use(data, project):
     if not rel or rel.startswith(".claude" + os.sep):
         return None, {"decision": "skip", "target": path}
     added = task.add_modified(project, rel)
-    return None, {"rule": "task-files" if added else "no-task", "target": rel}
+    st = index.update(project, wait=0.3, paths=[rel]) if index.exists(project) else None
+    return None, {"rule": "task-files" if added else "no-task", "target": rel,
+                  "indexed": bool(st and st["parsed"])}
 
 
 def on_post_tool_use_failure(data, project):
@@ -165,6 +230,8 @@ def on_subagent_stop(data, project):
 def on_stop(data, project):
     if data.get("stop_hook_active"):
         return None, {"decision": "skip", "rule": "rerun"}
+    # catch edits made by Bash, by the user, or by git pull/checkout this turn
+    spawn(["maintain"], project)
     cfg = project_config(project)
     window = cfg["context_window"] if isinstance(cfg["context_window"], int) else "auto"
     s = usage.summarize(data.get("transcript_path"), window)

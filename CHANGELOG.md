@@ -1,5 +1,21 @@
 # Changelog
 
+## 3.0.0-dev.3
+
+- **Code index** (`uccif index query --symbol | --file | --tests-for`, `index status|build`):
+  SQLite map of files, symbols, imports and tests, kept outside the repo. Symbols from
+  universal-ctags when installed, otherwise per-language regexes; references counted live
+  with `git grep`. Every query refreshes changed files first.
+- **Automatic upkeep:** SessionStart builds/refreshes the index and checks drift in the
+  background; each Edit/Write re-indexes that file; Stop refreshes everything touched outside
+  Claude (Bash, the user, git pull). No manual step.
+- **Drift detection** (`uccif drift check|show|ack`): new/removed source dirs, dependency and
+  build-config changes are handed to Claude on the next prompt with the doc section to update.
+- **LSP:** the plugin ships `.lsp.json` for TypeScript/JavaScript and Python. When a project's
+  main language has no server installed, Claude offers the install command once per machine.
+- Every prompt reminds Claude to search with the index first; skills and agents use it.
+- `uccif doctor` reports index status.
+
 ## 3.0.0-dev.2
 
 - Windows: the launcher no longer sets `PYTHONPATH` (its `:` separator and `/c/...` paths

@@ -4,7 +4,7 @@ import argparse
 import json
 import sys
 
-from uccif_lib import SCHEMA_VERSION, __version__, detect, hooks, log, task, usage
+from uccif_lib import SCHEMA_VERSION, __version__, detect, drift, hooks, index, log, task, usage
 from uccif_lib.paths import data_root_source, resolve_project
 
 
@@ -36,6 +36,24 @@ def build_parser():
     cl.add_argument("--decision", action="append")
     cl.add_argument("--issue", action="append")
     cl.add_argument("--no-findings", action="store_true")
+
+    ix = sub.add_parser("index", help="code index (SQLite, outside the repo)").add_subparsers(dest="action")
+    ix.add_parser("build", help="full rebuild")
+    iu = ix.add_parser("update", help="refresh changed files")
+    iu.add_argument("--quiet", action="store_true")
+    ix.add_parser("status")
+    iq = ix.add_parser("query", help="definitions, references, dependents, tests (≤ 30 lines)")
+    g = iq.add_mutually_exclusive_group(required=True)
+    g.add_argument("--symbol")
+    g.add_argument("--file")
+    g.add_argument("--tests-for")
+
+    dr = sub.add_parser("drift", help="structural changes that make docs stale").add_subparsers(dest="action")
+    dr.add_parser("check")
+    dr.add_parser("show")
+    dr.add_parser("ack", help="docs updated: store the current shape")
+
+    sub.add_parser("maintain", help="background upkeep: index update + drift check")
 
     h = sub.add_parser("hook", help="run a hook handler (reads hook JSON on stdin)")
     h.add_argument("event")
@@ -70,6 +88,58 @@ def _log_cmd(args):
     else:
         return 2
     print("\n".join(lines))
+    return 0
+
+
+def _index_cmd(args):
+    proj = resolve_project()
+    if args.action in ("build", "update"):
+        st = index.update(proj, full=args.action == "build", wait=60)
+        if st is None:
+            print("Index is being updated by another process; try again shortly.")
+            return 0
+        if not getattr(args, "quiet", False):
+            print("Index: %(files)d files, %(parsed)d parsed, %(removed)d removed in %(ms)d ms "
+                  "(symbols: %(tool)s)" % st)
+        return 0
+    if args.action == "status":
+        print("\n".join(index.status(proj)))
+        return 0
+    if args.action == "query":
+        # refresh first so edits made outside Claude are never missed
+        index.update(proj, wait=2 if index.exists(proj) else 60)
+        if args.symbol:
+            lines = index.query_symbol(proj, args.symbol)
+        elif args.file:
+            lines = index.query_file(proj, args.file)
+        else:
+            lines = index.query_tests_for(proj, args.tests_for)
+        print("\n".join(lines))
+        return 0
+    return 2
+
+
+def _drift_cmd(args):
+    proj = resolve_project()
+    if args.action == "check":
+        items = drift.check(proj)
+    elif args.action == "show":
+        items = drift.pending(proj)
+    elif args.action == "ack":
+        drift.ack(proj)
+        print("Drift acknowledged; current project shape stored.")
+        return 0
+    else:
+        return 2
+    print("\n".join(items) if items else "No drift.")
+    return 0
+
+
+def maintain():
+    """Background upkeep run by hooks: refresh the index, then check drift."""
+    proj = resolve_project()
+    index.update(proj, wait=30)
+    drift.check(proj)
     return 0
 
 
@@ -140,6 +210,12 @@ def main(argv=None):
             return 0
         if args.cmd == "log" and args.action:
             return _log_cmd(args)
+        if args.cmd == "index" and args.action:
+            return _index_cmd(args)
+        if args.cmd == "drift" and args.action:
+            return _drift_cmd(args)
+        if args.cmd == "maintain":
+            return maintain()
     except task.TaskError as e:
         print("uccif: %s" % e, file=sys.stderr)
         return 1
