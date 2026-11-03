@@ -72,6 +72,6 @@ of reinstalling.
 |---|---|
 | 3.0 | task/resume, token line, logs, `/uccif:init`, CORE RULES via hooks, 3 agents, code index, LSP config, drift detection, tests + CI |
 | 3.1 | `[src:]` doc-claims check |
-| 3.0-dev.8+ | code graph: optional tree-sitter parsing (done), call edges, multi-level `--impact`, `path` queries |
+| 3.0-dev.9+ | code graph: optional tree-sitter parsing (done), call edges (done), multi-level `--impact`, `path` queries |
 | 3.2 | optional `uccif-codeintel` plugin (Serena, more languages) |
 | 3.3 | `uccif-strict` (blocking gates), only if needed |

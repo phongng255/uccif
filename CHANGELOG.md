@@ -1,5 +1,21 @@
 # Changelog
 
+## 3.0.0-dev.9
+
+- **Call graph** (step 2 of the code-graph roadmap). With tree-sitter installed, the index
+  also records who calls what in a new `calls` table (`SCHEMA` 2; an old index is rebuilt
+  automatically). Each call keeps its enclosing function (`Class.method`), line, and, when it
+  can be worked out, the repo file defining the callee: through the file's own imports (named,
+  aliased, namespace, Python `from . import`), same-file definitions, and `this.x()` /
+  `self.x()`. Everything else is stored unresolved, never guessed.
+- `uccif index query --symbol X` now shows `Called by (n)` (resolved) and
+  `Possibly called by (receiver unresolved) (n)` with `file:line in caller`, still within the
+  30-line limit (callers are capped, references shrink to fit). `index status` shows the
+  number of call edges.
+- Without tree-sitter nothing changes: no call edges, `git grep` references as before.
+- Known limits: calls on variables (`store.add()`) and dynamic calls stay unresolved; a call
+  resolved before its target file existed is refreshed only when the caller file is re-parsed.
+
 ## 3.0.0-dev.8
 
 - **Optional tree-sitter parsing** for the code index (step 1 of the code-graph roadmap).

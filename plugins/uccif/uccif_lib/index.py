@@ -25,7 +25,7 @@ from pathlib import Path, PurePosixPath
 from uccif_lib import ts_parse
 from uccif_lib.paths import LockTimeout, file_lock, now_iso
 
-SCHEMA = 1
+SCHEMA = 2
 MAX_BYTES = 1000000
 QUERY_LINES = 30
 
@@ -158,6 +158,10 @@ def connect(project, write=True):
         CREATE TABLE IF NOT EXISTS symbols (name TEXT, kind TEXT, path TEXT, line INTEGER,
             scope TEXT, precision TEXT);
         CREATE TABLE IF NOT EXISTS imports (src TEXT, raw TEXT, target TEXT);
+        CREATE TABLE IF NOT EXISTS calls (src_path TEXT, src_symbol TEXT, callee_name TEXT,
+            callee_path TEXT, line INTEGER);
+        CREATE INDEX IF NOT EXISTS call_callee ON calls(callee_name);
+        CREATE INDEX IF NOT EXISTS call_src ON calls(src_path);
         CREATE INDEX IF NOT EXISTS sym_name ON symbols(name);
         CREATE INDEX IF NOT EXISTS sym_lname ON symbols(lower(name));
         CREATE INDEX IF NOT EXISTS sym_path ON symbols(path);
@@ -165,7 +169,8 @@ def connect(project, write=True):
         CREATE INDEX IF NOT EXISTS imp_target ON imports(target);
     """)
     if _meta(con, "schema") not in (None, str(SCHEMA)):
-        con.executescript("DELETE FROM files; DELETE FROM symbols; DELETE FROM imports; DELETE FROM meta;")
+        con.executescript("DELETE FROM files; DELETE FROM symbols; DELETE FROM imports; DELETE FROM calls; "
+                         "DELETE FROM meta;")
     _set_meta(con, "schema", SCHEMA)
     return con
 
@@ -401,7 +406,7 @@ def _update(project, full, only=None):
     root = project.root
     con = connect(project)
     if full:
-        con.executescript("DELETE FROM files; DELETE FROM symbols; DELETE FROM imports;")
+        con.executescript("DELETE FROM files; DELETE FROM symbols; DELETE FROM imports; DELETE FROM calls;")
     known = {r[0]: (r[1], r[2], r[3]) for r in con.execute("SELECT path, size, mtime, hash FROM files")}
     if only is not None:
         only = {p.replace(os.sep, "/") for p in only if lang_of(p.replace(os.sep, "/"))}
@@ -461,7 +466,9 @@ def _update(project, full, only=None):
             if lang in ("vue", "svelte"):
                 syms.append((None, "component", 1, None))
             raws = ast[rel][1]
+            call_rows = _resolve_calls(rel, lang, ast[rel], resolver)
         else:
+            call_rows = []
             syms, precision = tagged.get(rel), "ctags"
             if not syms:
                 syms, precision = regex_symbols(text, lang), "approx"
@@ -471,6 +478,7 @@ def _update(project, full, only=None):
         con.executemany("INSERT INTO symbols VALUES (?,?,?,?,?,?)", rows)
         imps = [(rel, raw, resolver.resolve(rel, raw, lang)) for raw in raws]
         con.executemany("INSERT INTO imports VALUES (?,?,?)", imps)
+        con.executemany("INSERT INTO calls VALUES (?,?,?,?,?)", call_rows)
         con.execute("INSERT INTO files VALUES (?,?,?,?,?,?,?)",
                     (rel, lang, st.st_size, st.st_mtime, h, int(is_test(rel)), len(rows)))
     if to_parse or removed or full:
@@ -484,10 +492,44 @@ def _update(project, full, only=None):
             "ms": int((time.time() - t0) * 1000), "tool": tool}
 
 
+def _resolve_calls(rel, lang, parsed, resolver):
+    """Best-effort: attach each call to the repo file defining its callee.
+    Resolved through the file's own import bindings, or to this file when it defines the
+    name itself (and for `this.x()` / `self.x()`). Anything else keeps callee_path NULL
+    ("unresolved"): a lead to verify by reading, not a fact."""
+    syms, _, calls, binds = parsed
+    local = {n for n, _, _, _ in syms if n}
+    bound = {}
+    for name, (raw, orig) in binds.items():
+        target = None
+        if lang == "python" and orig != "*" and raw.strip(".") == "":
+            target = resolver.resolve(rel, raw + orig, lang)  # from . import mod
+        if target is None:
+            target = resolver.resolve(rel, raw, lang)
+        bound[name] = (target, orig)
+    rows = []
+    for caller, name, obj, line in calls:
+        path, callee = None, name
+        if obj is None:
+            if name in bound and bound[name][0]:
+                path = bound[name][0]
+                if bound[name][1] not in ("default", "*"):
+                    callee = bound[name][1]
+            elif name in local:
+                path = rel
+        elif obj == "this":
+            path = rel if name in local else None
+        elif obj in bound and bound[obj][1] == "*":
+            path = bound[obj][0]
+        rows.append((rel, caller, callee, path, line))
+    return rows
+
+
 def _drop(con, rel):
     con.execute("DELETE FROM files WHERE path=?", (rel,))
     con.execute("DELETE FROM symbols WHERE path=?", (rel,))
     con.execute("DELETE FROM imports WHERE src=?", (rel,))
+    con.execute("DELETE FROM calls WHERE src_path=?", (rel,))
 
 
 def exists(project):
@@ -560,12 +602,44 @@ def query_symbol(project, name):
         lines.append("  %s:%d  %s %s%s%s%s" % (p, ln, k, n, (" in " + sc) if sc else "",
                                               "  [%d dependents]" % dep if dep else "",
                                               "  ~approx" if pr == "approx" else ""))
+    lines.extend(_called_by(con, defs, QUERY_LINES - len(lines) - 2))
     total, top = _refs(project, name)
-    if total:
+    room = QUERY_LINES - len(lines) - 1  # header line
+    if total and room >= 1:
         lines.append("Referenced (whole word) in %d files%s:" % (total, ", top 10" if total > 10 else ""))
-        lines.extend("  %s (%d)" % (p, c) for p, c in top)
+        lines.extend("  %s (%d)" % (p, c) for p, c in top[:room])
     con.close()
     return lines[:QUERY_LINES]
+
+
+def _called_by(con, defs, budget, cap=8):
+    """'Called by' lines from the call graph (only files parsed with tree-sitter have calls)."""
+    if budget < 3 or not defs:
+        return []
+    exact = {(n, p) for n, _, p, _, _, _ in defs}
+    names = {n for n, _ in exact}
+    rows = []
+    try:
+        for n in names:
+            rows += [(n,) + r for r in con.execute(
+                "SELECT callee_path, src_path, src_symbol, line FROM calls WHERE callee_name=? "
+                "ORDER BY src_path, line", (n,))]
+    except sqlite3.OperationalError:  # index from an older schema, upgraded by the next update
+        return []
+    sure = [(sp, ss, ln) for n, cp, sp, ss, ln in rows if cp and (n, cp) in exact]
+    # callee_path NULL: same name, receiver unknown (e.g. `store.add()`); keep apart and mark
+    maybe = [(sp, ss, ln) for n, cp, sp, ss, ln in rows if not cp]
+    out = []
+    for label, items in (("Called by", sure), ("Possibly called by (receiver unresolved)", maybe)):
+        room = budget - len(out) - 1  # minus this section's header
+        if not items or room < 1:
+            continue
+        shown = items[:min(cap, room)]
+        out.append("%s (%d):" % (label, len(items)))
+        out.extend("  %s:%d%s" % (sp, ln, (" in " + ss) if ss else "") for sp, ss, ln in shown)
+        if len(items) > len(shown) and len(out) < budget:
+            out.append("  ... +%d more" % (len(items) - len(shown)))
+    return out
 
 
 def query_file(project, path):
@@ -610,8 +684,13 @@ def status(project):
     files = con.execute("SELECT count(*) FROM files").fetchone()[0]
     syms = con.execute("SELECT count(*) FROM symbols").fetchone()[0]
     imps = con.execute("SELECT count(*), count(target) FROM imports").fetchone()
+    try:
+        edges = con.execute("SELECT count(*), count(callee_path) FROM calls").fetchone()
+    except sqlite3.OperationalError:
+        edges = (0, 0)
     langs = Counter(dict(con.execute("SELECT lang, count(*) FROM files GROUP BY lang").fetchall()))
-    out = ["Index: %d files, %d symbols, %d imports (%d resolved to repo files)" % (files, syms, imps[0], imps[1]),
+    out = ["Index: %d files, %d symbols, %d imports (%d resolved to repo files), %d call edges (%d resolved)"
+           % (files, syms, imps[0], imps[1], edges[0], edges[1]),
            "Languages: " + ", ".join("%s %d" % kv for kv in langs.most_common(6)),
            "Symbols from: %s (precision ast > ctags > approx) · built %s · updated %s" % (_meta(con, "symbol_tool"), _meta(con, "built_at"),
                                                        _meta(con, "updated_at")),

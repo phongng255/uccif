@@ -15,7 +15,11 @@ _CACHE = {}
 _FAMILY_GRAMMAR = {"typescript": "ts", "tsx": "tsx", "javascript": "tsx", "vue": "tsx", "svelte": "tsx",
                    "python": "python"}
 _CONST_RE = re.compile(r"^[A-Z][A-Z0-9_]{2,}$")
+_MAX_CALLS = 1500
 _FN_VALUES = ("arrow_function", "function_expression", "function", "generator_function")
+KEYWORD_CALLS = {"require", "import", "super", "if", "for", "while", "switch", "catch", "return",
+                 "function", "constructor", "typeof", "await", "defineProps", "defineEmits",
+                 "defineExpose", "withDefaults"}
 _CLASS_NODES = ("class_declaration", "abstract_class_declaration", "class")
 
 
@@ -70,7 +74,12 @@ def _walk(root):
 
 
 def parse(text, rel, lang):
-    """-> (symbols, imports) or None. symbols: [(name, kind, line, scope)]; imports: [raw].
+    """-> (symbols, imports, calls, bindings) or None.
+    symbols: [(name, kind, line, scope)]; imports: [raw module strings];
+    calls: [(caller, callee, object, line)] where caller is the enclosing function/method
+    ("Class.method", or None at top level) and object is the receiver identifier ("this",
+    a local name) when the call is `obj.callee()`; bindings: {local name: (raw module, name
+    in that module)} with name "*" for namespace imports and "default" for default imports.
     `text` must already have non-script parts of .vue/.svelte blanked (line numbers kept)."""
     if disabled():
         return None
@@ -89,8 +98,46 @@ def parse(text, rel, lang):
 
 # ---- JavaScript / TypeScript -----------------------------------------------------
 
+def _js_caller(n):
+    """Name of the function/method enclosing node `n` ("Class.method"), or None at top level."""
+    p = n.parent
+    while p is not None:
+        t = p.type
+        if t in ("function_declaration", "generator_function_declaration"):
+            return _txt(p.child_by_field_name("name")) or None
+        if t in ("method_definition", "public_field_definition", "field_definition"):
+            name = _txt(p.child_by_field_name("name"))
+            q = p.parent.parent if p.parent is not None else None  # class_body -> class
+            cls = _txt(q.child_by_field_name("name")) if q is not None and q.type in _CLASS_NODES else ""
+            return (cls + "." + name) if cls and name else (name or None)
+        if t == "variable_declarator":
+            val = p.child_by_field_name("value")
+            if val is not None and val.type in _FN_VALUES:
+                return _txt(p.child_by_field_name("name")) or None
+        p = p.parent
+    return None
+
+
+def _js_call(n, calls):
+    fn = n.child_by_field_name("function" if n.type == "call_expression" else "constructor")
+    if fn is None or len(calls) >= _MAX_CALLS:
+        return
+    obj = None
+    if fn.type == "identifier":
+        name = _txt(fn)
+    elif fn.type == "member_expression":
+        name = _txt(fn.child_by_field_name("property"))
+        o = fn.child_by_field_name("object")
+        if o is not None and o.type in ("identifier", "this"):
+            obj = _txt(o)
+    else:
+        return
+    if name and name not in KEYWORD_CALLS:
+        calls.append((_js_caller(n), name, obj, n.start_point[0] + 1))
+
+
 def _js(root):
-    syms, imps = [], []
+    syms, imps, calls, binds = [], [], [], {}
 
     def add_import(raw):
         if raw and raw not in imps:
@@ -150,8 +197,14 @@ def _js(root):
         elif t in ("import_statement", "export_statement"):
             src = n.child_by_field_name("source")
             if src is not None:
-                add_import(_txt(src).strip("'\"`"))
+                raw = _txt(src).strip("'\"`")
+                add_import(raw)
+                if t == "import_statement":
+                    _js_bindings(n, raw, binds)
+        elif t == "new_expression":
+            _js_call(n, calls)
         elif t == "call_expression":
+            _js_call(n, calls)
             fn = n.child_by_field_name("function")
             args = n.child_by_field_name("arguments")
             if fn is not None and args is not None and (fn.type == "import" or _txt(fn) == "require"):
@@ -160,24 +213,45 @@ def _js(root):
                     add_import(_txt(first).strip("'\"`"))
     syms = [s for s in syms if s[0]]
     syms.sort(key=lambda s: s[2])
-    return syms, imps[:200]
+    return syms, imps[:200], calls, binds
+
+
+def _js_bindings(stmt, raw, binds):
+    for clause in stmt.children:
+        if clause.type != "import_clause":
+            continue
+        for c in clause.children:
+            if c.type == "identifier":
+                binds[_txt(c)] = (raw, "default")
+            elif c.type == "namespace_import":
+                ident = next((x for x in c.children if x.type == "identifier"), None)
+                if ident is not None:
+                    binds[_txt(ident)] = (raw, "*")
+            elif c.type == "named_imports":
+                for spec in c.children:
+                    if spec.type != "import_specifier":
+                        continue
+                    name = _txt(spec.child_by_field_name("name"))
+                    alias = _txt(spec.child_by_field_name("alias")) or name
+                    if name:
+                        binds[alias] = (raw, name)
 
 
 # ---- Python ------------------------------------------------------------------------
 
 def _python(root):
-    syms, imps = [], []
+    syms, imps, calls, binds = [], [], [], {}
 
     def add_import(raw):
         if raw and raw not in imps:
             imps.append(raw)
 
-    # (node, enclosing class name or None, at module level)
-    stack = [(root, None, True)]
+    # (node, enclosing class name or None, at module level, enclosing function name or None)
+    stack = [(root, None, True, None)]
     while stack:
-        n, cls, top = stack.pop()
+        n, cls, top, caller = stack.pop()
         t = n.type
-        nxt_cls, nxt_top = cls, top
+        nxt_cls, nxt_top, nxt_caller = cls, top, caller
         if t == "class_definition":
             name = n.child_by_field_name("name")
             if name is not None:
@@ -187,17 +261,46 @@ def _python(root):
             name = n.child_by_field_name("name")
             if name is not None:
                 syms.append((_txt(name), "method" if cls else "function", n.start_point[0] + 1, cls))
+                nxt_caller = (cls + "." + _txt(name)) if cls else _txt(name)
             nxt_cls, nxt_top = None, False
+        elif t == "call" and len(calls) < _MAX_CALLS:
+            fn = n.child_by_field_name("function")
+            obj = None
+            if fn is not None and fn.type == "identifier":
+                cname = _txt(fn)
+            elif fn is not None and fn.type == "attribute":
+                cname = _txt(fn.child_by_field_name("attribute"))
+                o = fn.child_by_field_name("object")
+                if o is not None and o.type == "identifier":
+                    obj = "this" if _txt(o) in ("self", "cls") else _txt(o)
+            else:
+                cname = ""
+            if cname and cname not in KEYWORD_CALLS:
+                calls.append((caller, cname, obj, n.start_point[0] + 1))
         elif t == "assignment" and top:
             left = n.child_by_field_name("left")
             if left is not None and left.type == "identifier" and _CONST_RE.match(_txt(left)):
                 syms.append((_txt(left), "constant", n.start_point[0] + 1, None))
         elif t == "import_from_statement":
-            add_import(_txt(n.child_by_field_name("module_name")))
+            raw = _txt(n.child_by_field_name("module_name"))
+            add_import(raw)
+            for c in n.children_by_field_name("name"):
+                if c.type == "aliased_import":
+                    orig = _txt(c.child_by_field_name("name"))
+                    binds[_txt(c.child_by_field_name("alias")) or orig] = (raw, orig)
+                else:
+                    binds[_txt(c)] = (raw, _txt(c))
         elif t == "import_statement":
             for c in n.children_by_field_name("name"):
-                add_import(_txt(c.child_by_field_name("name") if c.type == "aliased_import" else c))
+                if c.type == "aliased_import":
+                    mod = _txt(c.child_by_field_name("name"))
+                    add_import(mod)
+                    binds[_txt(c.child_by_field_name("alias")) or mod] = (mod, "*")
+                else:
+                    mod = _txt(c)
+                    add_import(mod)
+                    binds[mod.split(".")[0]] = (mod.split(".")[0], "*")
         for c in reversed(n.children):
-            stack.append((c, nxt_cls, nxt_top))
+            stack.append((c, nxt_cls, nxt_top, nxt_caller))
     syms.sort(key=lambda s: s[2])
-    return syms, imps[:200]
+    return syms, imps[:200], calls, binds

@@ -1,4 +1,4 @@
 """UCCIF core library. Python 3.8+ standard library only."""
 
-__version__ = "3.0.0-dev.8"
+__version__ = "3.0.0-dev.9"
 SCHEMA_VERSION = 1
