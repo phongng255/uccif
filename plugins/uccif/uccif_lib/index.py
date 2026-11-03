@@ -26,7 +26,7 @@ from uccif_lib import ts_parse, vue_template
 from uccif_lib.resolve import JS_RESOLVE_EXT, Resolver  # noqa: F401 (re-exported)
 from uccif_lib.paths import LockTimeout, file_lock, now_iso
 
-SCHEMA = 10
+SCHEMA = 11
 MAX_BYTES = 1000000
 QUERY_LINES = 30
 
@@ -184,6 +184,7 @@ def connect(project, write=True):
         CREATE INDEX IF NOT EXISTS globals_path ON globals(path);
         CREATE INDEX IF NOT EXISTS bind_path ON bindings(path);
         CREATE INDEX IF NOT EXISTS node_path ON nodes(path);
+        CREATE INDEX IF NOT EXISTS node_name ON nodes(name);
         CREATE INDEX IF NOT EXISTS edge_src ON edges(src_path, kind);
         CREATE INDEX IF NOT EXISTS edge_dst ON edges(dst_path, kind);
         CREATE INDEX IF NOT EXISTS edge_detail ON edges(detail);
@@ -374,7 +375,7 @@ def update(project, full=False, wait=10.0, paths=None):
         return None
 
 
-def _update(project, full, only=None):
+def _update(project, full, only=None, force=()):
     t0 = time.time()
     root = project.root
     con = connect(project)
@@ -401,7 +402,7 @@ def _update(project, full, only=None):
         except OSError:
             continue
         old = known.get(rel)
-        if old and old[0] == st.st_size and abs((old[1] or 0) - st.st_mtime) < 1e-6:
+        if old and old[0] == st.st_size and abs((old[1] or 0) - st.st_mtime) < 1e-6 and rel not in force:
             continue
         changed.append((rel, st))
 
@@ -416,7 +417,7 @@ def _update(project, full, only=None):
             continue
         h = hashlib.sha1(data).hexdigest()
         old = known.get(rel)
-        if old and old[2] == h:
+        if old and old[2] == h and rel not in force:
             con.execute("UPDATE files SET mtime=? WHERE path=?", (st.st_mtime, rel))
             continue
         to_parse.append((rel, st, h, text))
@@ -482,8 +483,21 @@ def _update(project, full, only=None):
         _set_meta(con, "symbol_tool", tool)
         if full or not _meta(con, "built_at"):
             _set_meta(con, "built_at", now_iso())
+    # C3: a file that imports a path which did not exist when it was parsed keeps an unresolved import
+    # (and calls through it). When new files appear, re-parse exactly the importers whose import now
+    # resolves, once.
+    rescue = set()
+    cur_set = set(current)
+    if not force and to_parse and cur_set - set(known):
+        for src, raw in con.execute("SELECT DISTINCT src_path, detail FROM edges WHERE kind='imports' "
+                                    "AND confidence='unresolved' AND via IS NULL").fetchall():
+            if src in cur_set and resolver.resolve(src, raw, lang_of(src)):
+                rescue.add(src)
     con.commit()
     con.close()
+    extra = _update(project, False, only=rescue, force=rescue) if rescue else None
+    if extra:
+        to_parse = list(to_parse) + [None] * extra["parsed"]
     return {"files": len(current), "parsed": len(to_parse), "removed": len(removed),
             "ms": int((time.time() - t0) * 1000), "tool": tool}
 
@@ -496,6 +510,24 @@ JS_GLOBALS = frozenset((
     "setTimeout", "clearTimeout", "setInterval", "clearInterval", "requestAnimationFrame",
     "parseInt", "parseFloat", "isNaN", "isFinite", "fetch", "structuredClone", "queueMicrotask",
     "encodeURIComponent", "decodeURIComponent", "alert", "confirm"))
+
+
+# Methods of built-in types (arrays, strings, maps, promises, the DOM, dicts, files, DB cursors ...). A call
+# `x.map()` whose receiver we cannot place is `calls_ext` unless the repo defines a method of that name.
+BUILTIN_METHODS = frozenset("""map filter reduce reduceRight forEach find findIndex findLast some every includes indexOf
+lastIndexOf push pop shift unshift splice slice concat join split trim trimStart trimEnd toLowerCase toUpperCase
+replace replaceAll match matchAll test exec toString toFixed toISOString toLocaleString toJSON substring substr
+startsWith endsWith padStart padEnd charAt charCodeAt localeCompare sort reverse keys values entries has get set add
+delete clear then catch finally flat flatMap fill at assign freeze fromEntries stringify parse addEventListener
+removeEventListener querySelector querySelectorAll getElementById appendChild removeChild setAttribute getAttribute
+preventDefault stopPropagation focus blur click remove closest getBoundingClientRect scrollTo scrollIntoView
+setItem getItem removeItem resolve reject all allSettled race next call apply bind valueOf
+append extend insert items copy update setdefault popitem count index sort strip lstrip rstrip format lower upper
+encode decode isdigit isalpha splitlines startswith endswith read readline readlines write close seek flush
+execute executemany fetchone fetchall fetchmany commit rollback cursor mkdir exists is_file is_dir read_text
+write_text read_bytes write_bytes iterdir glob rglob relative_to with_suffix expanduser unlink rmdir joinpath
+isoformat strftime total_seconds timestamp group groups groupdict finditer findall sub subn dumps loads dump load
+add_argument add_parser parse_args set_defaults print_help getvalue acquire release put task_done join""".split())
 
 
 def _builtin(lang, name, obj):
@@ -621,6 +653,12 @@ def _resolve_calls(rel, lang, parsed, resolver):
         ext = ((name in pkg) if obj is None else (obj in pkg)) or (
             _builtin(lang, name, obj) and name not in local and name not in bound) or (
             obj is None and name in emit_vars and name not in local and name not in bound)
+        if (not ext and name in BUILTIN_METHODS and name not in local and name not in bound
+                and obj not in ("this", "self") and not (obj in bound and bound[obj][1] == "*")):
+            # decided from the whole repo later (_derive_builtins): ext unless the repo defines such a method
+            refs.append((caller, "builtin", name, line, None, None))
+            rows.append((rel, caller, name, None, line, False, True))
+            continue
         if obj is None:
             if name in bound and bound[name][0]:
                 path = bound[name][0]
@@ -637,6 +675,11 @@ def _resolve_calls(rel, lang, parsed, resolver):
         origin = _pick(var_of.get(obj), caller)
         if origin:
             refs.append((caller, "read", prop, line, origin[1], origin[2]))
+    for caller, name, how, line in (parsed[12] if len(parsed) > 12 else ()):  # f(handler): maybe a function
+        if how == "this" or (name in local and name not in bound):
+            refs.append((caller, "callback", name, line, rel, name))
+        elif name in bound and bound[name][0] and bound[name][1] not in ("default", "*"):
+            refs.append((caller, "callback", bound[name][1], line, bound[name][0], bound[name][1]))
     return rows, refs
 
 
@@ -774,7 +817,39 @@ def _derive_all(con):
     _derive_links(con)
     _derive_navs(con)
     _derive_members(con)
+    _derive_callbacks(con)
+    _derive_builtins(con)
     _derive_uses(con)
+
+
+def _derive_callbacks(con):
+    """passes_callback: a function handed to another call (`watch(src, sync)`, `onMounted(init)`,
+    `arr.map(this.fmt)`, `Thread(target=worker)`). Identifiers that are not functions are dropped."""
+    new = []
+    for sid, sp, member, line, op in con.execute("SELECT src_id, src_path, member, line, origin_path FROM refs "
+                                                 "WHERE kind='callback'").fetchall():
+        hit = con.execute("SELECT id FROM nodes WHERE path=? AND name=? AND kind IN ('function','method') "
+                          "AND id<>? LIMIT 1", (op, member, sid)).fetchone()
+        if hit:
+            new.append((sid, hit[0], "passes_callback", line, "extracted", member, sp, op, "~cb"))
+    con.executemany("INSERT INTO edges VALUES (?,?,?,?,?,?,?,?,?)", new)
+
+
+def _derive_builtins(con):
+    """A call to a built-in method on a receiver we could not place (`items.map()`, `cur.execute()`):
+    external, unless some file of the repo defines a function or method with that name, in which
+    case it stays an unresolved lead."""
+    defined, new = {}, []
+    for sid, sp, member, line in con.execute("SELECT src_id, src_path, member, line FROM refs "
+                                             "WHERE kind='builtin'").fetchall():
+        if member not in defined:
+            defined[member] = bool(con.execute("SELECT 1 FROM nodes WHERE name=? AND kind IN ('function','method') "
+                                               "LIMIT 1", (member,)).fetchone())
+        if defined[member]:
+            new.append((sid, None, "calls", line, "unresolved", member, sp, None, "~builtin"))
+        else:
+            new.append((sid, None, "calls_ext", line, "extracted", member, sp, None, "~builtin"))
+    con.executemany("INSERT INTO edges VALUES (?,?,?,?,?,?,?,?,?)", new)
 
 
 PINIA_BUILTINS = ("$patch", "$reset", "$state", "$subscribe", "$onAction", "$dispose", "$id")
@@ -892,7 +967,8 @@ def _derive_members(con):
     `const f = new Foo(); f.go()`, `const {a} = useX(); a()`), tied to the member they hit:
     Pinia state/getter/action (calls_action / reads_state, extracted), class methods (also through
     base classes), or a function returned by a composable (inferred)."""
-    refs = con.execute("SELECT src_id, src_path, kind, member, line, origin_path, origin_name FROM refs").fetchall()
+    refs = con.execute("SELECT src_id, src_path, kind, member, line, origin_path, origin_name FROM refs "
+                       "WHERE kind IN ('call','read')").fetchall()
     new = []
     for sid, sp, kind, member, line, op, on in refs:
         o = con.execute("SELECT id, kind FROM nodes WHERE path=? AND name=? AND kind<>'file' AND scope IS NULL "
@@ -1295,7 +1371,8 @@ def _relations(con, defs, budget, cap=5):
     renders = con.execute("SELECT detail, dst_path, confidence, line FROM edges WHERE src_id IN %s AND kind IN "
                           "('renders','renders_ext') ORDER BY line" % mark, ids).fetchall()
     used = con.execute("SELECT DISTINCT src_id, src_path, line, kind FROM edges WHERE dst_id IN %s AND kind IN "
-                       "('reads_state','uses_store','uses_composable','passes_prop','listens','emits','navigates_to') "
+                       "('reads_state','uses_store','uses_composable','passes_prop','listens','emits','navigates_to',"
+                       "'passes_callback') "
                        "ORDER BY src_path, line" % mark,
                        ids).fetchall()
     rendered = con.execute("SELECT DISTINCT src_id, src_path, line, confidence FROM edges WHERE dst_id IN %s AND "
@@ -1405,7 +1482,8 @@ def _edge_text(con, src, dst):
                                               " (+%d more)" % (n - 1) if n > 1 else ""))
     for k, verb in (("calls_action", "calls store action"), ("reads_state", "reads store state"),
                     ("uses_store", "uses store"), ("uses_composable", "uses composable"),
-                    ("routes_to", "routes to"), ("navigates_to", "navigates to")):
+                    ("routes_to", "routes to"), ("navigates_to", "navigates to"),
+                    ("passes_callback", "passes callback")):
         e = con.execute("SELECT line, detail FROM edges WHERE kind=? AND src_path=? AND dst_path=? "
                         "ORDER BY line LIMIT 1", (k, src, dst)).fetchone()
         if e:
@@ -1421,7 +1499,7 @@ def _edge_text(con, src, dst):
 
 
 DEFAULT_KINDS = ("imports", "calls", "renders", "calls_action", "reads_state", "uses_store", "uses_composable",
-                 "routes_to", "navigates_to")
+                 "routes_to", "navigates_to", "passes_callback")
 
 
 def _users_of(con, rel, kinds=DEFAULT_KINDS, min_confidence=None):

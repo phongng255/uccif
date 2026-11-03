@@ -1,5 +1,24 @@
 # Changelog
 
+## 3.0.0-dev.20
+
+- **Deeper call resolution** (phase 2, step 8; `SCHEMA` 11, an older index is rebuilt automatically).
+  - **Callbacks (C2):** a function handed to another call is a `passes_callback` edge from the caller
+    to it: `watch(src, sync)`, `onMounted(init)`, `xs.map(this.fmt)`, Python `Thread(target=worker)`,
+    `sorted(xs, key=fn)`. Identifiers that turn out not to be functions (data, constants) add nothing.
+    Shown in `--symbol` `Used by` and followed by `--impact`.
+  - **Late resolution (C3):** an import of a path that did not exist yet (and the calls through it)
+    used to stay unresolved until the importer was edited. When new files appear, the importers
+    whose unresolved import now resolves are re-parsed once in the same update; other importers
+    are left alone.
+  - **Built-in methods (rest of C1):** a call like `items.map()`, `s.toFixed()`, `cur.execute()` on a
+    receiver we cannot place is `calls_ext` (known, not repo code) unless some file of the repo
+    defines a function or method of that name, in which case it stays an `unresolved` lead. Decided
+    from the whole repo after each update, so adding such a method flips it back.
+- Measured: one-file update 7 ms on the fixture (budget 300 ms). Unresolved share: fixture 10% (was
+  16%), this repo 50% (was 66%): what remains are method calls on parameters and locals whose type
+  is not written in the code (`project.root`, `con.execute` where `con` is a parameter).
+
 ## 3.0.0-dev.19
 
 - **vue-router** (phase 2, step 7b; `SCHEMA` 10, an older index is rebuilt automatically).
