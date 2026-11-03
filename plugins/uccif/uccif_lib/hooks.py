@@ -362,7 +362,7 @@ def from_antigravity(data):
         if path:
             if out["cwd"] and not os.path.isabs(path):
                 path = os.path.join(out["cwd"], path)
-            ti["file_path"] = path
+            ti["file_path"] = os.path.normpath(path)  # Windows: no mixed / and \ separators
         if cmd:
             ti["command"] = cmd
         out["tool_input"] = ti
