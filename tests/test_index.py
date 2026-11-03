@@ -241,3 +241,88 @@ def test_broken_source_still_indexes(project, repo, monkeypatch):
     write(repo, "bad.ts", "export function ok() {}\nfunction (((\n")
     index.update(project)
     assert "function ok" in "\n".join(index.query_symbol(project, "ok"))
+
+
+# ---- call graph (needs tree-sitter) ---------------------------------------------
+
+def make_calls(repo):
+    write(repo, "src/math.ts", "export function add(a: number, b: number) { return a + b }\n"
+                               "export function twice(x: number) { return add(x, x) }\n")
+    write(repo, "src/use.ts",
+          "import { add as plus } from './math'\nimport * as m from './math'\n"
+          "export function total() { return plus(1, 2) }\n"
+          "export class Cart {\n  sum() { return m.add(1, 1) + this.helper() }\n  helper() { return store.add(3) }\n}\n")
+    write(repo, "svc.py", "from .lib import work as w\nimport lib\n\n"
+                           "class S:\n    def run(self):\n        w()\n        self.step()\n        lib.work()\n"
+                           "    def step(self):\n        pass\n")
+    write(repo, "lib.py", "def work():\n    pass\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "calls")
+
+
+def test_calls_are_resolved_through_imports(project, repo, monkeypatch):
+    _ts_or_skip(monkeypatch)
+    make_calls(repo)
+    index.update(project)
+    con = index.connect(project)
+    got = set(con.execute("SELECT src_path, src_symbol, callee_name, callee_path, line FROM calls"))
+    con.close()
+    assert ("src/math.ts", "twice", "add", "src/math.ts", 2) in got        # same-file call
+    assert ("src/use.ts", "total", "add", "src/math.ts", 3) in got         # alias: plus -> add
+    assert ("src/use.ts", "Cart.sum", "add", "src/math.ts", 5) in got      # namespace m.add
+    assert ("src/use.ts", "Cart.sum", "helper", "src/use.ts", 5) in got    # this.helper()
+    assert ("src/use.ts", "Cart.helper", "add", None, 6) in got            # store.add: unresolved
+    assert ("svc.py", "S.run", "work", "lib.py", 6) in got                 # from .lib import work as w
+    assert ("svc.py", "S.run", "step", "svc.py", 7) in got                 # self.step()
+    assert ("svc.py", "S.run", "work", "lib.py", 8) in got                 # lib.work()
+
+
+def test_query_symbol_shows_callers_within_limit(project, repo, monkeypatch):
+    _ts_or_skip(monkeypatch)
+    make_calls(repo)
+    index.update(project)
+    out = index.query_symbol(project, "add")
+    text = "\n".join(out)
+    assert "Called by (3):" in text and "src/use.ts:3 in total" in text and "src/math.ts:2 in twice" in text
+    assert "Possibly called by (receiver unresolved) (1):" in text and "src/use.ts:6 in Cart.helper" in text
+    assert len(out) <= index.QUERY_LINES
+    assert "8 call edges (7 resolved)" in "\n".join(index.status(project))
+    assert "Called by" not in "\n".join(index.query_symbol(project, "total"))  # nobody calls it
+
+
+def test_many_callers_are_capped(project, repo, monkeypatch):
+    _ts_or_skip(monkeypatch)
+    write(repo, "core.ts", "export function hot() {}\n")
+    for i in range(20):
+        write(repo, "u%d.ts" % i, "import { hot } from './core'\nexport function f%d() { hot() }\n" % i)
+    index.update(project)
+    out = index.query_symbol(project, "hot")
+    assert len(out) <= index.QUERY_LINES
+    assert any("Called by (20):" in l for l in out) and any("+12 more" in l for l in out)
+
+
+def test_no_tree_sitter_means_no_call_edges(project, repo):
+    make_calls(repo)
+    index.update(project)
+    con = index.connect(project)
+    assert con.execute("SELECT count(*) FROM calls").fetchone()[0] == 0
+    con.close()
+    out = "\n".join(index.query_symbol(project, "add"))
+    assert "Called by" not in out and "Referenced (whole word)" in out
+
+
+def test_calls_dropped_with_file_and_schema_upgrade(project, repo, monkeypatch):
+    _ts_or_skip(monkeypatch)
+    make_calls(repo)
+    index.update(project)
+    (repo / "src" / "use.ts").unlink()
+    index.update(project)
+    con = index.connect(project)
+    assert con.execute("SELECT count(*) FROM calls WHERE src_path='src/use.ts'").fetchone()[0] == 0
+    con.execute("UPDATE meta SET value='1' WHERE key='schema'")  # pretend an old index
+    con.commit()
+    con.close()
+    con = index.connect(project)  # writer notices the schema change and clears everything
+    assert con.execute("SELECT count(*) FROM files").fetchone()[0] == 0
+    con.close()
+    assert index.update(project)["parsed"] > 0
