@@ -65,6 +65,15 @@ def bench(target, repeat):
         con = index.connect(project, write=False)
         counts = {t: con.execute("SELECT count(*) FROM %s" % t).fetchone()[0]
                   for t in ("files", "symbols", "imports", "calls")}
+        try:  # schema >= 4
+            counts["nodes"] = con.execute("SELECT count(*) FROM nodes").fetchone()[0]
+            counts["edges"] = con.execute("SELECT count(*) FROM edges").fetchone()[0]
+            # edges that point at the repo or at a package are fully known; "unresolved" are leads
+            un = con.execute("SELECT count(*) FROM edges WHERE confidence='unresolved'").fetchone()[0]
+            ours = con.execute("SELECT count(*) FROM edges WHERE kind NOT IN ('imports_ext', 'calls_ext')").fetchone()[0]
+            counts["unresolved_pct"] = round(100.0 * un / ours) if ours else 0
+        except Exception:
+            counts.update(nodes=0, edges=0, unresolved_pct=0)
         con.close()
         db_kb = index.db_path(project).stat().st_size / 1024
 
@@ -101,16 +110,19 @@ def main():
     if a.json:
         print(json.dumps(rows, indent=2))
         return 0
-    hdr = ("target", "tool", "files", "symbols", "imports", "calls", "build ms", "touch-1 ms", "no-op ms", "db KB")
+    hdr = ("target", "tool", "files", "symbols", "imports", "calls", "nodes", "edges", "unres %", "build ms", "touch-1 ms", "no-op ms", "db KB")
     print(" | ".join(hdr))
     print(" | ".join("---" for _ in hdr))
     over = False
     for r in rows:
         name = os.path.relpath(r["target"], str(REPO)) if r["target"].startswith(str(REPO)) else r["target"]
         print(" | ".join(str(x) for x in (name if name != "." else "(uccif repo)", r["tool"], r["files"],
-                                            r["symbols"], r["imports"], r["calls"], r["full_build_ms"],
+                                            r["symbols"], r["imports"], r["calls"], r["nodes"], r["edges"],
+                                            r["unresolved_pct"], r["full_build_ms"],
                                             r["touch_one_ms"], r["noop_ms"], r["db_kb"])))
         over = over or (r["touch_one_ms"] or 0) > BUDGET_MS
+        if r["unresolved_pct"] > 30:
+            print("WARNING: %d%% of edges are unresolved in %s (limit 30%%): report it." % (r["unresolved_pct"], name))
     if over:
         print("\nOVER BUDGET: touch-1 > %d ms. Report it and propose lazy evaluation for the new layer." % BUDGET_MS)
     return 0

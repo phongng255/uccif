@@ -1,5 +1,64 @@
 # Changelog
 
+## 3.0.0-dev.14
+
+- **Import resolution rewritten** (phase 2, step 3), now in `uccif_lib/resolve.py`
+  (`SCHEMA` 5; an older index is rebuilt automatically).
+  - **JS/TS aliases from config (C5):** the nearest `tsconfig.json` / `jsconfig.json`
+    (`baseUrl`, `paths`, relative `extends`; comments and trailing commas allowed) and
+    `vite.config.*` `resolve.alias` (object form and `{ find, replacement }`, with
+    `fileURLToPath(new URL(...))` or `path.resolve(__dirname, ...)`). "Nearest" means the
+    folder with a package.json / tsconfig / vite config, so a monorepo package keeps its own
+    aliases. With no config `@/` and `~/` still mean `src/`.
+  - **Python (C4):** besides the repo root, `src/`, `lib/` and `app/`, package roots declared
+    in `pyproject.toml` / `setup.cfg`, the parent of every top-level package (a folder with
+    `__init__.py`), and the importing file's own folder (scripts, pytest siblings). This repo
+    went from 28 unresolved imports to 1-2% of edges.
+  - **Barrels (A2):** `export * from`, `export { a as b } from` (and Python `__init__.py`
+    `from .x import y`) are stored as `re_exports` edges. After each update that changed
+    anything, derived edges with `via` = the barrel link importers and callers straight to the
+    file that defines the name, so `--impact` on `utils/format.ts` finds `ExpenseList.vue`
+    ("imports '@/utils' via src/utils/index.ts"), and tests that import through a barrel count
+    as tests for the real file. Derived edges are recomputed from scratch each time, so they
+    cannot go stale; the direct edge to the barrel stays.
+- New `bindings` table (which local name comes from which import) feeds the barrel pass.
+- Measured: one-file update 6-7 ms (budget 300 ms; the barrel pass is a few queries on small
+  repos, to be re-measured on a real app); DB +10-15%.
+- Unresolved share: vue-app 28%, this repo 68% with tree-sitter (method calls on local
+  variables, roadmap C1; 1% without it). No remaining import gaps in the fixture.
+
+## 3.0.0-dev.13
+
+- **Unified code graph** (phase 2, step 2): two new tables, written alongside the existing
+  ones (`SCHEMA` 4; an older index is rebuilt automatically, and a reader never serves an
+  index from another schema).
+  - `nodes(id, kind, name, path, line, end_line, scope, precision)`: one `file` node per file
+    plus one per symbol. Ids are stable (`path` / `path#Scope.name`), so edges from other
+    files survive a re-parse. Node kinds use `_` (`css_var`); `end_line` is filled later.
+  - `edges(src_id, dst_id, kind, line, confidence, detail, src_path, dst_path)`. Kinds today:
+    `imports`, `calls` (to the callee's symbol node, from the enclosing function's node),
+    and `imports_ext` / `calls_ext` for packages and language built-ins (`vue`, `ref()`,
+    `print()`, `console.log()`): fully known, just not repo code. `confidence`:
+    `extracted` / `inferred` (none yet) / `unresolved` (name known, target not, `dst_id` NULL).
+    `src_path`/`dst_path` are kept on each edge so per-file updates and file queries stay
+    indexed lookups.
+  - Updates keep the graph whole: a re-parsed file re-points incoming edges to its symbols by
+    name (or to the file if the symbol is gone); a deleted file turns incoming edges into
+    `unresolved` leads instead of dangling ids.
+- `--impact`, `--path`, `--symbol` callers, `dependents` and the HTML graph now read `edges`.
+  `impact()` takes `kinds` and `min_confidence` (CLI flags come with the query step).
+- `index status` adds `Graph: N nodes, M edges (extracted a, inferred b, unresolved c)`;
+  `tests/bench_index.py` adds nodes, edges and the unresolved share (warns above 30%).
+- Measured (this sandbox): one-file update still 5 ms (budget 300 ms). The DB is about 2.5×
+  larger (this repo: 520 → 1300 KB) while old and new tables are both written; a later PR can
+  drop the old ones.
+- **Unresolved share (reported per the plan):** vue-app fixture 29%, at the 30% limit. The
+  remainder are store actions called on a variable (`store.addExpense()`, roadmap B4/C1), test
+  globals (`expect`, `it`) and `emit`. This repo: 79%, nearly all method calls on local
+  variables (`x.get()`, `con.execute()`), roadmap C1, plus Python absolute imports outside
+  `src/`/`lib/`/`app/` (`uccif_lib.*`, roadmap C4), now shown as `unresolved` leads rather than
+  as packages.
+
 ## 3.0.0-dev.12
 
 - **Code graph, phase 2, step 0** (no change to the plugin's behaviour): groundwork for the

@@ -23,9 +23,10 @@ from collections import Counter
 from pathlib import Path, PurePosixPath
 
 from uccif_lib import ts_parse
+from uccif_lib.resolve import JS_RESOLVE_EXT, Resolver  # noqa: F401 (re-exported)
 from uccif_lib.paths import LockTimeout, file_lock, now_iso
 
-SCHEMA = 3
+SCHEMA = 5
 MAX_BYTES = 1000000
 QUERY_LINES = 30
 
@@ -41,7 +42,6 @@ LANG_EXT = {
 JS_LIKE = ("typescript", "javascript", "vue", "svelte")
 SKIP_SUFFIXES = (".min.js", ".min.css", ".map", ".d.ts.map", ".bundle.js")
 TEST_DIRS = {"test", "tests", "__tests__", "spec", "specs", "e2e"}
-JS_RESOLVE_EXT = (".ts", ".tsx", ".js", ".jsx", ".vue", ".mjs", ".cjs", ".mts", ".svelte", ".d.ts")
 KEYWORDS = {"if", "for", "while", "switch", "catch", "return", "function", "constructor",
             "else", "do", "try", "with", "new", "typeof", "await", "super"}
 
@@ -145,7 +145,11 @@ def connect(project, write=True):
         if os.name == "nt" and not uri.startswith("file:/"):
             uri = "file:/" + uri[5:]
         try:
-            return sqlite3.connect(uri, uri=True, timeout=5)
+            con = sqlite3.connect(uri, uri=True, timeout=5)
+            if _meta(con, "schema") != str(SCHEMA):
+                con.close()
+                raise IndexUnavailable("built by another version; rebuilds on the next update")
+            return con
         except sqlite3.Error as e:
             raise IndexUnavailable(str(e))
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -160,6 +164,16 @@ def connect(project, write=True):
         CREATE TABLE IF NOT EXISTS imports (src TEXT, raw TEXT, target TEXT, line INTEGER);
         CREATE TABLE IF NOT EXISTS calls (src_path TEXT, src_symbol TEXT, callee_name TEXT,
             callee_path TEXT, line INTEGER);
+        CREATE TABLE IF NOT EXISTS nodes (id TEXT PRIMARY KEY, kind TEXT, name TEXT, path TEXT, line INTEGER,
+            end_line INTEGER, scope TEXT, precision TEXT);
+        CREATE TABLE IF NOT EXISTS edges (src_id TEXT, dst_id TEXT, kind TEXT, line INTEGER,
+            confidence TEXT, detail TEXT, src_path TEXT, dst_path TEXT, via TEXT);
+        CREATE TABLE IF NOT EXISTS bindings (path TEXT, name TEXT, orig TEXT, raw TEXT, line INTEGER);
+        CREATE INDEX IF NOT EXISTS bind_path ON bindings(path);
+        CREATE INDEX IF NOT EXISTS node_path ON nodes(path);
+        CREATE INDEX IF NOT EXISTS edge_src ON edges(src_path, kind);
+        CREATE INDEX IF NOT EXISTS edge_dst ON edges(dst_path, kind);
+        CREATE INDEX IF NOT EXISTS edge_detail ON edges(detail);
         CREATE INDEX IF NOT EXISTS call_callee ON calls(callee_name);
         CREATE INDEX IF NOT EXISTS call_src ON calls(src_path);
         CREATE INDEX IF NOT EXISTS call_cpath ON calls(callee_path);
@@ -171,7 +185,7 @@ def connect(project, write=True):
     """)
     if _meta(con, "schema") not in (None, str(SCHEMA)):
         con.executescript("DELETE FROM files; DELETE FROM symbols; DELETE FROM imports; DELETE FROM calls; "
-                         "DELETE FROM meta;")
+                         "DELETE FROM nodes; DELETE FROM edges; DELETE FROM bindings; DELETE FROM meta;")
     _set_meta(con, "schema", SCHEMA)
     return con
 
@@ -321,65 +335,6 @@ def raw_imports(text, lang, lines=None):
     return seen[:200]
 
 
-class Resolver:
-    """Map an import string to a repo file (or None for external packages)."""
-
-    def __init__(self, files):
-        self.files = set(files)
-        self.py_roots = [""] + [d for d in ("src", "lib", "app") if any(f.startswith(d + "/") for f in files)]
-
-    def _try_js(self, base):
-        base = str(PurePosixPath(base))
-        cands = [base] + [base + e for e in JS_RESOLVE_EXT] + \
-                [base + "/index" + e for e in JS_RESOLVE_EXT]
-        return next((c for c in cands if c in self.files), None)
-
-    def resolve(self, src, raw, lang):
-        fam = LANG_FAMILY.get(lang)
-        here = PurePosixPath(src).parent
-        if fam in ("js", "style"):
-            if raw.startswith(("@/", "~/")):
-                target = "src/" + raw[2:]
-            elif raw.startswith(".") or (fam == "style" and "://" not in raw and not raw.startswith("~")):
-                target = os.path.normpath(str(here / raw)).replace(os.sep, "/")
-            else:
-                return None  # a package, not a repo file
-            if target.startswith("../"):
-                return None
-            hit = self._try_js(target)
-            if hit or fam == "js":
-                return hit
-            p = PurePosixPath(target)  # scss partials: _name.scss
-            for cand in (target + ".scss", str(p.parent / ("_" + p.name + ".scss")), target + ".css",
-                         target + ".less"):
-                cand = os.path.normpath(cand).replace(os.sep, "/")
-                if cand in self.files:
-                    return cand
-            return None
-        if fam == "python":
-            dots = len(raw) - len(raw.lstrip("."))
-            mod = raw.lstrip(".").replace(".", "/")
-            bases = []
-            if dots:
-                base = here
-                for _ in range(dots - 1):
-                    base = base.parent
-                bases.append(str(base / mod) if mod else str(base))
-            else:
-                bases = [(r + "/" + mod) if r else mod for r in self.py_roots]
-            for b in bases:
-                b = os.path.normpath(b).replace(os.sep, "/").lstrip("./")
-                for cand in (b + ".py", b + "/__init__.py"):
-                    if cand in self.files:
-                        return cand
-            return None
-        if fam == "rust":
-            for cand in (str(here / (raw + ".rs")), str(here / raw / "mod.rs")):
-                if cand in self.files:
-                    return cand
-        return None
-
-
 # ---- build / update ---------------------------------------------------------------
 
 def _read(root, rel):
@@ -410,7 +365,8 @@ def _update(project, full, only=None):
     root = project.root
     con = connect(project)
     if full:
-        con.executescript("DELETE FROM files; DELETE FROM symbols; DELETE FROM imports; DELETE FROM calls;")
+        con.executescript("DELETE FROM files; DELETE FROM symbols; DELETE FROM imports; DELETE FROM calls; "
+                          "DELETE FROM nodes; DELETE FROM edges; DELETE FROM bindings;")
     known = {r[0]: (r[1], r[2], r[3]) for r in con.execute("SELECT path, size, mtime, hash FROM files")}
     if only is not None:
         only = {p.replace(os.sep, "/") for p in only if lang_of(p.replace(os.sep, "/"))}
@@ -459,9 +415,10 @@ def _update(project, full, only=None):
             ast[rel] = res
     need_ctags = [r for r, _, _, _ in to_parse if r not in ast]
     tagged = ctags_symbols(exe, root, need_ctags) if exe and need_ctags else {}
-    resolver = Resolver(current)
+    resolver = Resolver(current, root)
     for rel in removed:
         _drop(con, rel)
+        _unresolve_incoming(con, rel)
     for rel, st, h, text in to_parse:
         _drop(con, rel)
         lang = lang_of(rel)
@@ -482,10 +439,12 @@ def _update(project, full, only=None):
         con.executemany("INSERT INTO symbols VALUES (?,?,?,?,?,?)", rows)
         imps = [(rel, raw, resolver.resolve(rel, raw, lang), ilines.get(raw)) for raw in raws]
         con.executemany("INSERT INTO imports VALUES (?,?,?,?)", imps)
-        con.executemany("INSERT INTO calls VALUES (?,?,?,?,?)", call_rows)
+        con.executemany("INSERT INTO calls VALUES (?,?,?,?,?)", [r[:5] for r in call_rows])
         con.execute("INSERT INTO files VALUES (?,?,?,?,?,?,?)",
                     (rel, lang, st.st_size, st.st_mtime, h, int(is_test(rel)), len(rows)))
+        _write_graph(con, rel, lang, rows, imps, call_rows, resolver, text)
     if to_parse or removed or full:
+        _through_barrels(con)
         _set_meta(con, "updated_at", now_iso())
         _set_meta(con, "symbol_tool", tool)
         if full or not _meta(con, "built_at"):
@@ -495,6 +454,22 @@ def _update(project, full, only=None):
     return {"files": len(current), "parsed": len(to_parse), "removed": len(removed),
             "ms": int((time.time() - t0) * 1000), "tool": tool}
 
+# Language built-ins: calls to these are known (not repo code), so they are external, not leads.
+PY_BUILTINS = frozenset(n for n in dir(__import__("builtins")) if not n.startswith("_"))
+JS_GLOBALS = frozenset((
+    "console", "Math", "JSON", "Object", "Array", "Promise", "Number", "String", "Boolean", "Date",
+    "Symbol", "Reflect", "Intl", "window", "document", "globalThis", "navigator", "localStorage",
+    "sessionStorage", "Error", "Map", "Set", "WeakMap", "RegExp", "URL", "BigInt",
+    "setTimeout", "clearTimeout", "setInterval", "clearInterval", "requestAnimationFrame",
+    "parseInt", "parseFloat", "isNaN", "isFinite", "fetch", "structuredClone", "queueMicrotask",
+    "encodeURIComponent", "decodeURIComponent", "alert", "confirm"))
+
+
+def _builtin(lang, name, obj):
+    if lang == "python":
+        return obj is None and name in PY_BUILTINS
+    return (obj if obj is not None else name) in JS_GLOBALS
+
 
 def _resolve_calls(rel, lang, parsed, resolver):
     """Best-effort: attach each call to the repo file defining its callee.
@@ -503,8 +478,10 @@ def _resolve_calls(rel, lang, parsed, resolver):
     ("unresolved"): a lead to verify by reading, not a fact."""
     syms, calls, binds = parsed[0], parsed[2], parsed[3]
     local = {n for n, _, _, _ in syms if n}
-    bound = {}
+    bound, pkg = {}, set()
     for name, (raw, orig) in binds.items():
+        if not resolver.internal(raw, lang, rel):
+            pkg.add(name)
         target = None
         if lang == "python" and orig != "*" and raw.strip(".") == "":
             target = resolver.resolve(rel, raw + orig, lang)  # from . import mod
@@ -514,6 +491,8 @@ def _resolve_calls(rel, lang, parsed, resolver):
     rows = []
     for caller, name, obj, line in calls:
         path, callee = None, name
+        ext = ((name in pkg) if obj is None else (obj in pkg)) or (
+            _builtin(lang, name, obj) and name not in local and name not in bound)
         if obj is None:
             if name in bound and bound[name][0]:
                 path = bound[name][0]
@@ -525,11 +504,202 @@ def _resolve_calls(rel, lang, parsed, resolver):
             path = rel if name in local else None
         elif obj in bound and bound[obj][1] == "*":
             path = bound[obj][0]
-        rows.append((rel, caller, callee, path, line))
+        rows.append((rel, caller, callee, path, line, ext and path is None))
     return rows
 
 
+_JS_IMPORT = re.compile(r"""\bimport\s+(?:type\s+)?(?:([\w$]+)\s*,?\s*)?(?:\{([^}]*)\}|\*\s*as\s+([\w$]+))?"""
+                        r"""\s*from\s*['"]([^'"]+)['"]""")
+_JS_REEXPORT = re.compile(r"""\bexport\s+(?:type\s+)?(?:\*\s*(?:as\s+([\w$]+)\s*)?|\{([^}]*)\}\s*)"""
+                          r"""from\s*['"]([^'"]+)['"]""")
+_PY_FROM = re.compile(r"^[ \t]*from\s+(\.*[\w.]*)\s+import\s+(\([^)]*\)|[^\n#]+)", re.M)
+
+
+def _names(clause):
+    """'a, b as c, type d' -> [(orig, local)]."""
+    out = []
+    for part in clause.replace("(", "").replace(")", "").replace("\\", "").split(","):
+        part = part.strip()
+        if part.startswith("type "):
+            part = part[5:].strip()
+        if not part:
+            continue
+        orig, _, local = part.partition(" as ")
+        orig, local = orig.strip(), (local.strip() or orig.strip())
+        if re.match(r"^[\w$*]+$", orig) and re.match(r"^[\w$*]+$", local):
+            out.append((orig, local))
+    return out
+
+
+def bindings_of(text, lang, rel):
+    """([(local name, exported name, raw, line)], [(raw, orig, exported as, line)]).
+    The first list says which name in this file comes from which import; the second is what
+    this file re-exports (barrels: `export * from`, `export { a as b } from`; for Python, every
+    `from x import y` in an `__init__.py`)."""
+    binds, rex = [], []
+    if not text:
+        return binds, rex
+    fam = LANG_FAMILY.get(lang)
+    src = _script_part(text, lang)
+    line_of = lambda pos: src.count("\n", 0, pos) + 1  # noqa: E731
+    if fam == "js":
+        for m in _JS_IMPORT.finditer(src):
+            default, named, ns, raw = m.groups()
+            ln = line_of(m.start())
+            if default:
+                binds.append((default, "default", raw, ln))
+            if ns:
+                binds.append((ns, "*", raw, ln))
+            for orig, local in _names(named or ""):
+                binds.append((local, orig, raw, ln))
+        for m in _JS_REEXPORT.finditer(src):
+            ns, named, raw = m.groups()
+            ln = line_of(m.start())
+            if named is None:
+                rex.append((raw, "*", ns or "*", ln))
+            for orig, local in _names(named or ""):
+                rex.append((raw, orig, local, ln))
+    elif fam == "python":
+        init = PurePosixPath(rel).name == "__init__.py"
+        for m in _PY_FROM.finditer(src):
+            raw, ln = m.group(1), line_of(m.start())
+            for orig, local in _names(m.group(2)):
+                binds.append((local, orig, raw, ln))
+                if init:
+                    rex.append((raw, orig, local if orig != "*" else "*", ln))
+    return binds[:300], rex[:300]
+
+
+def _through_barrels(con):
+    """Derived edges that see through barrel files (index.ts re-exports, package __init__.py).
+
+    `import { formatMoney } from '@/utils'` resolves to utils/index.ts; if that file only
+    re-exports it, add an `imports` edge (and re-point calls) to the file that defines it,
+    with `via` = the barrel. Recomputed from scratch after every update that changed
+    anything, so it can never go stale; the direct edges to the barrel stay as they are."""
+    con.execute("DELETE FROM edges WHERE via IS NOT NULL")
+    rex = {}
+    for src, dst, detail in con.execute("SELECT src_path, dst_path, detail FROM edges "
+                                        "WHERE kind='re_exports' AND dst_path IS NOT NULL"):
+        orig, _, name = detail.partition(" as ")
+        rex.setdefault(src, []).append((dst, orig, name))
+    if not rex:
+        return
+    defs = {}
+
+    def names_in(path):
+        if path not in defs:
+            defs[path] = {r[0] for r in con.execute("SELECT name FROM nodes WHERE path=? AND kind<>'file'", (path,))}
+        return defs[path]
+
+    def find(path, name, seen):
+        """(file, name) that really defines `name` as seen from `path`, or None."""
+        if (path, name) in seen or len(seen) > 30:
+            return None
+        seen.add((path, name))
+        if name in names_in(path):
+            return path, name
+        for dst, orig, alias in rex.get(path, ()):
+            if alias == "*" and orig == "*":
+                hit = find(dst, name, seen)
+                if hit:
+                    return hit
+            elif alias == name:
+                return (dst, name) if orig == "*" else (find(dst, orig, seen) or (dst, orig))
+        return None
+
+    new, seen_pairs = [], set()
+    for barrel in rex:
+        for f, raw, line in con.execute("SELECT src_path, detail, line FROM edges WHERE kind='imports' "
+                                        "AND dst_path=? AND via IS NULL", (barrel,)).fetchall():
+            for (orig,) in con.execute("SELECT orig FROM bindings WHERE path=? AND raw=?", (f, raw)).fetchall():
+                if orig in ("*", "default"):
+                    continue
+                hit = find(barrel, orig, set())
+                if hit and hit[0] not in (barrel, f) and (f, hit[0]) not in seen_pairs:
+                    seen_pairs.add((f, hit[0]))
+                    new.append((f, hit[0], "imports", line, "extracted", raw, f, hit[0], barrel))
+        for sid, line, name, f in con.execute("SELECT src_id, line, detail, src_path FROM edges WHERE kind='calls' "
+                                             "AND dst_path=? AND via IS NULL", (barrel,)).fetchall():
+            if name in names_in(barrel):
+                continue
+            hit = find(barrel, name, set())
+            if hit and hit[0] != barrel:
+                r = con.execute("SELECT id FROM nodes WHERE path=? AND name=? AND kind<>'file' LIMIT 1",
+                                hit).fetchone()
+                new.append((sid, r[0] if r else hit[0], "calls", line, "extracted", hit[1], f, hit[0], barrel))
+    con.executemany("INSERT INTO edges VALUES (?,?,?,?,?,?,?,?,?)", new)
+
+
+def _sym_id(path, name, scope):
+    return "%s#%s%s" % (path, (scope + ".") if scope else "", name)
+
+
+def _write_graph(con, rel, lang, sym_rows, imps, call_rows, resolver, text=""):
+    """Mirror one parsed file into the unified graph: nodes (file + symbols) and edges.
+
+    Node ids are stable (`path` for a file, `path#Scope.name` for a symbol) so edges from other
+    files survive this file being re-parsed. Edge confidence: extracted = found through an
+    explicit import/declaration; unresolved = a name we saw but could not place (dst NULL)."""
+    nodes = [(rel, "file", PurePosixPath(rel).name, rel, 1, None, None, None)]
+    for n, k, _, ln, sc, pr in sym_rows:
+        nodes.append((_sym_id(rel, n, sc), k.replace("-", "_"), n, rel, ln, None, sc, pr))
+    con.executemany("INSERT OR IGNORE INTO nodes VALUES (?,?,?,?,?,?,?,?)", nodes)
+    edges = []
+    for src, raw, target, line in imps:
+        if target:
+            edges.append((rel, target, "imports", line, "extracted", raw, rel, target, None))
+        elif resolver.internal(raw, lang, rel):  # looks like a repo file we could not place
+            edges.append((rel, None, "imports", line, "unresolved", raw, rel, None, None))
+        else:  # a package: fully known, just not in the repo
+            edges.append((rel, None, "imports_ext", line, "extracted", raw, rel, None, None))
+    own = {r[0] for r in con.execute("SELECT id FROM nodes WHERE path=?", (rel,))}
+    for _, caller, callee, cpath, line, ext in call_rows:
+        sid = _sym_id(rel, caller, None) if caller else rel
+        if "." in (caller or ""):
+            scope, _, nm = caller.rpartition(".")
+            sid = _sym_id(rel, nm, scope)
+        if sid not in own:
+            sid = rel
+        if cpath:
+            hit = con.execute("SELECT id FROM nodes WHERE path=? AND name=? AND kind<>'file' LIMIT 1",
+                              (cpath, callee)).fetchone()
+            if hit:
+                dst = hit[0]
+            elif con.execute("SELECT 1 FROM nodes WHERE id=?", (cpath,)).fetchone():
+                dst = cpath  # target already parsed and has no such symbol
+            else:
+                dst = _sym_id(cpath, callee, None)  # target not parsed yet; corrected when it is
+            edges.append((sid, dst, "calls", line, "extracted", callee, rel, cpath, None))
+        elif ext:  # a function from an installed package: fully known, just not in the repo
+            edges.append((sid, None, "calls_ext", line, "extracted", callee, rel, None, None))
+        else:
+            edges.append((sid, None, "calls", line, "unresolved", callee, rel, None, None))
+    binds, rexports = bindings_of(text, lang, rel)
+    con.executemany("INSERT INTO bindings VALUES (?,?,?,?,?)", [(rel,) + b for b in binds])
+    for raw, orig, name, line in rexports:
+        target = resolver.resolve(rel, raw, lang)
+        edges.append((rel, target, "re_exports", line, "extracted" if target else "unresolved",
+                      "%s as %s" % (orig, name), rel, target, None))
+    con.executemany("INSERT INTO edges VALUES (?,?,?,?,?,?,?,?,?)", edges)
+    # edges from other files into this one: re-point to the symbol now defined here (by name),
+    # or to the file when the symbol is gone / was guessed before this file was parsed
+    con.execute("UPDATE edges SET dst_id=COALESCE((SELECT n.id FROM nodes n WHERE n.path=edges.dst_path "
+                "AND n.name=edges.detail AND n.kind<>'file' LIMIT 1), dst_path) "
+                "WHERE dst_path=? AND dst_id<>dst_path AND dst_id NOT IN (SELECT id FROM nodes WHERE path=?)",
+                (rel, rel))
+
+
+def _unresolve_incoming(con, rel):
+    """A file was deleted: edges that pointed into it become unresolved instead of dangling."""
+    con.execute("UPDATE edges SET dst_id=NULL, dst_path=NULL, confidence='unresolved' WHERE dst_path=?",
+                (rel,))
+
+
 def _drop(con, rel):
+    con.execute("DELETE FROM bindings WHERE path=?", (rel,))
+    con.execute("DELETE FROM nodes WHERE path=?", (rel,))
+    con.execute("DELETE FROM edges WHERE src_path=?", (rel,))
     con.execute("DELETE FROM files WHERE path=?", (rel,))
     con.execute("DELETE FROM symbols WHERE path=?", (rel,))
     con.execute("DELETE FROM imports WHERE src=?", (rel,))
@@ -572,15 +742,29 @@ def _refs(project, name, limit=10):
     return len(rows), rows[:limit]
 
 
+CONFIDENCE = {"extracted": 2, "inferred": 1, "unresolved": 0}
+
+
+def _conf_ok(min_confidence):
+    """Confidence levels at or above `min_confidence` (default: everything that has a target)."""
+    floor = CONFIDENCE.get(min_confidence or "inferred", 1)
+    return [c for c, r in CONFIDENCE.items() if r >= max(floor, 1)]
+
+
+def _in(values):
+    return "(%s)" % ",".join("?" * len(values))
+
+
 def dependents(con, rel):
-    return [r[0] for r in con.execute("SELECT DISTINCT src FROM imports WHERE target=? ORDER BY src", (rel,))]
+    return [r[0] for r in con.execute(
+        "SELECT DISTINCT src_path FROM edges WHERE kind='imports' AND dst_path=? ORDER BY src_path", (rel,))]
 
 
 def tests_for(con, rel):
     """Test files that import `rel`, plus tests named after it (x.test.ts, test_x.py, ...)."""
     direct = [r[0] for r in con.execute(
-        "SELECT DISTINCT i.src FROM imports i JOIN files f ON f.path=i.src WHERE i.target=? AND f.is_test=1",
-        (rel,))]
+        "SELECT DISTINCT e.src_path FROM edges e JOIN files f ON f.path=e.src_path "
+        "WHERE e.kind='imports' AND e.dst_path=? AND f.is_test=1", (rel,))]
     stem = PurePosixPath(rel).stem
     names = {stem + ".test", stem + ".spec", "test_" + stem, stem + "_test", stem}
     by_name = [r[0] for r in con.execute("SELECT path FROM files WHERE is_test=1 AND path<>?", (rel,))
@@ -617,22 +801,22 @@ def query_symbol(project, name):
 
 
 def _called_by(con, defs, budget, cap=8):
-    """'Called by' lines from the call graph (only files parsed with tree-sitter have calls)."""
+    """'Called by' lines from the call edges (only files parsed with tree-sitter have calls)."""
     if budget < 3 or not defs:
         return []
     exact = {(n, p) for n, _, p, _, _, _ in defs}
     names = {n for n, _ in exact}
-    rows = []
-    try:
-        for n in names:
-            rows += [(n,) + r for r in con.execute(
-                "SELECT callee_path, src_path, src_symbol, line FROM calls WHERE callee_name=? "
-                "ORDER BY src_path, line", (n,))]
-    except sqlite3.OperationalError:  # index from an older schema, upgraded by the next update
-        return []
-    sure = [(sp, ss, ln) for n, cp, sp, ss, ln in rows if cp and (n, cp) in exact]
-    # callee_path NULL: same name, receiver unknown (e.g. `store.add()`); keep apart and mark
-    maybe = [(sp, ss, ln) for n, cp, sp, ss, ln in rows if not cp]
+    sure, maybe = [], []
+    for n in sorted(names):
+        for cp, sp, sid, ln, conf in con.execute(
+                "SELECT dst_path, src_path, src_id, line, confidence FROM edges WHERE kind='calls' "
+                "AND detail=? ORDER BY src_path, line", (n,)):
+            caller = sid[len(sp) + 1:] if sid.startswith(sp + "#") else None
+            if conf == "unresolved":
+                # same name, receiver unknown (e.g. `store.add()`); keep apart and mark
+                maybe.append((sp, caller, ln))
+            elif (n, cp) in exact:
+                sure.append((sp, caller, ln))
     out = []
     for label, items in (("Called by", sure), ("Possibly called by (receiver unresolved)", maybe)):
         room = budget - len(out) - 1  # minus this section's header
@@ -687,55 +871,47 @@ MAX_DEPTH = 6
 MAX_FILES = 300  # stop expanding the impact BFS beyond this many files
 
 
-def _calls_table(con):
-    try:
-        con.execute("SELECT 1 FROM calls LIMIT 1")
-        return True
-    except sqlite3.OperationalError:
-        return False
-
-
 def _edge_text(con, src, dst):
     """Evidence that `src` depends on `dst`: 'src:LINE imports "raw"; calls f at src:LINE'."""
     bits, line = [], None
-    r = con.execute("SELECT line, raw FROM imports WHERE src=? AND target=? ORDER BY line LIMIT 1",
-                    (src, dst)).fetchone()
+    r = con.execute("SELECT line, detail, via FROM edges WHERE kind='imports' AND src_path=? AND dst_path=? "
+                    "ORDER BY via IS NOT NULL, line LIMIT 1", (src, dst)).fetchone()
     if r:
         line = r[0]
-        bits.append("imports '%s'" % r[1])
-    if _calls_table(con):
-        c = con.execute("SELECT line, callee_name, src_symbol FROM calls WHERE src_path=? AND "
-                        "callee_path=? ORDER BY line LIMIT 1", (src, dst)).fetchone()
-        n = con.execute("SELECT count(*) FROM calls WHERE src_path=? AND callee_path=?",
+        bits.append("imports '%s'%s" % (r[1], (" via " + r[2]) if r[2] else ""))
+    c = con.execute("SELECT line, detail, src_id FROM edges WHERE kind='calls' AND src_path=? AND dst_path=? "
+                    "ORDER BY line LIMIT 1", (src, dst)).fetchone()
+    if c:
+        n = con.execute("SELECT count(*) FROM edges WHERE kind='calls' AND src_path=? AND dst_path=?",
                         (src, dst)).fetchone()[0]
-        if c:
-            line = line or c[0]
-            bits.append("calls %s at :%d%s%s" % (c[1], c[0], (" in " + c[2]) if c[2] else "",
-                                                  " (+%d more)" % (n - 1) if n > 1 else ""))
+        caller = c[2][len(src) + 1:] if c[2].startswith(src + "#") else None
+        line = line or c[0]
+        bits.append("calls %s at :%d%s%s" % (c[1], c[0], (" in " + caller) if caller else "",
+                                              " (+%d more)" % (n - 1) if n > 1 else ""))
     return "%s%s  %s" % (src, (":%d" % line) if line else "", "; ".join(bits) or "depends on it")
 
 
-def _users_of(con, rel):
-    """Files that import or call into `rel`."""
-    out = {r[0] for r in con.execute("SELECT DISTINCT src FROM imports WHERE target=?", (rel,))}
-    if _calls_table(con):
-        out |= {r[0] for r in con.execute("SELECT DISTINCT src_path FROM calls WHERE callee_path=?", (rel,))}
+def _users_of(con, rel, kinds=("imports", "calls"), min_confidence=None):
+    """Files that import or call into `rel` (over edges of `kinds` at or above `min_confidence`)."""
+    conf = _conf_ok(min_confidence)
+    out = {r[0] for r in con.execute(
+        "SELECT DISTINCT src_path FROM edges WHERE dst_path=? AND kind IN %s AND confidence IN %s"
+        % (_in(kinds), _in(conf)), (rel,) + tuple(kinds) + tuple(conf))}
     out.discard(rel)
     return sorted(out)
 
 
-def _uses_of(con, rel):
+def _uses_of(con, rel, kinds=("imports", "calls"), min_confidence=None):
     """Files that `rel` imports or calls into."""
-    out = {r[0] for r in con.execute("SELECT DISTINCT target FROM imports WHERE src=? AND target IS NOT NULL",
-                                     (rel,))}
-    if _calls_table(con):
-        out |= {r[0] for r in con.execute("SELECT DISTINCT callee_path FROM calls WHERE src_path=? AND "
-                                          "callee_path IS NOT NULL", (rel,))}
+    conf = _conf_ok(min_confidence)
+    out = {r[0] for r in con.execute(
+        "SELECT DISTINCT dst_path FROM edges WHERE src_path=? AND dst_path IS NOT NULL AND kind IN %s "
+        "AND confidence IN %s" % (_in(kinds), _in(conf)), (rel,) + tuple(kinds) + tuple(conf))}
     out.discard(rel)
     return sorted(out)
 
 
-def impact(project, path, depth=3):
+def impact(project, path, depth=3, kinds=("imports", "calls"), min_confidence=None):
     """Files affected by a change to `path`: BFS over who-imports / who-calls, level by level."""
     depth = max(1, min(int(depth), MAX_DEPTH))
     con = connect(project, write=False)
@@ -748,7 +924,7 @@ def impact(project, path, depth=3):
     for d in range(1, depth + 1):
         nxt = []
         for f in frontier:
-            for u in _users_of(con, f):
+            for u in _users_of(con, f, kinds, min_confidence):
                 if u not in level_of:
                     if len(level_of) > MAX_FILES:
                         truncated = True
@@ -853,13 +1029,14 @@ def status(project):
     files = con.execute("SELECT count(*) FROM files").fetchone()[0]
     syms = con.execute("SELECT count(*) FROM symbols").fetchone()[0]
     imps = con.execute("SELECT count(*), count(target) FROM imports").fetchone()
-    try:
-        edges = con.execute("SELECT count(*), count(callee_path) FROM calls").fetchone()
-    except sqlite3.OperationalError:
-        edges = (0, 0)
+    edges = con.execute("SELECT count(*), count(dst_path) FROM edges WHERE kind='calls'").fetchone()
+    conf = dict(con.execute("SELECT confidence, count(*) FROM edges GROUP BY confidence"))
     langs = Counter(dict(con.execute("SELECT lang, count(*) FROM files GROUP BY lang").fetchall()))
     out = ["Index: %d files, %d symbols, %d imports (%d resolved to repo files), %d call edges (%d resolved)"
            % (files, syms, imps[0], imps[1], edges[0], edges[1]),
+           "Graph: %d nodes, %d edges (%s)" % (con.execute("SELECT count(*) FROM nodes").fetchone()[0],
+                                               sum(conf.values()),
+                                               ", ".join("%s %d" % (c, conf.get(c, 0)) for c in CONFIDENCE)),
            "Languages: " + ", ".join("%s %d" % kv for kv in langs.most_common(6)),
            "Symbols from: %s (precision ast > ctags > approx) · built %s · updated %s" % (_meta(con, "symbol_tool"), _meta(con, "built_at"),
                                                        _meta(con, "updated_at")),

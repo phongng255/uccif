@@ -35,14 +35,11 @@ def graph_data(project, max_nodes=DEFAULT_MAX_NODES):
     files = {p: (lang, t, n) for p, lang, t, n in
              con.execute("SELECT path, lang, is_test, n_symbols FROM files")}
     flags = {}
-    for src, dst in con.execute("SELECT DISTINCT src, target FROM imports WHERE target IS NOT NULL"):
-        if src != dst and src in files and dst in files:
-            flags[(src, dst)] = 1
-    if index._calls_table(con):
-        for src, dst in con.execute("SELECT DISTINCT src_path, callee_path FROM calls "
-                                    "WHERE callee_path IS NOT NULL"):
+    for kind, bit in (("imports", 1), ("calls", 2)):
+        for src, dst in con.execute("SELECT DISTINCT src_path, dst_path FROM edges "
+                                    "WHERE kind=? AND dst_path IS NOT NULL", (kind,)):
             if src != dst and src in files and dst in files:
-                flags[(src, dst)] = flags.get((src, dst), 0) | 2
+                flags[(src, dst)] = flags.get((src, dst), 0) | bit
     con.close()
     degree = {}
     for a, b in flags:
