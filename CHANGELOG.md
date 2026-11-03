@@ -1,5 +1,19 @@
 # Changelog
 
+## 3.0.0-dev.12
+
+- **Code graph, phase 2, step 0** (no change to the plugin's behaviour): groundwork for the
+  detailed-graph roadmap.
+  - `tests/fixtures/vue-app/`: a fixed Vue 3 + Vite + Pinia + vue-router mini app (24 indexed
+    files) with `<script setup>`, props/emits, a composable, two stores (options and setup
+    style), lazy routes, a barrel `index.ts`, `@/` imports and CSS variables.
+  - `tests/test_fixture_vue_app.py`: pins what the index knows about it today, including the
+    known gaps later PRs close (barrel re-exports, `store.action()` calls unresolved).
+  - `tests/bench_index.py`: full build, one-file update (budget 300 ms) and no-op update
+    timings, DB size and row counts; run by hand, not collected by pytest or CI.
+- Baseline (this sandbox, median of 5): fixture 57 ms full build / 4 ms one-file update / 64 KB;
+  this repo 107 ms / 4 ms / 520 KB (tree-sitter), 57 ms / 3 ms / 160 KB (regex).
+
 ## 3.0.0-dev.11
 
 - **Graph view** (step 4 of the code-graph roadmap): `uccif index graph [--out FILE]

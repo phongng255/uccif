@@ -1,0 +1,120 @@
+"""Index benchmark (not collected by pytest, not run in CI).
+
+    python tests/bench_index.py [--repeat N] [--json] [--target PATH ...]
+
+For each target (default: the vue-app fixture and this repo) it reports
+  - full build time (cold index),
+  - incremental update after touching ONE file (what the post-Edit hook pays; budget 300 ms),
+  - no-op update (stat pass only),
+  - index.db size, files, symbols, imports, calls.
+Run with and without tree-sitter (UCCIF_NO_TREE_SITTER=1) and paste the table into the PR.
+The fixture is tiny, so also pass --target <a real app> to see the budget on a real repo.
+Everything runs in a temp data dir; targets are copied/read, never modified.
+"""
+import argparse
+import json
+import os
+import shutil
+import statistics
+import subprocess
+import sys
+import tempfile
+import time
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+REPO = HERE.parent
+sys.path.insert(0, str(REPO / "plugins" / "uccif"))
+
+BUDGET_MS = 300
+
+
+def _git(cwd, *args):
+    subprocess.run(["git", "-c", "user.email=b@b", "-c", "user.name=b"] + list(args),
+                   cwd=str(cwd), check=True, capture_output=True)
+
+
+def _prepare(target, work):
+    """Copy the target into a temp git repo so touching files never dirties the original."""
+    dst = work / "repo"
+    ignore = shutil.ignore_patterns(".git", "node_modules", "__pycache__", ".pytest_cache")
+    shutil.copytree(str(target), str(dst), ignore=ignore)
+    _git(dst, "init", "-q")
+    _git(dst, "add", "-A")
+    _git(dst, "commit", "-q", "-m", "bench")
+    return dst
+
+
+def _ms(fn):
+    t = time.perf_counter()
+    out = fn()
+    return (time.perf_counter() - t) * 1000, out
+
+
+def bench(target, repeat):
+    from uccif_lib import index, ts_parse
+    from uccif_lib.paths import resolve_project
+    work = Path(tempfile.mkdtemp(prefix="uccif-bench-"))
+    os.environ["UCCIF_DATA_DIR"] = str(work / "data")
+    os.environ["UCCIF_SYNC"] = "1"
+    try:
+        repo = _prepare(target, work)
+        os.chdir(str(repo))
+        project = resolve_project()
+        build_ms, stats = _ms(lambda: index.update(project, full=True))
+        con = index.connect(project, write=False)
+        counts = {t: con.execute("SELECT count(*) FROM %s" % t).fetchone()[0]
+                  for t in ("files", "symbols", "imports", "calls")}
+        con.close()
+        db_kb = index.db_path(project).stat().st_size / 1024
+
+        sources = sorted(r for r in index.list_source_files(repo))
+        pick = next((s for s in sources if not index.is_test(s)), None)
+        touch, noop = [], []
+        for i in range(repeat):
+            noop.append(_ms(lambda: index.update(project))[0])
+            if pick:
+                path = repo / pick
+                path.write_text(path.read_text(encoding="utf-8", errors="replace") + "\n// touch %d\n" % i,
+                                encoding="utf-8")
+                touch.append(_ms(lambda: index.update(project, paths=[pick]))[0])
+        return {
+            "target": str(target), "tool": stats["tool"],
+            "tree_sitter": any(ts_parse.availability().values()),
+            "full_build_ms": round(build_ms), "touch_one_ms": round(statistics.median(touch)) if touch else None,
+            "noop_ms": round(statistics.median(noop)), "db_kb": round(db_kb), **counts,
+            "touched": pick,
+        }
+    finally:
+        os.chdir(str(HERE))
+        shutil.rmtree(str(work), ignore_errors=True)
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--target", action="append", help="directory to index (repeatable)")
+    ap.add_argument("--repeat", type=int, default=5)
+    ap.add_argument("--json", action="store_true")
+    a = ap.parse_args()
+    targets = [Path(t).resolve() for t in a.target] if a.target else [HERE / "fixtures" / "vue-app", REPO]
+    rows = [bench(t, a.repeat) for t in targets]
+    if a.json:
+        print(json.dumps(rows, indent=2))
+        return 0
+    hdr = ("target", "tool", "files", "symbols", "imports", "calls", "build ms", "touch-1 ms", "no-op ms", "db KB")
+    print(" | ".join(hdr))
+    print(" | ".join("---" for _ in hdr))
+    over = False
+    for r in rows:
+        name = os.path.relpath(r["target"], str(REPO)) if r["target"].startswith(str(REPO)) else r["target"]
+        print(" | ".join(str(x) for x in (name if name != "." else "(uccif repo)", r["tool"], r["files"],
+                                            r["symbols"], r["imports"], r["calls"], r["full_build_ms"],
+                                            r["touch_one_ms"], r["noop_ms"], r["db_kb"])))
+        over = over or (r["touch_one_ms"] or 0) > BUDGET_MS
+    if over:
+        print("\nOVER BUDGET: touch-1 > %d ms. Report it and propose lazy evaluation for the new layer." % BUDGET_MS)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
