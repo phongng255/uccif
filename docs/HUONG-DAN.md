@@ -1,332 +1,293 @@
-# Hướng Dẫn Sử Dụng UCCIF (Dành Cho Người Mới Bắt Đầu)
+# Hướng dẫn sử dụng UCCIF
 
-Tài liệu này được viết dành cho tất cả mọi người, kể cả khi bạn **chưa từng dùng dòng lệnh (terminal)** bao giờ. Mọi thao tác đều có lệnh mẫu để bạn sao chép (copy) và dán (paste), kèm theo hình ảnh văn bản kết quả thực tế.
+Tài liệu này giúp bạn cài UCCIF, biết nó làm gì sau khi cài, và xử lý khi có trục trặc. Các lệnh đều chép và dán được. Bản tiếng Anh: [GUIDE.md](GUIDE.md).
 
----
+## 1. UCCIF là gì
 
-## 1. UCCIF Là Gì Và Giúp Gì Cho Bạn?
+UCCIF là plugin cho các công cụ AI viết code. Nó không tự sửa code của bạn. Nó chỉ cung cấp cho AI những thứ sau:
 
-Bình thường khi bạn dùng AI hỗ trợ lập trình (như Claude Code, Gemini CLI hay Antigravity), mỗi lần bạn hỏi một câu mới hoặc chuyển sang việc khác, AI thường "quên" những gì vừa làm, tìm kiếm file rất chậm và tiêu tốn rất nhiều token (chi phí API).
+| Thành phần | Tác dụng | Lưu ở đâu |
+|---|---|---|
+| **Quy tắc cốt lõi** | Nhắc AI tự chạy lệnh, phải có bằng chứng trước khi kết luận, hỏi trước khi cài package, deploy hay push, và trả lời bằng ngôn ngữ bạn chọn | Nạp đầu mỗi session |
+| **Chỉ mục code (CodeGraph)** | AI tra hàm, luồng gọi và phạm vi ảnh hưởng từ chỉ mục, thay vì dò và đọc từng file | `.codegraph/` |
+| **Skill của dự án** | Bản đồ module, cách sửa lỗi nhanh, và tối đa 5 skill cho các module lớn nhất, sinh từ chỉ mục | `.claude/skills/` hoặc `.agents/skills/` |
+| **Ghi nhớ công việc** | Lần sửa file đầu tiên sẽ mở một task. Task được giữ qua các lượt chat và sau `/clear`, nên AI biết việc đang làm dở | `.claude/uccif/.local/` |
+| **Dòng token** | Số token thật, đọc từ transcript, không ước lượng | Hiện sau mỗi câu trả lời |
 
-**UCCIF** giống như một trợ lý quản lý dự án thông minh chạy ngầm cùng AI của bạn:
-1. **Ghi nhớ công việc tự động:** Ngay khi AI sửa file đầu tiên, UCCIF tự động tạo ghi chú việc đang làm. Dù bạn tắt máy hay xoá ngữ cảnh chat (`/clear`), AI vẫn nhớ mình đang làm dở điều gì.
-2. **Bản đồ mã nguồn thông minh:** Tích hợp bộ tạo bản đồ code (CodeGraph) giúp AI hiểu cấu trúc dự án ngay lập tức mà không phải đọc dò từng file, giúp AI trả lời nhanh hơn và tiết kiệm đến 70% chi phí token.
-3. **Quy tắc làm việc an toàn:** Nhắc nhở AI luôn tự kiểm tra lại code sau khi sửa và trả lời bạn bằng tiếng Việt rõ ràng, dễ hiểu.
+UCCIF không bao giờ chặn lệnh của AI: nó chỉ nhắc, không cấm. Task mở sẽ tự đóng khi bạn chuyển sang việc mới hoặc sau 24 giờ không hoạt động.
 
----
+## 2. Mỗi công cụ hỗ trợ đến đâu
 
-## 2. Chuẩn Bị Môi Trường
+| Tính năng | Claude Code | Antigravity CLI (`agy`) | Antigravity IDE | Gemini CLI |
+|---|---|---|---|---|
+| Quy tắc, skill, CodeGraph | Có | Có | Có | Có |
+| Hook chạy tự động | Có | Có | **Không** | Có |
+| Tự tạo task khi sửa file | Có, lấy tiêu đề từ prompt | Có, tiêu đề luôn là "Code change" | **Không** | Có, lấy tiêu đề từ prompt |
+| Tự index và tự sinh skill | Có | Có | **Không**, chạy tay ở mục 3.3 | Có |
+| Dòng token | Có | Không | Không | Có |
+| `#quick` | Có | Không | Không | Có |
+| Nhắc dùng CodeGraph trước khi tìm kiếm | Có | Không | Không | Có |
 
-Trước khi dùng, máy tính của bạn cần có **Git**, **Python** và **Node.js**. Hãy mở cửa sổ dòng lệnh (Terminal trên macOS/Linux hoặc PowerShell trên Windows) và làm theo hướng dẫn dưới đây.
+Phần Gemini CLI mới được kiểm tra bằng test tự động, chưa được chạy trong một session thật. Google đã ngừng phục vụ Gemini CLI cho người dùng không trả phí và Google One từ 18/06/2026. Nếu bạn dùng tài khoản cá nhân, hãy chọn Antigravity CLI.
 
-### Bước 2.1: Mở cửa sổ dòng lệnh (Terminal)
-- **macOS:** Nhấn tổ hợp phím `Command + Space`, gõ `Terminal` rồi nhấn `Enter`.
-- **Windows:** Nhấn phím `Windows`, gõ `PowerShell`, chuột phải vào **Windows PowerShell** và chọn **Run as Administrator**.
-- **Linux:** Nhấn tổ hợp phím `Ctrl + Alt + T`.
+Thư mục `.agents/` ít file hơn `.claude/` là bình thường. Hai bên dùng chung `.claude/uccif/`, còn những thứ như `.cc-writes` là file riêng của Claude Code.
 
----
+## 3. Cài đặt
 
-### Bước 2.2: Kiểm tra hoặc cài đặt Git
+Cần có:
 
-**Lệnh kiểm tra:**
-```bash
-git --version
-```
-*Kết quả mong đợi:*
-```text
-git version 2.39.0 (hoặc số phiên bản tương tự)
-```
+| Công cụ | Bắt buộc? | Kiểm tra bằng | Dùng để |
+|---|---|---|---|
+| Python 3.8 trở lên | Có | `python3 --version` | Chạy UCCIF |
+| Git | Có | `git --version` | Nhận diện dự án |
+| Node.js và npm | Chỉ khi dùng CodeGraph hoặc language server | `node --version` | Cài CodeGraph, pyright |
 
-**Nếu chưa có Git:**
-- **macOS:** Gõ `xcode-select --install` rồi nhấn nút **Install** trên hộp thoại xuất hiện.
-- **Windows:** Tải và cài đặt từ trang chủ [git-scm.com/download/win](https://git-scm.com/download/win) (chọn thiết lập mặc định).
-- **Ubuntu/Linux:** Chạy lệnh:
-  ```bash
-  sudo apt update && sudo apt install -y git
-  ```
+Trên Windows, Claude Code chạy hook qua Git Bash, nên hãy cài [Git for Windows](https://git-scm.com/download/win). CI có chạy trên Windows, nhưng UCCIF chưa được thử trong một session Claude Code thật trên Windows.
 
----
+### 3.1. Claude Code
 
-### Bước 2.3: Kiểm tra hoặc cài đặt Python (phiên bản 3.8 trở lên)
+Trong khung chat của Claude Code, gõ:
 
-**Lệnh kiểm tra:**
-```bash
-python3 --version || python --version
-```
-*Kết quả mong đợi:*
-```text
-Python 3.10.12 (hoặc bất kỳ bản nào từ 3.8 trở lên)
-```
-
-**Nếu chưa có Python:**
-- **macOS:** Tải bản cài đặt từ [python.org/downloads](https://www.python.org/downloads/) hoặc nếu dùng Homebrew: `brew install python`.
-- **Windows:** Tải từ [python.org/downloads](https://www.python.org/downloads/). *(Lưu ý quan trọng: Nhớ tích chọn vào ô "Add Python to PATH" ở bước đầu tiên khi cài đặt)*.
-- **Ubuntu/Linux:** Chạy lệnh:
-  ```bash
-  sudo apt update && sudo apt install -y python3 python3-pip
-  ```
-
----
-
-### Bước 2.4: Kiểm tra hoặc cài đặt Node.js (phiên bản 18 trở lên)
-
-Node.js cần thiết để chạy công cụ phân tích mã nguồn CodeGraph.
-
-**Lệnh kiểm tra:**
-```bash
-node --version && npm --version
-```
-*Kết quả mong đợi:*
-```text
-v20.18.0
-10.8.2
-```
-
-**Nếu chưa có Node.js:**
-- **macOS / Windows:** Tải bản LTS từ [nodejs.org](https://nodejs.org/) và chạy bộ cài đặt.
-- **Ubuntu/Linux:** Chạy lệnh:
-  ```bash
-  curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
-  sudo apt install -y nodejs
-  ```
-
----
-
-## 3. Cài Đặt UCCIF Cho Từng Công Cụ
-
-Chọn phần hướng dẫn ứng với công cụ AI mà bạn đang sử dụng:
-
-```
-+-------------------------------------------------------------------+
-|  Bạn đang dùng công cụ nào?                                       |
-|  - Claude Code: Xem Mục 3.1                                       |
-|  - Antigravity CLI (lệnh agy): Xem Mục 3.2                        |
-|  - Antigravity IDE: Xem Mục 3.3                                   |
-|  - Gemini CLI (dành cho tài khoản doanh nghiệp): Xem Mục 3.4      |
-+-------------------------------------------------------------------+
-```
-
----
-
-### 3.1. Dành cho Claude Code
-
-#### 1. Lệnh cài đặt
-Khởi động Claude Code trong terminal của bạn:
-```bash
-claude
-```
-Bên trong giao diện chat của Claude Code, gõ lần lượt 2 dòng sau:
 ```text
 /plugin marketplace add phongng255/uccif
 /plugin install uccif@uccif
 ```
 
-#### 2. Kiểm tra cài đặt thành công
-Gõ lệnh:
-```text
-/plugin list
+Khởi động lại Claude Code, rồi kiểm tra trong terminal:
+
+```bash
+claude plugin list
 ```
-*Kết quả bạn sẽ thấy:* Danh sách có plugin `uccif` kèm trạng thái `enabled`.
 
-#### 3. Lần đầu mở dự án
-- Mở thư mục dự án của bạn bằng lệnh `claude`.
-- Bạn có thể đặt bất kỳ câu hỏi nào về dự án, ví dụ: `"Dự án này làm gì?"`.
-- Claude sẽ phát hiện chưa có CodeGraph và hỏi bạn một câu duy nhất:
-  > *"CodeGraph is NOT installed. Install it now? (yes/no)"*
-- Bạn chỉ cần trả lời: **`yes`**. Claude Code sẽ tự động cài đặt CodeGraph, quét dự án và tạo bản đồ mã nguồn ngay lập tức. Sau đó, bạn khởi động lại Claude Code một lần để hoàn tất.
+Danh sách phải có `uccif`. Tiếp theo xem mục 3.5.
 
----
+### 3.2. Antigravity CLI
 
-### 3.2. Dành cho Antigravity CLI (`agy`)
-
-> [!NOTE]
-> Google đã ngừng cung cấp Gemini CLI miễn phí từ ngày 18/06/2026 và thay thế bằng **Antigravity CLI** (`agy`). Đây là công cụ chuẩn dành cho người dùng cá nhân và tài khoản Google miễn phí.
-
-#### 1. Lệnh cài đặt
-Mở Terminal và chạy lệnh sau (lưu ý đường dẫn trỏ đúng thư mục plugin):
 ```bash
 agy plugin install https://github.com/phongng255/uccif/tree/main/plugins/uccif-antigravity
 ```
-*Hoặc nếu bạn đã tải mã nguồn dự án về máy:*
-```bash
-agy plugin install /đường/dẫn/tới/uccif/plugins/uccif-antigravity
-```
 
-#### 2. Kiểm tra cài đặt thành công
-Chạy lệnh trong terminal:
+Phải dùng đúng dạng URL này. URL repo trần, `#branch` hay `--ref` sẽ cài nhầm plugin của Claude, và Antigravity sẽ bỏ qua hook của plugin đó.
+
+Kiểm tra:
+
 ```bash
 agy plugin list
 ```
-*Kết quả bạn sẽ thấy:*
+
 ```text
 Installed plugins:
 - uccif (enabled, 1.1.0)
     Source:     antigravity
-    Components: 3 skills, 1 MCP server, 1 hook
+    Components: 3 skills, 1 rule, 1 MCP server, 1 hook
 ```
 
-#### 3. Trải nghiệm lần đầu
-Mở một thư mục code bất kỳ và gõ:
-```bash
-agy
-```
-UCCIF sẽ kích hoạt ngay lập tức: các quy tắc cốt lõi được nạp, cấu trúc dự án được phân tích và sẵn sàng hỗ trợ bạn.
+### 3.3. Antigravity IDE
 
----
+IDE không có hook, nên phải chạy tay cho từng dự án. Dưới đây giả định bạn đã cài plugin ở mục 3.2. Nếu không, hãy dùng `plugins/uccif/bin/uccif` trong bản clone của repo này.
 
-### 3.3. Dành cho Antigravity IDE
-
-Antigravity IDE hỗ trợ đọc cấu hình theo từng thư mục dự án (workspace) qua thư mục `.agents/`.
-
-#### 1. Cài đặt cho một dự án
-Mở Terminal, di chuyển vào thư mục dự án bạn muốn lập trình và chạy:
 ```bash
 cd /duong/dan/du-an-cua-ban
-python3 /duong/dan/uccif/plugins/uccif/bin/uccif setup antigravity
 ```
-*(Nếu bạn dùng Windows, thay `python3` bằng `python`)*.
 
-*Kết quả:*
+```bash
+~/.gemini/config/plugins/uccif/core/bin/uccif setup antigravity
+```
+
+Không chạy file này bằng `python3 .../bin/uccif`: đây là shell script, chạy vậy sẽ báo `SyntaxError`.
+
+Kết quả mở đầu bằng dòng dưới đây. `N` là số file vừa ghi, lần chạy lại có thể khác:
+
 ```text
-uccif: configured .agents/ for Antigravity IDE (rules, skills, mcp_config.json)
+Wrote N files under .agents/ for the Antigravity IDE.
 ```
 
-#### 2. Kiểm tra cài đặt thành công
-Kiểm tra thư mục `.agents/` vừa được tạo:
-- Tệp `.agents/rules/uccif.md`: Chứa các quy tắc dự án.
-- Tệp `.agents/mcp_config.json`: Chứa cấu hình CodeGraph.
+Lệnh này chỉ ghi `.agents/rules/uccif.md`, `.agents/mcp_config.json` và 3 skill `codegraph`, `init`, `resume`. Để có chỉ mục và skill của dự án, chạy thêm:
 
-Mở dự án trong Antigravity IDE, công cụ sẽ tự động nhận diện toàn bộ kỹ năng và quy tắc của UCCIF.
+```bash
+codegraph init --yes
+```
 
----
+```bash
+~/.gemini/config/plugins/uccif/core/bin/uccif skills generate
+```
 
-### 3.4. Dành cho Gemini CLI (Tài khoản Google Code Assist doanh nghiệp)
+Skill không tự cập nhật ở chế độ này. Khi cấu trúc dự án đổi nhiều, hãy chạy lại lệnh `skills generate`.
 
-> [!IMPORTANT]
-> Chỉ áp dụng nếu tổ chức của bạn đã mua gói bản quyền **Gemini Code Assist Enterprise**. Tài khoản Google cá nhân không thể đăng nhập được Gemini CLI.
+Nếu bạn dùng cả plugin `agy` lẫn `.agents/mcp_config.json`, tool của CodeGraph có thể hiện hai lần. Khi đó chỉ nên giữ một nơi khai báo.
 
-#### 1. Lệnh cài đặt
-Trong Terminal, chạy lệnh:
+### 3.4. Gemini CLI (chỉ tài khoản trả phí)
+
 ```bash
 gemini extensions install https://github.com/phongng255/uccif.git
 ```
 
-#### 2. Kiểm tra cài đặt thành công
 ```bash
 gemini extensions list
 ```
-Bạn sẽ thấy `uccif` xuất hiện trong danh sách các tiện ích đã cài.
 
----
+### 3.5. Lần đầu mở một dự án
 
-## 4. Sử Dụng Hằng Ngày
+1. Mở công cụ AI trong thư mục dự án và hỏi một câu bất kỳ.
+2. Nếu máy chưa có CodeGraph, AI sẽ hỏi một lần có cài không. Câu chữ có thể khác nhau, vì AI tự viết câu hỏi.
+3. Nếu trả lời **có**, AI sẽ cài CLI, index dự án và sinh skill. Sau đó khởi động lại công cụ một lần để nạp tool `codegraph_explore`.
+4. Nếu trả lời **không**, AI sẽ tìm code bằng Grep và không hỏi lại trong dự án đó.
 
-Khi đã cài đặt UCCIF, **bạn hoàn toàn không cần học thuộc bất kỳ lệnh kỹ thuật nào**. Bạn chỉ cần trò chuyện tự nhiên với AI.
+Khi CodeGraph đã có sẵn trên máy, các dự án mở sau sẽ tự được index và sinh skill ở chế độ nền.
 
-### Một số câu lệnh mẫu bằng tiếng Việt:
-- *"Giải thích giúp mình luồng đăng nhập của người dùng hoạt động thế nào?"*
-- *"Tìm giúp mình hàm tính tổng tiền đơn hàng nằm ở đâu?"*
-- *"Mình muốn thêm tính năng gửi email xác thực, cần sửa những file nào?"*
-- *"Kiểm tra xem thay đổi này có làm hỏng các bài test hiện tại không."*
+Để kiểm tra, hãy hỏi AI: *"chạy uccif doctor giúp mình"*. Dòng `OK` là ổn, `WARN` là nên xử lý, `INFO` chỉ để tham khảo.
 
-### Dòng báo cáo Token (🔢) có ý nghĩa gì?
-Sau mỗi câu trả lời của AI, bạn sẽ thấy một dòng nhỏ ở cuối dạng:
+## 4. Dùng hằng ngày
+
+Cứ nói chuyện bình thường, bạn không cần nhớ lệnh `uccif` nào:
+
+| Bạn muốn | Cứ nói |
+|---|---|
+| Hiểu một luồng | "Luồng đăng nhập chạy thế nào?" |
+| Tìm code | "Hàm tính tổng tiền ở đâu?" |
+| Biết phạm vi một thay đổi | "Đổi props của component này thì ảnh hưởng những đâu?" |
+| Sửa lỗi | "Bấm thanh toán bị lỗi 500, sửa giúp mình" |
+| Làm tiếp việc cũ | "Tiếp tục việc hôm qua" hoặc "mình đang làm gì dở?" |
+| Xem hook có chạy không | "Hôm nay hook có chạy không?" |
+| Sửa rất nhỏ, không cần task | Thêm `#quick` vào prompt (Claude Code, Gemini CLI) |
+
+### Đọc dòng token
+
 ```text
-🔢 2.4k tok (+120 cache 90%) · turn 3 · 💡 /clear recommended (task saved)
+🔢 Turn: in 2.4k (cache 2.1k) · out 320 · Session 48k · Ctx 35k (18%)
 ```
-- **Ý nghĩa:** Cho bạn biết chính xác lượt chat vừa rồi tốn bao nhiêu token, bao nhiêu phần trăm được lưu trong bộ nhớ tạm (cache) để tiết kiệm tiền.
-- **Lời khuyên `/clear`:** Khi dự án lớn và cuộc trò chuyện dài, UCCIF sẽ nhắc bạn gõ `/clear`. Bạn cứ yên tâm gõ `/clear` vì UCCIF đã lưu lại công việc dang dở vào bộ nhớ đệm, AI sẽ không bao giờ bị quên!
 
-### Tệp nào nên đưa lên Git (Commit) và tệp nào không?
+| Phần | Ý nghĩa |
+|---|---|
+| `Turn: in ... (cache ...)` | Token đầu vào của lượt này, và phần trong đó đọc từ cache |
+| `out` | Token AI trả ra trong lượt này |
+| `Session` | Tổng token của cả session |
+| `Ctx` | Lượng context đang dùng, và tỷ lệ so với giới hạn nếu biết |
 
-| Tệp / Thư mục | Có commit không? | Ý nghĩa |
-| :--- | :---: | :--- |
-| `AGENTS.md` | **CÓ** | Hướng dẫn chung cho mọi AI khi đọc dự án. |
-| `.claude/skills/` hoặc `.agents/skills/` | **CÓ** | Bản đồ mã nguồn dự án giúp đồng đội dùng AI nhanh hơn. |
-| `.claude/uccif/summary.md` | **CÓ** | Tóm tắt mục đích và quy ước của dự án. |
-| `.claude/uccif/.local/` | **KHÔNG** | Bộ nhớ tạm cá nhân (đã được tự động bỏ qua qua `.gitignore`). |
-| `.codegraph/` | **KHÔNG** | Cơ sở dữ liệu chỉ mục code (được tự động loại khỏi git). |
+Đôi khi cuối dòng có thêm gợi ý:
 
----
+| Gợi ý | Khi nào | Nên làm |
+|---|---|---|
+| `💡 /clear recommended (task saved)` | Context từ 80k và không còn task mở | Gõ `/clear` |
+| `💡 checkpoint, then /clear` | Context từ 150k và còn task mở | Bảo AI lưu tiến độ, rồi `/clear` |
+| `💡 long session` | Tổng session từ 3 triệu token | Nên mở session mới |
 
-## 5. Cập Nhật Lên Phiên Bản Mới
+Sau `/clear`, AI lấy lại được những gì đã lưu trong task: tiêu đề, file đã sửa, quyết định, vấn đề còn mở. Phần trao đổi trong chat thì không được giữ, nên quyết định quan trọng nên được bảo AI ghi lại.
 
-Khi UCCIF ra mắt tính năng mới, bạn có thể cập nhật rất nhanh:
+## 5. Tùy chọn và mở rộng
 
-### Cho Claude Code:
-Vào Claude Code và gõ:
-```text
-/plugin marketplace update uccif
-/plugin update uccif@uccif
+Đổi tùy chọn trong `/config` của Claude Code. Với Gemini CLI, dùng phần settings của extension.
+
+| Tùy chọn | Mặc định | Tác dụng |
+|---|---|---|
+| `reply_language` | `vi` | Ngôn ngữ AI trả lời bạn |
+| `token_report` | bật | Hiện dòng token |
+| `auto_setup` | bật | Tự index và sinh skill khi đã có CodeGraph |
+
+Muốn thêm luật riêng, hãy tạo các file sau. UCCIF chỉ đọc, không ghi vào chúng. Mỗi file được nạp tối đa 15 dòng không trống.
+
+| Phạm vi | File |
+|---|---|
+| Một dự án | `<dự án>/.claude/uccif/rules.md` |
+| Mọi dự án | `~/.claude/uccif/rules.md` |
+
+Muốn ghi chú vào skill được sinh tự động, hãy viết **bên trong** khối `<!-- uccif:notes -->`. Ghi chú trong khối này được giữ qua mỗi lần sinh lại. Nếu sửa ngoài khối, UCCIF sẽ bỏ qua file đó cho đến khi chạy `--force`, và `--force` sẽ ghi đè phần bạn đã sửa ngoài khối.
+
+## 6. Nên commit gì
+
+| File hoặc thư mục | Làm một mình | Làm nhóm | Ghi chú |
+|---|---|---|---|
+| `.codegraph/` | Không | Không | Chỉ mục riêng từng máy, tự được loại khỏi git |
+| `.claude/uccif/.local/` | Không | Không | Task và trạng thái riêng từng máy |
+| `.agents/rules/uccif.md` | Không | Không | Chứa đường dẫn tuyệt đối của máy bạn |
+| `.claude/uccif/summary.md`, `rules.md` | Tùy | Có | Mục đích và quy ước của dự án |
+| Skill `<dự án>-*` | Tùy | Có | Có thể sinh lại từ chỉ mục |
+| `AGENTS.md` | Tùy | Có | Nếu dự án có khối UCCIF, khối này trỏ tới `.claude/uccif/summary.md`, nên hãy commit cả hai cùng nhau |
+
+Làm một mình thì có thể thêm `.claude/` và `.agents/` vào `.gitignore`. Nhưng nếu `.claude/` có file khác bạn muốn chia sẻ, hãy chỉ ignore đúng phần cần ignore.
+
+## 7. Cập nhật
+
+**Claude Code**, từ terminal:
+
+```bash
+claude plugin marketplace update uccif
 ```
-*Sau khi cập nhật, hãy khởi động lại Claude Code một lần.*
 
-### Cho Antigravity CLI:
-Chạy lại lệnh cài đặt từ URL:
+```bash
+claude plugin update uccif@uccif
+```
+
+Sau đó **khởi động lại Claude Code**, vì bản mới chỉ có hiệu lực sau khi khởi động lại. Thông báo "already up to date" nghĩa là chưa có phiên bản mới hơn. Bản cũ vẫn nằm trong thư mục cache của plugin một thời gian. Điều này bình thường, và bản đó không còn được dùng.
+
+Skill của mỗi dự án chỉ được làm mới vào lần tiếp theo bạn mở công cụ trong dự án đó.
+
+**Antigravity CLI:**
+
+```bash
+agy plugin uninstall uccif
+```
+
 ```bash
 agy plugin install https://github.com/phongng255/uccif/tree/main/plugins/uccif-antigravity
 ```
 
-### Cho Antigravity IDE:
-Di chuyển vào thư mục dự án và chạy lại lệnh setup:
-```bash
-python3 /duong/dan/uccif/plugins/uccif/bin/uccif setup antigravity
-```
+**Antigravity IDE:** chạy lại `uccif setup antigravity` trong dự án. File bạn đã sửa sẽ được giữ nguyên, và lệnh sẽ báo những file đã bỏ qua.
 
----
+## 8. Gỡ cài đặt
 
-## 6. Gỡ Cài Đặt Hoàn Toàn
+Gỡ khỏi công cụ:
 
-Nếu bạn không muốn sử dụng UCCIF nữa, dưới đây là cách gỡ sạch sẽ mà không ảnh hưởng tới mã nguồn dự án:
+| Công cụ | Lệnh |
+|---|---|
+| Claude Code | `claude plugin uninstall uccif@uccif` |
+| Antigravity CLI | `agy plugin uninstall uccif` |
+| Antigravity IDE | `uccif setup antigravity --remove`, chạy trong dự án và **trước khi** gỡ plugin. Chỉ xoá file nó đã ghi mà bạn chưa sửa |
+| Gemini CLI | `gemini extensions uninstall uccif` |
 
-### Bước 6.1: Gỡ plugin khỏi công cụ
-- **Claude Code:** Gõ `/plugin uninstall uccif@uccif` trong chat.
-- **Antigravity CLI:** Chạy lệnh terminal:
-  ```bash
-  agy plugin uninstall uccif
-  ```
-- **Antigravity IDE:** Chạy lệnh trong thư mục dự án:
-  ```bash
-  python3 /duong/dan/uccif/plugins/uccif/bin/uccif setup antigravity --remove
-  ```
-- **Gemini CLI:** Chạy lệnh:
-  ```bash
-  gemini extensions uninstall uccif
-  ```
+Dọn dữ liệu trong dự án, nếu muốn. Hãy xem lại trước khi xoá:
 
-### Bước 6.2: Gỡ công cụ CodeGraph (nếu muốn)
+- `.codegraph/`: có thể xoá.
+- `.claude/uccif/`: có `summary.md` và `rules.md`, nên giữ lại nếu còn cần.
+- `.claude/skills/<dự án>-*` và `.agents/skills/<dự án>-*`: chỉ xoá các skill được sinh tự động. Đừng xoá cả thư mục `skills/`, vì trong đó có thể có skill của bạn.
+- Khối `<!-- UCCIF:BEGIN -->` đến `<!-- UCCIF:END -->` trong `AGENTS.md`, và dòng `@AGENTS.md` trong `CLAUDE.md` nếu bạn không dùng tới.
+
+Gỡ CodeGraph, nếu không còn dự án nào cần:
+
 ```bash
 npm uninstall -g @colbymchenry/codegraph
 ```
 
-### Bước 6.3: Xoá dữ liệu UCCIF đã tạo trong dự án
-UCCIF chỉ tạo các thư mục độc lập sau, bạn có thể xoá chúng đi bằng tay hoặc lệnh:
-- Thư mục `.claude/uccif/`
-- Thư mục `.codegraph/`
-- Thư mục `.agents/skills/` (chứa các kỹ năng `<project>-map`, `-mod-*`, `-bugfix`)
-- Nếu muốn giữ lại tài liệu tóm tắt dự án, bạn chỉ cần giữ lại file `.claude/uccif/summary.md`.
+## 9. Xử lý sự cố
 
----
+Bước đầu tiên luôn là hỏi AI: *"chạy uccif doctor giúp mình"*.
 
-## 7. Các Lỗi Thường Gặp Và Cách Xử Lý
+| Triệu chứng | Nguyên nhân | Cách xử lý |
+|---|---|---|
+| `SyntaxError` khi chạy `python3 .../bin/uccif` | `bin/uccif` là shell script | Chạy thẳng file đó, bỏ `python3` |
+| `python3: command not found` | Thiếu Python hoặc Python chưa có trong PATH | Cài từ [python.org](https://www.python.org/downloads/). Trên Windows, nhớ chọn "Add Python to PATH" |
+| Update xong nhưng vẫn thấy hành vi cũ | Chưa khởi động lại | Khởi động lại công cụ. Nếu vẫn vậy, gỡ rồi cài lại plugin |
+| `.claude/skills` khác số lượng với `.agents/skills` | Một bên còn skill của bản cũ, hoặc chưa mở công cụ đó từ khi cập nhật | Mở công cụ đó trong dự án để skill được sinh lại |
+| Không có dòng token | Đang dùng Antigravity, hoặc đã tắt `token_report` | Antigravity không hỗ trợ. Với Claude Code, bật lại trong `/config` |
+| Không có tool `codegraph_explore` | Chưa khởi động lại sau khi cài, hoặc thiếu CLI | Khởi động lại, rồi hỏi AI chạy `uccif codegraph` |
+| Tool CodeGraph hiện hai lần | Có hai nơi khai báo server | Chỉ giữ một nơi. Không chạy thêm `codegraph install --target=claude` |
+| Antigravity không có task tự động | Đang dùng IDE, hoặc plugin cài sai URL | IDE không có hook. Với CLI, cài lại đúng URL ở mục 3.2 |
+| `doctor` báo `hook errors` | Hook từng lỗi. Có thể chỉ một lần | Hỏi AI chạy `uccif log hooks --only-errors`. Chỉ cần điều tra nếu lỗi lặp lại |
+| Gemini CLI không đăng nhập được | Tài khoản không trả phí | Dùng Antigravity CLI |
 
-| Triệu chứng | Nguyên nhân | Cách khắc phục |
-| :--- | :--- | :--- |
-| `python3: command not found` hoặc `python not found` | Máy tính chưa cài Python hoặc chưa đưa Python vào biến môi trường PATH. | Tải và cài đặt Python từ python.org. Nếu dùng Windows, nhớ tích chọn ô **"Add Python to PATH"**. |
-| `Error: install target must be a directory` khi chạy `agy plugin install` | Bạn truyền sai đường dẫn thư mục hoặc đường dẫn chưa được tải về. | Dùng đúng URL chi tiết: `https://github.com/phongng255/uccif/tree/main/plugins/uccif-antigravity` hoặc chỉ định thư mục đầy đủ trên máy. |
-| AI không hiển thị dòng tính token sau mỗi câu trả lời | Đang dùng Antigravity hoặc chế độ token report bị tắt. | Antigravity không hỗ trợ chèn tin nhắn hệ thống sau lượt trả lời. Với Claude Code, gõ `/config` và bật lại `token_report`. |
-| Gemini CLI báo lỗi không đăng nhập được | Tài khoản Google của bạn là tài khoản cá nhân miễn phí. | Google đã ngừng cung cấp Gemini CLI miễn phí từ 18/06/2026. Hãy chuyển sang sử dụng **Antigravity CLI** (`agy`). |
-| `ModuleNotFoundError: No module named 'pytest'` khi chạy kiểm thử | Môi trường Python thiếu thư viện `pytest`. | Chạy lệnh `python3 -m pip install pytest` hoặc dùng môi trường ảo `.venv`. |
+## 10. Câu hỏi thường gặp
 
----
+**UCCIF có gửi code của tôi ra ngoài không?**
+Bản thân UCCIF không có máy chủ, và CodeGraph được chạy với telemetry tắt. Việc index và ghi nhớ task đều nằm trên máy bạn. Tuy nhiên, công cụ AI bạn đang dùng vẫn gửi phần code nó đọc lên dịch vụ của nhà cung cấp, theo chính sách của họ.
 
-## 8. Các Câu Hỏi Thường Gặp (FAQ)
+**UCCIF có tự sửa code của tôi không?**
+Không. UCCIF chỉ ghi file của riêng nó: chỉ mục, skill, ghi chú và trạng thái task. Code do AI sửa, theo yêu cầu và cơ chế cấp quyền của công cụ bạn dùng.
 
-**Hỏi: Dùng UCCIF có làm lộ mã nguồn dự án của tôi ra ngoài không?**  
-*Trả lời:* **Tuyệt đối không.** Toàn bộ việc ghi nhớ và lập chỉ mục CodeGraph đều chạy 100% cục bộ (offline) trên máy tính của bạn. UCCIF không có máy chủ lưu trữ bên ngoài và không gửi code của bạn đi bất cứ đâu.
+**UCCIF giúp tiết kiệm bao nhiêu token?**
+Tùy dự án và cách dùng, nên tài liệu này không đưa ra con số chung. Dòng token cho biết số thật của bạn.
 
-**Hỏi: UCCIF có tự ý xóa hay sửa code dự án của tôi không?**  
-*Trả lời:* **Không.** Mọi thay đổi code đều do chính mô hình AI mà bạn ra lệnh thực hiện và bạn luôn có quyền kiểm soát phê duyệt. Bản thân UCCIF chỉ quản lý file hướng dẫn, bản đồ code và ghi nhớ ngữ cảnh.
+**Đồng đội không cài UCCIF thì sao?**
+Không ảnh hưởng. `AGENTS.md` và các skill là file Markdown thường.
 
-**Hỏi: Dự án của tôi có nhiều người cùng làm, họ không cài UCCIF thì có bị lỗi không?**  
-*Trả lời:* **Hoàn toàn không ảnh hưởng.** File `AGENTS.md` và các skill trong `.agents/skills/` là các tệp Markdown tiêu chuẩn. Đồng nghiệp của bạn dù dùng bất kỳ công cụ nào cũng vẫn đọc hiểu được bình thường.
+**Có cần tạo nhiều skill hơn không?**
+Thường là không, vì mỗi skill làm tốn thêm context ở mọi session. Skill tự sinh cũng chỉ lặp lại những gì tra được từ chỉ mục. Nếu có kiến thức mà code không tự nói ra, hãy ghi vào khối notes hoặc viết một skill riêng.

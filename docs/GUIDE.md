@@ -1,332 +1,293 @@
-# UCCIF Guide (For Beginners)
+# UCCIF guide
 
-This guide is written for everyone, even if you have **never used a command-line terminal** before. Every step includes copy-pasteable commands and real example output.
+How to install UCCIF, what it does once installed, and what to do when something goes wrong. Every command can be copied and pasted. Vietnamese version: [HUONG-DAN.md](HUONG-DAN.md).
 
----
+## 1. What UCCIF is
 
-## 1. What is UCCIF and How Does It Help You?
+UCCIF is a plugin for AI coding tools. It does not change your code on its own. It gives the AI these things:
 
-Normally, when you use coding AI assistants (like Claude Code, Gemini CLI, or Antigravity), every time you ask a question or switch tasks, the AI tends to "forget" previous context, searches slowly through files, and burns through your API tokens.
+| Part | What it does | Where it lives |
+|---|---|---|
+| **Core rules** | Tell the AI to run commands itself, check evidence before concluding, ask before installing packages, deploying or pushing, and reply in your language | Loaded at the start of each session |
+| **Code index (CodeGraph)** | The AI looks up functions, call paths and impact in an index instead of searching and reading file by file | `.codegraph/` |
+| **Project skills** | A module map, a short bug-fix path, and up to 5 skills for the largest modules, generated from the index | `.claude/skills/` or `.agents/skills/` |
+| **Task memory** | The first file edit opens a task. It survives turns and `/clear`, so the AI knows what is in progress | `.claude/uccif/.local/` |
+| **Token line** | Real token counts read from the transcript, never estimated | Shown after each reply |
 
-**UCCIF** acts like an intelligent background project manager alongside your AI:
-1. **Automatic Task Memory:** As soon as the AI makes its first edit, UCCIF records what you're working on. Even if you restart your machine or clear the chat history (`/clear`), the AI remembers where it left off.
-2. **Smart Code Map:** Uses CodeGraph to build an instant index of your codebase. The AI navigates symbols directly without guessing or scanning whole files, answering faster while saving up to 70% in token costs.
-3. **Safe Guidelines:** Keeps the AI focused, requiring verification after edits and keeping communication clear.
+UCCIF never blocks the AI's commands: it reminds, it does not forbid. An open task closes by itself when you move to new work or after 24 hours idle.
 
----
+## 2. What each tool supports
 
-## 2. Prerequisites & Environment Setup
+| Feature | Claude Code | Antigravity CLI (`agy`) | Antigravity IDE | Gemini CLI |
+|---|---|---|---|---|
+| Rules, skills, CodeGraph | Yes | Yes | Yes | Yes |
+| Automatic hooks | Yes | Yes | **No** | Yes |
+| Task opened when a file is edited | Yes, titled from your prompt | Yes, always titled "Code change" | **No** | Yes, titled from your prompt |
+| Automatic indexing and skills | Yes | Yes | **No**, run by hand (section 3.3) | Yes |
+| Token line | Yes | No | No | Yes |
+| `#quick` | Yes | No | No | Yes |
+| Reminder to use CodeGraph before searching | Yes | No | No | Yes |
 
-Before using UCCIF, make sure your machine has **Git**, **Python**, and **Node.js** installed. Open your terminal (Terminal on macOS/Linux or PowerShell on Windows) and follow the instructions below.
+The Gemini CLI support has only been checked by automated tests, not in a real session. Google stopped serving Gemini CLI for unpaid and Google One users on June 18, 2026. With a personal account, choose Antigravity CLI.
 
-### Step 2.1: Open your Terminal
-- **macOS:** Press `Command + Space`, type `Terminal`, and press `Enter`.
-- **Windows:** Press the `Windows` key, type `PowerShell`, right-click **Windows PowerShell** and choose **Run as Administrator**.
-- **Linux:** Press `Ctrl + Alt + T`.
+It is normal for `.agents/` to hold fewer files than `.claude/`. Both tools share `.claude/uccif/`, and files like `.cc-writes` belong to Claude Code itself.
 
----
+## 3. Install
 
-### Step 2.2: Check or Install Git
+You need:
 
-**Check command:**
-```bash
-git --version
-```
-*Expected output:*
-```text
-git version 2.39.0 (or similar version number)
-```
+| Tool | Required? | Check with | Used for |
+|---|---|---|---|
+| Python 3.8 or later | Yes | `python3 --version` | Running UCCIF |
+| Git | Yes | `git --version` | Identifying the project |
+| Node.js and npm | Only for CodeGraph or language servers | `node --version` | Installing CodeGraph, pyright |
 
-**If Git is not installed:**
-- **macOS:** Run `xcode-select --install` and click **Install** in the popup window.
-- **Windows:** Download and install from [git-scm.com/download/win](https://git-scm.com/download/win) (keep default options).
-- **Ubuntu/Linux:** Run:
-  ```bash
-  sudo apt update && sudo apt install -y git
-  ```
+On Windows, Claude Code runs hooks through Git Bash, so install [Git for Windows](https://git-scm.com/download/win). CI runs on Windows, but UCCIF has not been tried in a real Claude Code session there.
 
----
+### 3.1. Claude Code
 
-### Step 2.3: Check or Install Python (Version 3.8 or higher)
+In the Claude Code chat, type:
 
-**Check command:**
-```bash
-python3 --version || python --version
-```
-*Expected output:*
-```text
-Python 3.10.12 (or any version >= 3.8)
-```
-
-**If Python is not installed:**
-- **macOS:** Download the official installer from [python.org/downloads](https://www.python.org/downloads/) or via Homebrew: `brew install python`.
-- **Windows:** Download from [python.org/downloads](https://www.python.org/downloads/). *(Important: Be sure to check the box "Add Python to PATH" on the first screen)*.
-- **Ubuntu/Linux:** Run:
-  ```bash
-  sudo apt update && sudo apt install -y python3 python3-pip
-  ```
-
----
-
-### Step 2.4: Check or Install Node.js (Version 18 or higher)
-
-Node.js is required by the CodeGraph indexer.
-
-**Check command:**
-```bash
-node --version && npm --version
-```
-*Expected output:*
-```text
-v20.18.0
-10.8.2
-```
-
-**If Node.js is not installed:**
-- **macOS / Windows:** Download and install the LTS version from [nodejs.org](https://nodejs.org/).
-- **Ubuntu/Linux:** Run:
-  ```bash
-  curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
-  sudo apt install -y nodejs
-  ```
-
----
-
-## 3. Installing UCCIF for Your Tool
-
-Choose the section corresponding to the AI tool you use:
-
-```
-+-------------------------------------------------------------------+
-|  Which tool are you using?                                        |
-|  - Claude Code: See Section 3.1                                   |
-|  - Antigravity CLI (agy command): See Section 3.2                 |
-|  - Antigravity IDE: See Section 3.3                               |
-|  - Gemini CLI (Enterprise accounts only): See Section 3.4         |
-+-------------------------------------------------------------------+
-```
-
----
-
-### 3.1. For Claude Code
-
-#### 1. Installation Commands
-Launch Claude Code in your terminal:
-```bash
-claude
-```
-Inside the Claude Code chat interface, run the following two commands:
 ```text
 /plugin marketplace add phongng255/uccif
 /plugin install uccif@uccif
 ```
 
-#### 2. Verify Installation
-Run:
-```text
-/plugin list
+Restart Claude Code, then check from a terminal:
+
+```bash
+claude plugin list
 ```
-*Expected output:* You should see `uccif` listed with status `enabled`.
 
-#### 3. First Session in a Project
-- Open your project directory with `claude`.
-- Ask any question, for example: `"What does this project do?"`.
-- Claude will detect that CodeGraph is not yet installed and ask you once:
-  > *"CodeGraph is NOT installed. Install it now? (yes/no)"*
-- Simply answer: **`yes`**. Claude Code will install CodeGraph, index the repo, and generate project skills. Restart Claude Code once to finalize the MCP tool integration.
+The list must include `uccif`. Then go to section 3.5.
 
----
+### 3.2. Antigravity CLI
 
-### 3.2. For Antigravity CLI (`agy`)
-
-> [!NOTE]
-> Google deprecated free Gemini CLI access on June 18, 2026, replacing it with **Antigravity CLI** (`agy`). This is the standard tool for individual and non-enterprise users.
-
-#### 1. Installation Command
-In your terminal, run:
 ```bash
 agy plugin install https://github.com/phongng255/uccif/tree/main/plugins/uccif-antigravity
 ```
-*Or if you cloned the repository locally:*
-```bash
-agy plugin install /path/to/uccif/plugins/uccif-antigravity
-```
 
-#### 2. Verify Installation
-Run:
+Use exactly this URL form. A bare repo URL, `#branch` or `--ref` installs the Claude plugin instead, and Antigravity skips its hooks.
+
+Check:
+
 ```bash
 agy plugin list
 ```
-*Expected output:*
+
 ```text
 Installed plugins:
 - uccif (enabled, 1.1.0)
     Source:     antigravity
-    Components: 3 skills, 1 MCP server, 1 hook
+    Components: 3 skills, 1 rule, 1 MCP server, 1 hook
 ```
 
-#### 3. First Experience
-Open any project folder and start `agy`:
-```bash
-agy
-```
-UCCIF activates immediately: core guidelines are loaded, project structure is indexed, and you're ready to code.
+### 3.3. Antigravity IDE
 
----
+The IDE has no hooks, so you run this by hand for each project. The commands below assume you installed the plugin in section 3.2. Otherwise use `plugins/uccif/bin/uccif` from a clone of this repository.
 
-### 3.3. For Antigravity IDE
-
-Antigravity IDE reads workspace customizations from the project's `.agents/` folder.
-
-#### 1. Setup in a Project
-In your terminal, navigate to your project folder and run:
 ```bash
 cd /path/to/your/project
-python3 /path/to/uccif/plugins/uccif/bin/uccif setup antigravity
 ```
-*(On Windows, replace `python3` with `python`)*.
 
-*Expected output:*
+```bash
+~/.gemini/config/plugins/uccif/core/bin/uccif setup antigravity
+```
+
+Do not run this file with `python3 .../bin/uccif`: it is a shell script, and that fails with `SyntaxError`.
+
+The output starts with the line below. `N` is the number of files written, and it can differ on later runs:
+
 ```text
-uccif: configured .agents/ for Antigravity IDE (rules, skills, mcp_config.json)
+Wrote N files under .agents/ for the Antigravity IDE.
 ```
 
-#### 2. Verify Installation
-Check the created files in `.agents/`:
-- `.agents/rules/uccif.md`: Project rules.
-- `.agents/mcp_config.json`: CodeGraph MCP configuration.
+This writes only `.agents/rules/uccif.md`, `.agents/mcp_config.json` and the 3 skills `codegraph`, `init` and `resume`. For the index and project skills, also run:
 
-Open the project in Antigravity IDE, and the IDE automatically activates all skills and rules.
+```bash
+codegraph init --yes
+```
 
----
+```bash
+~/.gemini/config/plugins/uccif/core/bin/uccif skills generate
+```
 
-### 3.4. For Gemini CLI (Gemini Code Assist Enterprise)
+Skills do not refresh by themselves in this mode. When the project's structure changes a lot, run `skills generate` again.
 
-> [!IMPORTANT]
-> This applies only to paid **Gemini Code Assist Enterprise** subscriptions. Free personal Google accounts cannot authenticate with Gemini CLI.
+If you use both the `agy` plugin and `.agents/mcp_config.json`, CodeGraph's tools may appear twice. In that case keep only one declaration.
 
-#### 1. Installation Command
-In your terminal, run:
+### 3.4. Gemini CLI (paid accounts only)
+
 ```bash
 gemini extensions install https://github.com/phongng255/uccif.git
 ```
 
-#### 2. Verify Installation
 ```bash
 gemini extensions list
 ```
-You should see `uccif` listed in the installed extensions.
 
----
+### 3.5. First time in a project
 
-## 4. Daily Usage
+1. Open your AI tool in the project folder and ask anything.
+2. If CodeGraph is missing, the AI asks once whether to install it. The wording varies, because the AI writes the question itself.
+3. If you say **yes**, the AI installs the CLI, indexes the project and generates skills. Then restart the tool once to load the `codegraph_explore` tool.
+4. If you say **no**, the AI searches with Grep and does not ask again in that project.
 
-Once installed, **you do not need to memorize any technical commands**. Just talk naturally to your AI.
+Once CodeGraph is on the machine, projects you open later are indexed and get their skills in the background.
 
-### Example prompts in natural language:
-- *"Explain how the user authentication flow works in this project."*
-- *"Where is the calculateTotal function defined?"*
-- *"I want to add email notifications. Which files do I need to touch?"*
-- *"Run the test suite and verify our changes didn't break anything."*
+To check, ask the AI: *"run uccif doctor"*. `OK` is fine, `WARN` is worth fixing, and `INFO` is for reference.
 
-### What Does the Token Line (🔢) Mean?
-After each AI response in Claude Code, you will see a status line:
+## 4. Daily use
+
+Talk normally. You do not need to remember any `uccif` command:
+
+| You want to | Just say |
+|---|---|
+| Understand a flow | "How does login work?" |
+| Find code | "Where is the total price calculated?" |
+| See what a change touches | "What breaks if I change this component's props?" |
+| Fix a bug | "Checkout returns a 500, please fix it" |
+| Resume work | "Continue yesterday's work" or "what was I doing?" |
+| Check the hooks | "Did the hooks run today?" |
+| Make a tiny edit without a task | Add `#quick` to the prompt (Claude Code, Gemini CLI) |
+
+### Reading the token line
+
 ```text
-🔢 2.4k tok (+120 cache 90%) · turn 3 · 💡 /clear recommended (task saved)
+🔢 Turn: in 2.4k (cache 2.1k) · out 320 · Session 48k · Ctx 35k (18%)
 ```
-- **Meaning:** Shows exact token consumption for the turn and the prompt caching percentage.
-- **The `/clear` recommendation:** When conversations get long, UCCIF suggests `/clear`. You can safely clear because active tasks and decisions are already stored on disk.
 
-### Which Files to Commit to Git?
+| Part | Meaning |
+|---|---|
+| `Turn: in ... (cache ...)` | Input tokens this turn, and how many of them were read from cache |
+| `out` | Tokens the AI produced this turn |
+| `Session` | Total tokens for the whole session |
+| `Ctx` | Context in use, and its share of the limit when known |
 
-| File / Folder | Commit? | Purpose |
-| :--- | :---: | :--- |
-| `AGENTS.md` | **YES** | Shared AI guidelines for the repo. |
-| `.claude/skills/` or `.agents/skills/` | **YES** | Pre-built code map skills for team AI use. |
-| `.claude/uccif/summary.md` | **YES** | High-level project summary and conventions. |
-| `.claude/uccif/.local/` | **NO** | Local session tasks (auto-ignored by git). |
-| `.codegraph/` | **NO** | Local SQLite index database (auto-ignored). |
+A hint is sometimes added at the end:
 
----
+| Hint | When | What to do |
+|---|---|---|
+| `💡 /clear recommended (task saved)` | Context at 80k or more, no open task | Type `/clear` |
+| `💡 checkpoint, then /clear` | Context at 150k or more, task open | Ask the AI to save progress, then `/clear` |
+| `💡 long session` | Session total at 3 million tokens or more | Consider a new session |
 
-## 5. Updating to New Versions
+After `/clear`, the AI recovers what was saved in the task: its title, edited files, decisions and open issues. The chat itself is not kept, so ask the AI to record important decisions.
 
-When new UCCIF updates are released:
+## 5. Options and extensions
 
-### Claude Code:
-Inside Claude Code:
-```text
-/plugin marketplace update uccif
-/plugin update uccif@uccif
+Change options in Claude Code's `/config`. For Gemini CLI, use the extension's settings.
+
+| Option | Default | Effect |
+|---|---|---|
+| `reply_language` | `vi` | The language the AI replies in |
+| `token_report` | on | Shows the token line |
+| `auto_setup` | on | Indexes and generates skills automatically when CodeGraph is present |
+
+To add your own rules, create these files. UCCIF only reads them. At most 15 non-empty lines of each file are loaded.
+
+| Scope | File |
+|---|---|
+| One project | `<project>/.claude/uccif/rules.md` |
+| All projects | `~/.claude/uccif/rules.md` |
+
+To add notes to a generated skill, write **inside** its `<!-- uccif:notes -->` block. Those notes survive every regeneration. If you edit outside the block, UCCIF skips that file until you use `--force`, which overwrites your edits outside the block.
+
+## 6. What to commit
+
+| File or folder | Solo | Team | Notes |
+|---|---|---|---|
+| `.codegraph/` | No | No | Per-machine index, kept out of git automatically |
+| `.claude/uccif/.local/` | No | No | Per-machine tasks and state |
+| `.agents/rules/uccif.md` | No | No | Holds your machine's absolute path |
+| `.claude/uccif/summary.md`, `rules.md` | Optional | Yes | The project's purpose and conventions |
+| `<project>-*` skills | Optional | Yes | Can be regenerated from the index |
+| `AGENTS.md` | Optional | Yes | If it has a UCCIF block, the block points to `.claude/uccif/summary.md`, so commit both together |
+
+Working alone, you can add `.claude/` and `.agents/` to `.gitignore`. If `.claude/` holds other files you want to share, ignore only the parts you need to.
+
+## 7. Update
+
+**Claude Code**, from a terminal:
+
+```bash
+claude plugin marketplace update uccif
 ```
-*Restart Claude Code after updating.*
 
-### Antigravity CLI:
-Re-run the install command:
+```bash
+claude plugin update uccif@uccif
+```
+
+Then **restart Claude Code**: the new version only applies after a restart. "Already up to date" means there is no newer version. The old version stays in the plugin cache for a while. That is normal, and it is no longer used.
+
+A project's skills only refresh the next time you open the tool in that project.
+
+**Antigravity CLI:**
+
+```bash
+agy plugin uninstall uccif
+```
+
 ```bash
 agy plugin install https://github.com/phongng255/uccif/tree/main/plugins/uccif-antigravity
 ```
 
-### Antigravity IDE:
-Navigate to your project and re-run setup:
-```bash
-python3 /path/to/uccif/plugins/uccif/bin/uccif setup antigravity
-```
+**Antigravity IDE:** run `uccif setup antigravity` again in the project. Files you edited are kept, and the command reports what it skipped.
 
----
+## 8. Uninstall
 
-## 6. Complete Uninstallation
+Remove it from the tool:
 
-To cleanly remove UCCIF without affecting your code:
+| Tool | Command |
+|---|---|
+| Claude Code | `claude plugin uninstall uccif@uccif` |
+| Antigravity CLI | `agy plugin uninstall uccif` |
+| Antigravity IDE | `uccif setup antigravity --remove`, run in the project and **before** removing the plugin. It deletes only files it wrote that you have not edited |
+| Gemini CLI | `gemini extensions uninstall uccif` |
 
-### Step 6.1: Uninstall from your tool
-- **Claude Code:** Run `/plugin uninstall uccif@uccif` in chat.
-- **Antigravity CLI:** Run in terminal:
-  ```bash
-  agy plugin uninstall uccif
-  ```
-- **Antigravity IDE:** Run in your project directory:
-  ```bash
-  python3 /path/to/uccif/plugins/uccif/bin/uccif setup antigravity --remove
-  ```
-- **Gemini CLI:** Run:
-  ```bash
-  gemini extensions uninstall uccif
-  ```
+Clean up the project if you want to. Look before deleting:
 
-### Step 6.2: Uninstall CodeGraph (optional)
+- `.codegraph/`: safe to delete.
+- `.claude/uccif/`: holds `summary.md` and `rules.md`, so keep it if you still need them.
+- `.claude/skills/<project>-*` and `.agents/skills/<project>-*`: delete only the generated skills. Do not delete the whole `skills/` folder, which may hold your own skills.
+- The `<!-- UCCIF:BEGIN -->` to `<!-- UCCIF:END -->` block in `AGENTS.md`, and the `@AGENTS.md` line in `CLAUDE.md` if you no longer use it.
+
+Remove CodeGraph if no project needs it:
+
 ```bash
 npm uninstall -g @colbymchenry/codegraph
 ```
 
-### Step 6.3: Delete UCCIF project files
-Remove any generated directories:
-- `.claude/uccif/`
-- `.codegraph/`
-- `.agents/skills/` (the `<project>-map`, `-mod-*`, `-bugfix` skills)
-- If you wish to keep your project notes, preserve `.claude/uccif/summary.md`.
+## 9. Troubleshooting
 
----
+The first step is always to ask the AI: *"run uccif doctor"*.
 
-## 7. Troubleshooting & Common Issues
+| Symptom | Cause | Fix |
+|---|---|---|
+| `SyntaxError` from `python3 .../bin/uccif` | `bin/uccif` is a shell script | Run the file directly, without `python3` |
+| `python3: command not found` | Python is missing or not on PATH | Install it from [python.org](https://www.python.org/downloads/). On Windows, tick "Add Python to PATH" |
+| Old behaviour after an update | The tool has not been restarted | Restart it. If that does not help, uninstall and reinstall the plugin |
+| `.claude/skills` and `.agents/skills` have different counts | One side has skills from an older version, or that tool has not been opened since the update | Open that tool in the project so its skills regenerate |
+| No token line | You use Antigravity, or `token_report` is off | Antigravity does not support it. In Claude Code, turn it on in `/config` |
+| No `codegraph_explore` tool | No restart since installing, or the CLI is missing | Restart, then ask the AI to run `uccif codegraph` |
+| CodeGraph's tools appear twice | The server is declared in two places | Keep one. Do not also run `codegraph install --target=claude` |
+| No automatic tasks in Antigravity | You use the IDE, or the plugin came from the wrong URL | The IDE has no hooks. For the CLI, reinstall with the URL in section 3.2 |
+| `doctor` reports `hook errors` | A hook failed, possibly only once | Ask the AI to run `uccif log hooks --only-errors`. Investigate only if it repeats |
+| Cannot log in to Gemini CLI | The account is unpaid | Use Antigravity CLI |
 
-| Symptom | Cause | Solution |
-| :--- | :--- | :--- |
-| `python3: command not found` or `python not found` | Python is missing or not in system PATH. | Install Python from python.org. On Windows, check **"Add Python to PATH"**. |
-| `Error: install target must be a directory` with `agy plugin install` | Provided URL was malformed or incomplete. | Use the exact tree URL: `https://github.com/phongng255/uccif/tree/main/plugins/uccif-antigravity` or local path. |
-| No token line after replies | Using Antigravity or token reporting disabled. | Antigravity hooks do not support trailing system messages. In Claude Code, run `/config` and enable `token_report`. |
-| Gemini CLI login fails | Using an unpaid personal Google account. | Free Gemini CLI access ended June 18, 2026. Use **Antigravity CLI** (`agy`) instead. |
-| `ModuleNotFoundError: No module named 'pytest'` | Python environment lacks test dependencies. | Run `python3 -m pip install pytest` or activate a virtualenv. |
+## 10. FAQ
 
----
+**Does UCCIF send my code anywhere?**
+UCCIF itself has no server, and CodeGraph runs with telemetry off. Indexing and task memory stay on your machine. The AI tool you use still sends the code it reads to its provider, under that provider's policy.
 
-## 8. Frequently Asked Questions (FAQ)
+**Does UCCIF change my code by itself?**
+No. UCCIF writes only its own files: the index, skills, notes and task state. Code is changed by the AI, at your request and under your tool's permission system.
 
-**Q: Does UCCIF send my source code to any external servers?**  
-*A:* **Never.** All indexing and task memory execute 100% locally on your machine. UCCIF does not host external servers or transmit telemetry.
+**How many tokens does UCCIF save?**
+It depends on the project and how you work, so this guide gives no general figure. The token line shows your real numbers.
 
-**Q: Will UCCIF modify or delete my codebase without permission?**  
-*A:* **No.** Code changes are made exclusively by the AI assistant under your interactive supervision and approval. UCCIF only manages its own helper docs and indexes.
+**What if teammates do not install UCCIF?**
+Nothing breaks. `AGENTS.md` and the skills are plain Markdown files.
 
-**Q: If teammates do not have UCCIF installed, will this break their workflow?**  
-*A:* **Not at all.** The generated `AGENTS.md` and skill files are plain standard Markdown files. Any developer or tool can read them without UCCIF installed.
+**Should I generate more skills?**
+Usually not: every skill costs context in every session, and generated skills only repeat what the index can answer. If you have knowledge the code does not show, put it in a notes block or write your own skill.

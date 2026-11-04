@@ -1,7 +1,9 @@
 # UCCIF — Universal Claude Code Intelligence Framework
 
-A Claude Code plugin marketplace. Install the core plugin `uccif` once; from then on, in
-**any** repository, with nothing to run by hand:
+A plugin for AI coding tools: Claude Code, Antigravity (CLI and IDE) and Gemini CLI. Support differs
+per tool; see the [comparison table](docs/GUIDE.md#2-what-each-tool-supports). This page describes
+Claude Code, the fullest case. Install the core plugin `uccif` once; from then on, in **any**
+repository, with nothing to run by hand:
 
 - **CodeGraph** ([@colbymchenry/codegraph](https://github.com/colbymchenry/codegraph)) as the
   code index: the `uccif:codegraph` skill installs the CLI and indexes the project
@@ -15,16 +17,15 @@ A Claude Code plugin marketplace. Install the core plugin `uccif` once; from the
 - **project skills** generated from the graph (`<project>-map`, `-bugfix`, up to 5 `-mod-*`): the
   code map, one source of truth. `/uccif:init` is optional: it only adds what the graph cannot
   know (purpose, conventions, external services) to `.claude/uccif/summary.md` and a ≤ 15-line
-  block at the end of `CLAUDE.md`;
+  block in `AGENTS.md`, which `CLAUDE.md` imports with `@AGENTS.md`;
 - a **real token line** after each reply, read from the transcript — never estimated;
 - read-only **agents** for impact analysis, change review and module purpose;
 - **logs** of every hook run and session (`uccif log hooks|sessions`).
 
 The plugin **never blocks** a tool call or a stop: every hook exits 0.
 
-> 📖 **User Guides / Hướng dẫn sử dụng:**
-> - [Hướng dẫn chi tiết từng bước cho người mới (Tiếng Việt)](docs/HUONG-DAN.md)
-> - [Complete step-by-step beginner guide (English)](docs/GUIDE.md)
+> 📖 **User guides:** [Tiếng Việt](docs/HUONG-DAN.md) · [English](docs/GUIDE.md). They cover install,
+> daily use, the token line, what to commit, updating, uninstalling and troubleshooting.
 
 ## Install
 
@@ -59,9 +60,10 @@ Antigravity IDE, in a project (this writes `.agents/`, which the IDE reads per w
 <path to>/plugins/uccif/bin/uccif setup antigravity
 ```
 
-`--remove` deletes only the files it wrote. The rule file holds this machine's path to `uccif`, so
-do not commit it. There are no hooks in this mode: rules, skills and CodeGraph only, no automatic
-task memory.
+Run `bin/uccif` directly: it is a shell script, not a Python file. `--remove` deletes only the files
+it wrote. The rule file holds this machine's path to `uccif`, so do not commit it. There are no hooks
+in this mode, so no automatic task memory and no automatic indexing: run `codegraph init --yes` and
+`uccif skills generate` yourself to get the project skills.
 
 Antigravity shows no token line and has no `#quick`: its hooks do not allow them.
 
@@ -175,7 +177,8 @@ machine, opening any project indexes it in the background (`codegraph init --yes
 They are rewritten only when the project's structure changes, and only files UCCIF wrote and
 nobody edited (a sha marker tells); text inside the `<!-- uccif:notes -->` block survives every
 rewrite, a file without the marker is never touched. By hand: `uccif skills generate [--force]
-[--dry-run]`, `uccif skills list`. Commit them to share with your team.
+[--dry-run]`, `uccif skills list`. Commit them to share with your team. On Antigravity and Gemini CLI
+they live in `.agents/skills/` instead.
 
 Do not use `npx codegraph`: the unscoped npm package `codegraph` is an unrelated project with no
 CLI. The real one is `@colbymchenry/codegraph` (`npx -y @colbymchenry/codegraph` runs its installer).
