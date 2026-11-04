@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased — one core for Claude Code, Gemini CLI and Antigravity (stage 1)
+
+- Host adapter (`uccif_lib/hosts.py`): `uccif hook --host claude|gemini|antigravity <event>`.
+  It translates event names (Gemini SessionStart, BeforeAgent, BeforeTool, AfterTool, AfterAgent,
+  PreCompress, SessionEnd), tool names (run_shell_command → Bash, read_file → Read,
+  replace / write_file → Edit / Write, grep_search → Grep, glob → Glob, mcp_<server>_<tool> →
+  mcp__<server>__<tool>) and the output: Gemini takes additionalContext only on SessionStart,
+  BeforeAgent and AfterTool. A failed Gemini tool (AfterTool with an error) runs the failure handler.
+  The hook logic stays in hooks.py. Without `--host`, everything works as in 1.1.
+- The UCCIF block now lives in AGENTS.md; CLAUDE.md imports it with one `@AGENTS.md` line.
+  `uccif agents-md write` (`claude-md write` is still an alias): it creates AGENTS.md or appends
+  the block to it, creates CLAUDE.md as `@AGENTS.md` or appends that line once, moves a 1.1 block
+  out of CLAUDE.md, and leaves a CLAUDE.md symlink in place. The user's own text is never changed.
+- Generated project skills go to the skill dir of each host the project uses: `.claude/skills/`
+  (Claude Code), `.agents/skills/` (Gemini CLI workspace alias, Antigravity). A project counts as
+  using a host after that host ran a session there (`.claude/uccif/.local/hosts.json`), or for
+  Antigravity once `.agents/rules/uccif.md` exists. A project with nothing recorded counts as
+  Claude Code only, as in 1.1.
+- Project data (task memory, summary, drift, logs) is where 1.1 kept it, so no migration is needed.
+- `tests/measure_context.py`: the context UCCIF injects into Claude, in exact characters.
+
 ## 1.1.0 — understands the project by itself, smaller overhead
 
 **Understanding the source without commands**

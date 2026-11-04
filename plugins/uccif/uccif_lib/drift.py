@@ -85,7 +85,7 @@ def diff(old, new):
     other = [m for m in changed if m not in ("package.json", "requirements.txt") or not (dadd or drem)]
     if other:
         items.append(("build/config files changed: %s" % ", ".join(other[:6]),
-                      "CLAUDE.md block commands (`uccif claude-md write --replace`) and summary.md if conventions changed"))
+                      "AGENTS.md block commands (`uccif agents-md write --replace`) and summary.md if conventions changed"))
     return items
 
 

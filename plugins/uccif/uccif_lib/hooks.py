@@ -19,7 +19,7 @@ import sys
 import time
 from pathlib import Path
 
-from uccif_lib import codegraph, detect, drift, log, skillgen, task, usage
+from uccif_lib import codegraph, detect, drift, hosts, log, skillgen, task, usage
 from uccif_lib.paths import CORE_MARKER, data_root, read_json, resolve_project, write_json
 from uccif_lib.rules import core_rules, user_rules
 
@@ -125,6 +125,7 @@ def on_session_start(data, project):
     sid = data.get("session_id")
     opts = options()
 
+    hosts.record(project, data.get("_host") or "claude")
     task.migrate_from_data_dir(project)  # 3.0.0-dev.1..3 kept tasks in the plugin data dir
     prev = log.last_session_unclosed(project)
     if prev and prev != sid:
@@ -273,7 +274,7 @@ def on_post_tool_use(data, project):
     ti = data.get("tool_input") or {}
     path = ti.get("file_path") or ti.get("notebook_path")
     rel = _rel(project, path) if path else None
-    if not rel or rel.startswith(".claude/"):
+    if not rel or rel.startswith((".claude/", ".agents/", ".gemini/")):
         return None, {"decision": "skip", "target": path}
     opened = closed = None
     if not _is_quick(project) and not _edited_path(project).exists():
@@ -340,6 +341,8 @@ def on_stop(data, project):
                   cache_read=s["turn"]["cache_read_input_tokens"], ctx=s["ctx"], model=s["model"])
     if not options()["token_report"]:
         return None, {"rule": "token-off"}
+    if not s and data.get("_host", "claude") != "claude":
+        return None, {"rule": "token-n/a"}  # transcript format not read for this host yet
     line = "🔢 " + usage.token_line(s)
     if s:
         total = s["session"]["in"] + s["session"]["output_tokens"]
@@ -376,7 +379,7 @@ def on_session_end(data, project):
 
 def on_instructions_loaded(data, project):
     path = data.get("file_path") or ""
-    if data.get("memory_type") != "Project" or _rel(project, path) != "CLAUDE.md":
+    if data.get("memory_type") != "Project" or _rel(project, path) not in ("CLAUDE.md", "AGENTS.md"):
         return None, {"decision": "skip"}
     try:
         has_block = "<!-- UCCIF:BEGIN -->" in Path(path).read_text(encoding="utf-8")
@@ -401,8 +404,9 @@ HANDLERS = {
 }
 
 
-def run(event, stdin=None, stdout=None):
-    """Entry for `uccif hook <event>`. Always returns 0."""
+def run(event, stdin=None, stdout=None, host="claude"):
+    """Entry for `uccif hook [--host H] <event>`. Always returns 0. `event` is the host's own
+    name (BeforeTool) or the internal one (pre-tool-use); hosts.py translates both ways."""
     stdin = stdin or sys.stdin
     stdout = stdout or sys.stdout
     t0 = time.time()
@@ -410,11 +414,15 @@ def run(event, stdin=None, stdout=None):
     try:
         raw = stdin.read()
         data = json.loads(raw) if raw.strip() else {}
+        hosts.check(host)
+        event, data = hosts.normalize(host, event, data)
+        data["_host"] = host
         handler = HANDLERS.get(event)
         if handler is None:
             raise ValueError("unknown hook event: %s" % event)
         project = resolve_project(data.get("cwd"))
         out, fields = handler(data, project)
+        out = hosts.format_output(host, event, out)
         fields.setdefault("decision", "nudge" if out and event != "stop" else "allow")
         fields.update(session=data.get("session_id"), tool=data.get("tool_name"),
                       task=(task.load_current(project) or {}).get("id"))
@@ -423,8 +431,11 @@ def run(event, stdin=None, stdout=None):
     except Exception as e:  # never break the session
         fields = {"decision": "error", "error": "%s: %s" % (type(e).__name__, str(e)[:200])}
         out = None
+        event = hosts.event_name(host, event) if host in hosts.HOSTS else event
     ms = int((time.time() - t0) * 1000)
     fields.update(event=event, ms=ms)
+    if host != "claude":
+        fields["host"] = host
     if ms > SLOW_MS.get(event, 1000):
         fields["slow"] = True
     quiet = event == "pre-tool-use" and fields.get("decision") == "skip" and not fields.get("slow")

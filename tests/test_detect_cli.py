@@ -141,14 +141,15 @@ def test_claude_md_block_is_composed_small_and_appended_last(project, repo, monk
     md.write_text("# Mine\n" + "my own rule\n" * 400)  # a big existing file: never touched
     before = md.read_text()
     assert _claude_md(monkeypatch, project, "A Vue shop.\nTalks to Stripe.") == 0
-    text = md.read_text()
-    assert text.startswith(before.rstrip("\n"))
+    assert md.read_text() == before.rstrip("\n") + "\n\n@AGENTS.md\n"  # own text kept, import added
+    text = (repo / "AGENTS.md").read_text()
     block = text[text.index("<!-- UCCIF:BEGIN -->"):]
     assert len(block.splitlines()) <= 15 and block.rstrip().endswith("<!-- UCCIF:END -->")
     assert "A Vue shop." in block and "build `npm run build`" in block and "test `npm test`" in block
     assert _claude_md(monkeypatch, project, "x") == 3  # existing block: refuses without --replace
     assert _claude_md(monkeypatch, project, "Changed.", "--replace") == 0
-    assert md.read_text().startswith(before.rstrip("\n")) and "Changed." in md.read_text()
+    assert md.read_text().startswith(before.rstrip("\n")) and "Changed." in (repo / "AGENTS.md").read_text()
+    assert md.read_text().count("@AGENTS.md") == 1
 
 
 def test_claude_md_block_over_15_lines_is_refused(project, repo, monkeypatch):
@@ -214,6 +215,6 @@ def test_package_manager_detection(repo, pkg, lock, pm):
 def test_claude_md_verified_flag_and_no_labels_on_other_commands(project, repo, monkeypatch):
     make_web_app(repo)
     assert _claude_md(monkeypatch, project, "A shop.", "--verified", "test") == 0
-    text = (repo / "CLAUDE.md").read_text()
+    text = (repo / "AGENTS.md").read_text()
     assert "test `npm test`" in text and "test `npm test` (unverified)" not in text
     assert "build `npm run build`" in text and "(unverified)" not in text

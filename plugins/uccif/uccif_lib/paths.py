@@ -101,8 +101,9 @@ def _git(args, cwd, timeout=5):
 
 
 def project_root(cwd=None):
-    """CLAUDE_PROJECT_DIR, else the git toplevel of cwd, else cwd itself."""
-    env = os.environ.get("CLAUDE_PROJECT_DIR")
+    """CLAUDE_PROJECT_DIR (Gemini CLI sets it too, as an alias), GEMINI_PROJECT_DIR, else the
+    git toplevel of cwd, else cwd itself."""
+    env = os.environ.get("CLAUDE_PROJECT_DIR") or os.environ.get("GEMINI_PROJECT_DIR")
     if env and os.path.isdir(env):
         return Path(os.path.realpath(env))
     cwd = Path(cwd or os.getcwd())

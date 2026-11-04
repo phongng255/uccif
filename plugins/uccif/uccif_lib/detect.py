@@ -99,7 +99,7 @@ def detect(project):
         "node": _package_json(root) if (root / "package.json").exists() else None,
         "docs": {n: (project.docs_dir / n).exists()
                  for n in ("summary.md", "decisions.md", "known-issues.md")},
-        "claude_md_block": _has_block(root / "CLAUDE.md"),
+        "claude_md_block": _has_block(root / "AGENTS.md") or _has_block(root / "CLAUDE.md"),
         "uccif_v2": _v2_traces(root),
         "codegraph": dict(codegraph.state(project), gitignored=codegraph.gitignored(project)),
         "lsp": _lsp_status(langs),
@@ -229,7 +229,7 @@ def doctor(project):
           "CodeGraph installer output duplicates the plugin's MCP server/guidance (costs tokens every "
           "session): %s. Remove with `codegraph uninstall --target=claude`" % "; ".join(dups))
     d = detect(project)
-    info("CLAUDE.md UCCIF block: %s; project summary.md: %s (both optional, written by uccif:init)"
+    info("AGENTS.md UCCIF block: %s; project summary.md: %s (both optional, written by uccif:init)"
          % ("present" if d["claude_md_block"] else "absent", "present" if d["docs"]["summary.md"] else "absent"))
     check(not d["uccif_v2"], "no UCCIF v2 leftovers", "UCCIF v2 still installed: %s" % ", ".join(d["uccif_v2"]))
     for lang, s in d["lsp"].items():

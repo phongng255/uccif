@@ -24,7 +24,7 @@ import sqlite3
 from collections import Counter, defaultdict
 from pathlib import Path, PurePosixPath
 
-from uccif_lib import __version__, codegraph, stack
+from uccif_lib import __version__, codegraph, hosts, stack
 from uccif_lib.paths import ensure_local, now_iso, read_json, write_json, write_text_atomic
 
 SKILLS_DIR = Path(".claude") / "skills"
@@ -394,15 +394,21 @@ def skills_root(project):
     return Path(project.root) / SKILLS_DIR
 
 
+def skills_roots(project, hosts_=None):
+    """Skill dirs of the hosts this project uses (.claude/skills, .agents/skills)."""
+    return hosts.skill_dirs(project, hosts_)
+
+
 def generated(project):
-    """Names of skill dirs that hold a UCCIF-generated SKILL.md."""
-    root = skills_root(project)
-    if not root.is_dir():
-        return []
-    return sorted(p.parent.name for p in root.glob("*/SKILL.md") if _existing(p)[0] in ("ours", "edited"))
+    """Names of skill dirs that hold a UCCIF-generated SKILL.md, in any host's skill dir."""
+    names = set()
+    for root in [skills_root(project)] + skills_roots(project):
+        if root.is_dir():
+            names.update(p.parent.name for p in root.glob("*/SKILL.md") if _existing(p)[0] in ("ours", "edited"))
+    return sorted(names)
 
 
-def generate(project, force=False, dry_run=False):
+def generate(project, force=False, dry_run=False, hosts_=None):
     """Returns {'written': [...], 'unchanged': [...], 'skipped': [(name, why)], 'removed': [...]}."""
     a = analyse(project)
     proj = Path(project.root).name
@@ -423,16 +429,28 @@ def generate(project, force=False, dry_run=False):
             "%s-bugfix" % slug: render_bugfix("%s-bugfix" % slug, proj, a, runners, cmds)}
     for m in mods:
         docs[mod_skills[m["dir"]]] = render_module(mod_skills[m["dir"]], proj, m, runners)
-    res = {"written": [], "unchanged": [], "skipped": [], "removed": []}
-    root = skills_root(project)
+    res = {"written": [], "unchanged": [], "skipped": [], "removed": [], "dirs": []}
+    roots = skills_roots(project, hosts_)
+    for i, root in enumerate(roots):
+        tag = "" if i == 0 else " (%s)" % root.relative_to(project.root).as_posix()
+        res["dirs"].append(root.relative_to(project.root).as_posix())
+        _write_root(root, docs, slug, force, dry_run, res, tag)
+    if not dry_run:
+        ensure_local(project)
+        write_json(project.local_dir / "skills.json", {"fingerprint": fingerprint(project), "updated": now_iso(),
+                                                      "skills": sorted(docs)})
+    return res
+
+
+def _write_root(root, docs, slug, force, dry_run, res, tag):
     for name, text in docs.items():
         path = root / name / "SKILL.md"
         state, notes = _existing(path)
         if state == "user":
-            res["skipped"].append((name, "written by you (no UCCIF marker)"))
+            res["skipped"].append((name + tag, "written by you (no UCCIF marker)"))
             continue
         if state == "edited" and not force:
-            res["skipped"].append((name, "edited outside the notes block (use --force to overwrite)"))
+            res["skipped"].append((name + tag, "edited outside the notes block (use --force to overwrite)"))
             continue
         new = _finish(text, notes)
         try:
@@ -440,11 +458,11 @@ def generate(project, force=False, dry_run=False):
         except OSError:
             old = None
         if old == new:
-            res["unchanged"].append(name)
+            res["unchanged"].append(name + tag)
             continue
         if not dry_run:
             write_text_atomic(path, new)
-        res["written"].append(name)
+        res["written"].append(name + tag)
     prefix = "%s-mod-" % slug
     if root.is_dir():
         for p in sorted(root.glob(prefix + "*/SKILL.md")):
@@ -453,18 +471,17 @@ def generate(project, force=False, dry_run=False):
             if name not in docs and state == "ours" and not notes.strip():
                 if not dry_run:
                     shutil.rmtree(str(p.parent), ignore_errors=True)
-                res["removed"].append(name)
-    if not dry_run:
-        ensure_local(project)
-        write_json(project.local_dir / "skills.json", {"fingerprint": fingerprint(project), "updated": now_iso(),
-                                                      "skills": sorted(docs)})
-    return res
+                res["removed"].append(name + tag)
 
 
 def fingerprint(project):
     from uccif_lib import drift
     fp = drift.fingerprint(project)
-    return hashlib.sha1(json.dumps([fp, __version__], sort_keys=True).encode("utf-8")).hexdigest()[:16]
+    key = [fp, __version__]
+    dirs = [d.relative_to(project.root).as_posix() for d in skills_roots(project)]
+    if dirs != [SKILLS_DIR.as_posix()]:  # a host added later gets its skills on the next upkeep
+        key.append(dirs)
+    return hashlib.sha1(json.dumps(key, sort_keys=True).encode("utf-8")).hexdigest()[:16]
 
 
 def auto(project):
@@ -487,5 +504,6 @@ def report(res):
         if res[key]:
             lines.append("%s: %s" % (label, ", ".join(res[key])))
     lines += ["skipped %s: %s" % s for s in res["skipped"]]
-    lines.append("Skills live in .claude/skills/ (commit them to share with your team).")
+    dirs = res.get("dirs") or [SKILLS_DIR.as_posix()]
+    lines.append("Skills live in %s (commit them to share with your team)." % ", ".join(d + "/" for d in dirs))
     return lines

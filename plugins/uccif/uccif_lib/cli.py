@@ -4,8 +4,9 @@ import argparse
 import json
 import os
 import sys
+from pathlib import Path
 
-from uccif_lib import SCHEMA_VERSION, __version__, codegraph, detect, drift, hooks, log, task, usage
+from uccif_lib import SCHEMA_VERSION, __version__, codegraph, detect, drift, hooks, hosts, log, task, usage
 from uccif_lib.paths import data_root_source, resolve_project
 
 
@@ -45,6 +46,8 @@ def build_parser():
     sg = sk.add_parser("generate", help="write/refresh .claude/skills/<project>-map, -bugfix, -mod-*")
     sg.add_argument("--force", action="store_true", help="also overwrite generated files you edited")
     sg.add_argument("--dry-run", action="store_true", help="show what would change, write nothing")
+    sg.add_argument("--host", action="append", choices=hosts.HOSTS,
+                    help="write for this host only (repeatable); default: the hosts this project uses")
     sk.add_parser("list", help="generated skills present in .claude/skills/")
 
     dr = sub.add_parser("drift", help="structural changes that make docs stale").add_subparsers(dest="action")
@@ -54,13 +57,16 @@ def build_parser():
 
     sub.add_parser("maintain", help="background upkeep: drift check")
 
-    cm = sub.add_parser("claude-md", help="CLAUDE.md UCCIF block").add_subparsers(dest="action")
-    cw = cm.add_parser("write", help="read the block from stdin: create CLAUDE.md, or append the block "
-                                     "when it has none; replace an existing block only with --replace")
-    cw.add_argument("--replace", action="store_true", help="overwrite the existing UCCIF block")
-    cw.add_argument("--verified", default="", metavar="PURPOSES",
-                    help="comma list of commands you ran successfully (e.g. test,build); the others "
-                         "are marked (unverified)")
+    for name in ("agents-md", "claude-md"):  # claude-md: the 1.1 name, kept as an alias
+        cm = sub.add_parser(name, help="AGENTS.md UCCIF block (CLAUDE.md imports it with @AGENTS.md)"
+                            ).add_subparsers(dest="action")
+        cw = cm.add_parser("write", help="read the block from stdin: create AGENTS.md, or append the block "
+                                         "when it has none; replace an existing block only with --replace. "
+                                         "CLAUDE.md gets an @AGENTS.md line; its own text is never touched")
+        cw.add_argument("--replace", action="store_true", help="overwrite the existing UCCIF block")
+        cw.add_argument("--verified", default="", metavar="PURPOSES",
+                        help="comma list of commands you ran successfully (e.g. test,build); the others "
+                             "are marked (unverified)")
 
     sub.add_parser("verify-tests", help="check once (list mode, 60 s timeout, nothing installed) that "
                                         "the test runner works; claude-md write marks the result")
@@ -69,7 +75,9 @@ def build_parser():
     sw.add_argument("--replace", action="store_true", help="overwrite an existing summary.md")
 
     h = sub.add_parser("hook", help="run a hook handler (reads hook JSON on stdin)")
-    h.add_argument("event")
+    h.add_argument("--host", default="claude", choices=hosts.HOSTS,
+                   help="which tool runs the hook (event/tool names and output are translated)")
+    h.add_argument("event", help="the host's event name (BeforeTool) or the internal one (pre-tool-use)")
 
     u = sub.add_parser("usage", help="real token usage from a transcript")
     u.add_argument("scope", choices=("turn", "session"))
@@ -168,26 +176,65 @@ def _claude_md_cmd(args):
         print("uccif: block has %d lines, max %d. Shorten it." % (len(body.splitlines()), MAX_BLOCK_LINES),
               file=sys.stderr)
         return 1
-    path = Path(proj.root) / "CLAUDE.md"
-    if path.is_symlink():  # e.g. CLAUDE.md -> AGENTS.md: edit the target, keep the link
-        path = Path(os.path.realpath(str(path)))
-    try:
-        old = path.read_text(encoding="utf-8")
-    except OSError:
-        old = None
+    root = Path(proj.root)
+    agents, claude = root / "AGENTS.md", root / "CLAUDE.md"
+    a_real = Path(os.path.realpath(str(agents)))  # a symlinked file: edit the target, keep the link
+    c_real = Path(os.path.realpath(str(claude)))
+    same = c_real == a_real  # CLAUDE.md -> AGENTS.md: one file, no import line needed
+    old = _read(a_real)
+    moved = None
+    if not same:
+        c_old = _read(c_real)
+        if c_old and BEGIN in c_old and END in c_old and (old is None or BEGIN not in old):
+            moved = c_old  # 1.1 kept the block in CLAUDE.md: it moves to AGENTS.md
     if old is None:
         new, what = body + "\n", "created"
     elif BEGIN in old and END in old:
         if not args.replace:
-            print("CLAUDE.md already has a UCCIF block: show the diff, ask, then rerun with --replace.")
+            print("AGENTS.md already has a UCCIF block: show the diff, ask, then rerun with --replace.")
             return 3
         i, j = old.index(BEGIN), old.index(END) + len(END)
         new, what = old[:i] + body + old[j:], "block replaced in"
     else:  # appended at the end: the user's own text above is never touched
         new, what = old.rstrip("\n") + ("\n\n" if old.strip() else "") + body + "\n", "block appended to"
-    write_text_atomic(path, new)
-    print("%s %s" % (what, path))
+    write_text_atomic(a_real, new)
+    print("%s %s" % (what, agents))
+    if not same:
+        note = _claude_pointer(c_real, moved)
+        if note:
+            print(note)
     return 0
+
+
+IMPORT_LINE = "@AGENTS.md"
+
+
+def _read(path):
+    try:
+        return Path(path).read_text(encoding="utf-8")
+    except OSError:
+        return None
+
+
+def _claude_pointer(path, moved=None):
+    """Make CLAUDE.md import AGENTS.md. A missing file is created with the import line only; an
+    existing one keeps every line of its own text and gets the line appended. `moved`: the 1.1
+    UCCIF block found in it, now in AGENTS.md, is replaced by the import line."""
+    from uccif_lib.paths import write_text_atomic
+    old = _read(path)
+    if old is None:
+        write_text_atomic(path, IMPORT_LINE + "\n")
+        return "created %s (%s)" % (path.name, IMPORT_LINE)
+    has = any(l.strip() == IMPORT_LINE for l in old.splitlines())
+    if moved is not None:
+        i, j = old.index(BEGIN), old.index(END) + len(END)
+        new = old[:i] + ("" if has else IMPORT_LINE) + old[j:]
+        write_text_atomic(path, new if new.strip() else IMPORT_LINE + "\n")
+        return "moved the UCCIF block from %s to AGENTS.md" % path.name
+    if has:
+        return None
+    write_text_atomic(path, old.rstrip("\n") + ("\n\n" if old.strip() else "") + IMPORT_LINE + "\n")
+    return "added %s to %s" % (IMPORT_LINE, path.name)
 
 
 MAX_SUMMARY_LINES = 20
@@ -239,7 +286,7 @@ def _skills_cmd(args):
         print("\n".join(names) if names else "No generated project skills yet (`uccif skills generate`).")
         return 0
     try:
-        res = skillgen.generate(proj, force=args.force, dry_run=args.dry_run)
+        res = skillgen.generate(proj, force=args.force, dry_run=args.dry_run, hosts_=args.host)
     except skillgen.NoIndex as e:
         print("Cannot generate skills: %s. Run the uccif:codegraph skill first." % e)
         return 1
@@ -278,7 +325,7 @@ def main(argv=None):
     parser = build_parser()
     args = parser.parse_args(argv)
     if args.cmd == "hook":
-        return hooks.run(args.event)  # never raises, always 0
+        return hooks.run(args.event, host=args.host)  # never raises, always 0
     try:
         if args.cmd == "version":
             print("uccif %s (schema %d)" % (__version__, SCHEMA_VERSION))
@@ -338,7 +385,7 @@ def main(argv=None):
             return 0  # never a reason to retry: the block shows (unverified)
         if args.cmd == "summary" and args.action:
             return _summary_cmd(args)
-        if args.cmd == "claude-md" and args.action:
+        if args.cmd in ("agents-md", "claude-md") and args.action:
             return _claude_md_cmd(args)
     except task.TaskError as e:
         print("uccif: %s" % e, file=sys.stderr)
