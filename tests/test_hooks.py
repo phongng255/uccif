@@ -190,6 +190,30 @@ def test_stale_task_is_closed_by_session_start(base, project):
     assert "Open task" not in ctx(out)
 
 
+VI_TASK = {"title": "sửa lỗi nút thanh toán không bấm được", "topic": []}
+
+
+@pytest.mark.parametrize("prompt", [
+    "sửa luôn cái nút đó", "sua luon cai nut do", "fix tiep loi do", "fix tiếp lỗi đó",
+    "thêm test nữa", "vậy còn màu nút", "nút thanh toán vẫn lỗi", "nut thanh toan van loi",
+    "ok", "tiếp đi", "kiểm tra lại giúp mình",
+])
+def test_vietnamese_continuation_keeps_the_task(prompt):
+    assert not task.is_new_topic(prompt, VI_TASK)
+
+
+@pytest.mark.parametrize("prompt", [
+    "giờ làm trang login", "gio lam trang login", "tiếp theo làm trang đăng ký tài khoản",
+    "thêm chức năng xuất báo cáo excel theo tháng", "them chuc nang xuat bao cao excel theo thang",
+])
+def test_vietnamese_new_work_switches(prompt):
+    assert task.is_new_topic(prompt, VI_TASK)
+
+
+def test_accents_do_not_matter():
+    assert task.topic_words("sửa lỗi đăng nhập") == task.topic_words("sua loi dang nhap")
+
+
 def test_new_topic_heuristic():
     t = {"title": "fix the crash when the cart is empty", "topic": []}
     assert not task.is_new_topic("also check the totals", t)  # continuation word

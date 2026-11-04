@@ -139,8 +139,16 @@ def _runners_in(root):
     return out
 
 
+LOCKFILES = (("pnpm-lock.yaml", "pnpm"), ("yarn.lock", "yarn"), ("bun.lockb", "bun"), ("bun.lock", "bun"),
+             ("package-lock.json", "npm"))
+
+
 def _pm(root):
-    for lock, pm in (("pnpm-lock.yaml", "pnpm"), ("yarn.lock", "yarn"), ("bun.lockb", "bun"), ("bun.lock", "bun")):
+    """package.json `packageManager` ("pnpm@9.1.0"), then the lockfile, then npm."""
+    declared = str(_npm(Path(root)).get("packageManager") or "").split("@")[0].strip().lower()
+    if re.match(r"^[a-z][a-z0-9-]*$", declared):  # any declared runner (pnpm, yarn, bun, nub ...)
+        return declared
+    for lock, pm in LOCKFILES:
         if (Path(root) / lock).exists():
             return pm
     return "npm"

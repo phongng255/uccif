@@ -188,3 +188,32 @@ def test_claude_md_symlink_is_kept(project, repo, monkeypatch):
     os.symlink("AGENTS.md", str(repo / "CLAUDE.md"))
     assert _claude_md(monkeypatch, project, "A lib.") == 0
     assert (repo / "CLAUDE.md").is_symlink() and "UCCIF:BEGIN" in (repo / "AGENTS.md").read_text()
+
+
+import pytest as _pytest
+
+
+@_pytest.mark.parametrize("pkg,lock,pm", [
+    ({"packageManager": "yarn@4.1.0"}, "pnpm-lock.yaml", "yarn"),  # the declaration wins over the lockfile
+    ({"packageManager": "nub@0.8.3"}, None, "nub"),
+    ({}, "pnpm-lock.yaml", "pnpm"),
+    ({}, "yarn.lock", "yarn"),
+    ({}, "bun.lockb", "bun"),
+    ({}, "package-lock.json", "npm"),
+    ({}, None, "npm"),
+])
+def test_package_manager_detection(repo, pkg, lock, pm):
+    from uccif_lib import stack
+    (repo / "package.json").write_text(json.dumps(dict(pkg, scripts={"test": "vitest", "build": "vite build"})))
+    if lock:
+        (repo / lock).write_text("")
+    cmds = dict(stack.commands(repo))
+    assert cmds["test"] == "%s test" % pm and cmds["build"] == "%s run build" % pm
+
+
+def test_claude_md_marks_unverified_commands(project, repo, monkeypatch):
+    make_web_app(repo)
+    assert _claude_md(monkeypatch, project, "A shop.", "--verified", "test") == 0
+    text = (repo / "CLAUDE.md").read_text()
+    assert "test `npm test`" in text and "test `npm test` (unverified)" not in text
+    assert "build `npm run build` (unverified)" in text

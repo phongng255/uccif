@@ -58,6 +58,9 @@ def build_parser():
     cw = cm.add_parser("write", help="read the block from stdin: create CLAUDE.md, or append the block "
                                      "when it has none; replace an existing block only with --replace")
     cw.add_argument("--replace", action="store_true", help="overwrite the existing UCCIF block")
+    cw.add_argument("--verified", default="", metavar="PURPOSES",
+                    help="comma list of commands you ran successfully (e.g. test,build); the others "
+                         "are marked (unverified)")
 
     sm = sub.add_parser("summary", help=".claude/uccif/summary.md").add_subparsers(dest="action")
     sw = sm.add_parser("write", help="read summary.md (<= 20 lines) from stdin and store the drift baseline")
@@ -122,7 +125,7 @@ MAX_BLOCK_LINES = 15
 CMD_ORDER = ("build", "test", "lint", "dev", "run", "start", "typecheck")
 
 
-def build_block(project, desc):
+def build_block(project, desc, verified=()):
     """The CLAUDE.md block, composed here so it stays small and has one source: 2-3 description
     lines from Claude, commands from the manifests, one pointer to the generated map skill."""
     from pathlib import Path
@@ -130,7 +133,8 @@ def build_block(project, desc):
     name = Path(project.root).name
     out = [BEGIN, "## %s" % name] + [l.strip() for l in desc.splitlines() if l.strip()][:3]
     cmds = dict(reversed(stack.commands(project.root)))
-    shown = ["%s `%s`" % (k, cmds[k]) for k in CMD_ORDER if k in cmds][:4]
+    shown = ["%s `%s`%s" % (k, cmds[k], "" if k in verified else " (unverified)")
+             for k in CMD_ORDER if k in cmds][:4]
     if shown:
         out.append("Commands: " + " · ".join(shown))
     maps = [n for n in skillgen.generated(project) if n.endswith("-map")]
@@ -153,7 +157,8 @@ def _claude_md_cmd(args):
     if BEGIN in body and END in body:  # a complete block: used as given
         body = body[body.index(BEGIN):body.index(END) + len(END)]
     else:  # 1-3 description lines: the command composes the rest
-        body = build_block(proj, body)
+        verified = {v.strip() for v in (args.verified or "").split(",") if v.strip()}
+        body = build_block(proj, body, verified)
     if len(body.splitlines()) > MAX_BLOCK_LINES:
         print("uccif: block has %d lines, max %d. Shorten it." % (len(body.splitlines()), MAX_BLOCK_LINES),
               file=sys.stderr)

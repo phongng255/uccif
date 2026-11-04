@@ -223,31 +223,51 @@ def auto_title(prompt):
     return (line[:77] + "...") if len(line) > 80 else (line or "Code change")
 
 
-STOP_WORDS = set("""the and for with this that from into then also please can you make add use not but are was
-code file files một những các cho của và với này khi thì được không có làm hãy cần như vào trong để
+# Matching runs on lowercased, accent-free words ("sửa lỗi" == "sua loi"). Action verbs and fillers
+# are not topic words; continuation words mean "the same work".
+STOP_WORDS = set("""
+the and for with this that from into then also please can you make add use not but are was
+fix fixed change update new now let lets code file files bug error issue work
+mot nhung cac cho cua va voi nay khi thi duoc khong co lam hay can nhu vao trong de la o
+sua them xem thu giup minh toi ban nhe di roi chut cai kia bi loi phan
 """.split())
-CONTINUE_RE = r"^\s*(tiếp|tiếp tục|continue|go on|also|again|still|now|vẫn|lại|thêm|nữa|ok|còn)\b"
+CONTINUE_WORDS = {"luon", "tiep", "nua", "vay", "do", "van", "lai", "con", "cung", "again", "still",
+                  "too", "also", "same", "continue", "it", "that", "those"}  # not "them": accent-free "thêm"
+SWITCH_WORDS = {"gio", "now", "next", "instead"}
 STALE_HOURS = 24
 
 
-def topic_words(text):
+def _words(text):
     import re
-    return {w for w in re.findall(r"\w+", (text or "").lower())
-            if len(w) >= 3 and not w.isdigit() and w not in STOP_WORDS}
+    import unicodedata
+    text = unicodedata.normalize("NFD", (text or "").lower().replace("đ", "d"))
+    text = "".join(c for c in text if unicodedata.category(c) != "Mn")
+    return re.findall(r"[a-z0-9_]+", text)
+
+
+def topic_words(text):
+    return {w for w in _words(text) if len(w) >= 2 and not w.isdigit()
+            and w not in STOP_WORDS and w not in CONTINUE_WORDS and w not in SWITCH_WORDS}
 
 
 def is_new_topic(prompt, task):
-    """True when the prompt clearly starts other work than `task`: at least 3 content words and
-    under 20% of them seen in the task's title or earlier prompts. Short or continuing prompts
-    ("tiếp", "also fix the test") always belong to the open task."""
-    import re
-    if re.match(CONTINUE_RE, (prompt or "").lower()):
+    """True only when the prompt clearly starts other work than `task`. Doubt -> same task: closing
+    a task by mistake costs more than keeping one open too long.
+    - any continuation word ("luôn", "tiếp", "nữa", "đó", "vậy", "also") -> same task
+      ("tiếp theo" = next item, a switch);
+    - >= 3 topic words, under 20% of them seen in the task's title / earlier prompts -> new;
+    - a switch word ("giờ", "now", "next") and >= 2 topic words, none seen -> new."""
+    words = _words(prompt)
+    text = " ".join(words)
+    switch = bool(SWITCH_WORDS & set(words)) or "tiep theo" in text
+    if not switch and CONTINUE_WORDS & set(words):
         return False
-    words = topic_words(prompt)
-    if len(words) < 3:
-        return False
+    content = topic_words(prompt)
     seen = set(task.get("topic") or []) | topic_words(task.get("title"))
-    return len(words & seen) / float(len(words)) < 0.2
+    hit = len(content & seen) / float(len(content)) if content else 1.0
+    if len(content) >= 3 and hit < 0.2:
+        return True
+    return switch and len(content) >= 2 and hit == 0
 
 
 def _new_auto(project, prompt):

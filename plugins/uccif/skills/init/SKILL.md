@@ -21,10 +21,15 @@ do not re-derive them. Budget: ≤ 10 tool calls. Run every command on its own (
    `[src: file]`. No modules, commands or layout, and nothing CLAUDE.md / AGENTS.md already
    says (Claude Code loads those anyway): point to them instead. Never use Write/Edit under `.claude/`.
    The command also stores the drift baseline.
-5. Pipe 2–3 description lines into `uccif claude-md write` (heredoc). It composes the ≤ 15-line
+5. Run the project's test command (from the map skill) once, in the background or with a
+   timeout; if a full run would take minutes, run the runner's list/collect mode instead
+   (`vitest list`, `jest --listTests`, `pytest --collect-only -q`, `go test -list . ./...`).
+   It counts as verified only if it worked.
+6. Pipe 2–3 description lines into `uccif claude-md write --verified <test[,build]>` (heredoc;
+   only commands you ran with success; the others are marked `(unverified)`). It composes the ≤ 15-line
    block (commands from manifests, pointer to the map skill) and appends it at the end of
    CLAUDE.md. Exit 3 = a block exists: show the change, ask, rerun with `--replace`.
-6. UCCIF v2 (`detect.uccif_v2` non-empty): list the hook lines calling `uccif.py` in
+7. UCCIF v2 (`detect.uccif_v2` non-empty): list the hook lines calling `uccif.py` in
    `.claude/settings*.json` for the user to remove. Delete nothing yourself.
 
 Reply in the user's language, ≤ 5 lines: files written, what the user may want to confirm.

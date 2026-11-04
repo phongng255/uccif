@@ -18,6 +18,9 @@
   from the manifests and one pointer to the map skill, ≤ 15 lines, appended at the end; text outside
   the block is never touched. A longer block is refused. A symlinked CLAUDE.md (e.g. -> AGENTS.md)
   stays a symlink: the target is edited.
+- Commands use the package manager declared in `package.json` `packageManager`, then the lockfile
+  (pnpm / yarn / bun / npm), then npm. Init runs the test command (or its list mode) once;
+  `uccif claude-md write --verified test` marks every command it did not run `(unverified)`.
 - `uccif summary write`: ≤ 20 lines from stdin, refuses to overwrite without `--replace`, stores the
   drift baseline. Init never copies what CLAUDE.md / AGENTS.md already say.
 - Drift no longer reports new/removed source dirs (the map skill refreshes itself); dependency and
@@ -40,7 +43,9 @@
   PostToolUse records files. A task lives across turns and `/clear` (SessionStart shows
   `Open task: <title> (<n> files)`). It closes when Claude records a decision/issue with
   `uccif task close`, when the first edit of a prompt is clearly other work (the old task closes
-  without findings, a new one opens), or after 24 h without an edit (SessionStart). No
+  without findings, a new one opens), or after 24 h without an edit (SessionStart). Matching is
+  accent-free ("sửa lỗi" = "sua loi") with Vietnamese/English stopwords; continuation words
+  ("luôn", "tiếp", "nữa", "đó", "vậy", "also") keep the task, and doubt keeps it too. No
   `uccif task start`, no "edit without task" nudge; `#quick` still skips the task.
 - UserPromptSubmit injects nothing unless project notes are stale.
 - PreToolUse runs only for Bash/Grep/Glob; the search reminder is one short line.
