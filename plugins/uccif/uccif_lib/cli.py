@@ -62,6 +62,8 @@ def build_parser():
                     help="comma list of commands you ran successfully (e.g. test,build); the others "
                          "are marked (unverified)")
 
+    sub.add_parser("verify-tests", help="check once (list mode, 60 s timeout, nothing installed) that "
+                                        "the test runner works; claude-md write marks the result")
     sm = sub.add_parser("summary", help=".claude/uccif/summary.md").add_subparsers(dest="action")
     sw = sm.add_parser("write", help="read summary.md (<= 20 lines) from stdin and store the drift baseline")
     sw.add_argument("--replace", action="store_true", help="overwrite an existing summary.md")
@@ -157,7 +159,8 @@ def _claude_md_cmd(args):
     if BEGIN in body and END in body:  # a complete block: used as given
         body = body[body.index(BEGIN):body.index(END) + len(END)]
     else:  # 1-3 description lines: the command composes the rest
-        verified = {v.strip() for v in (args.verified or "").split(",") if v.strip()}
+        from uccif_lib import verify
+        verified = {v.strip() for v in (args.verified or "").split(",") if v.strip()} | verify.verified(proj)
         body = build_block(proj, body, verified)
     if len(body.splitlines()) > MAX_BLOCK_LINES:
         print("uccif: block has %d lines, max %d. Shorten it." % (len(body.splitlines()), MAX_BLOCK_LINES),
@@ -324,6 +327,12 @@ def main(argv=None):
             return _drift_cmd(args)
         if args.cmd == "maintain":
             return maintain()
+        if args.cmd == "verify-tests":
+            from uccif_lib import verify
+            r = verify.verify(resolve_project())
+            print("test %s: %s (%s%s)" % ("verified" if r["ok"] else "unverified", r["cmd"] or "-",
+                                         r["reason"], ", %s mode" % r["mode"] if r["mode"] else ""))
+            return 0  # never a reason to retry: the block shows (unverified)
         if args.cmd == "summary" and args.action:
             return _summary_cmd(args)
         if args.cmd == "claude-md" and args.action:

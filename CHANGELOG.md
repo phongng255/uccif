@@ -7,8 +7,8 @@
   installs, indexes (`codegraph init --yes`) and writes the project skills in the same session.
   `uccif codegraph decline` stops the question for that project.
 - No more "project not surveyed, run init" message: the generated `<project>-map` skill is the code
-  map. `/uccif:init` is optional and small: measured with `claude -p` on zod, 6 tool calls,
-  ~$0.13 (≤ 4 files read). It writes through `uccif summary write` / `uccif claude-md write`
+  map. `/uccif:init` is optional and small: measured with `claude -p` on zod, 7 tool calls,
+  ~$0.14 (≤ 4 files read, one test-runner check). It writes through `uccif summary write` / `uccif claude-md write`
   (Bash, stdin) because Claude Code asks before every Write under `.claude/`.
 
 **One source of truth**
@@ -19,8 +19,12 @@
   the block is never touched. A longer block is refused. A symlinked CLAUDE.md (e.g. -> AGENTS.md)
   stays a symlink: the target is edited.
 - Commands use the package manager declared in `package.json` `packageManager`, then the lockfile
-  (pnpm / yarn / bun / npm), then npm. Init runs the test command (or its list mode) once;
-  `uccif claude-md write --verified test` marks every command it did not run `(unverified)`.
+  (pnpm / yarn / bun / npm), then npm.
+- `uccif verify-tests` checks the test runner once: list mode first (`vitest list`,
+  `jest --listTests`, `pytest --collect-only`, `go test -list`, `cargo test -- --list`, …), a real run
+  only for runners without one, 60 s hard timeout, nothing installed (`npx --no-install`). Error,
+  timeout or a sign the tests need a DB/server/network → the command stays `(unverified)` in the
+  CLAUDE.md block, with no retry; init never tries another way.
 - `uccif summary write`: ≤ 20 lines from stdin, refuses to overwrite without `--replace`, stores the
   drift baseline. Init never copies what CLAUDE.md / AGENTS.md already say.
 - Drift no longer reports new/removed source dirs (the map skill refreshes itself); dependency and
