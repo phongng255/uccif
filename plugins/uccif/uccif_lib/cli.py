@@ -51,6 +51,11 @@ def build_parser():
 
     sub.add_parser("maintain", help="background upkeep: drift check")
 
+    cm = sub.add_parser("claude-md", help="CLAUDE.md UCCIF block").add_subparsers(dest="action")
+    cw = cm.add_parser("write", help="read the block from stdin: create CLAUDE.md, or append the block "
+                                     "when it has none; replace an existing block only with --replace")
+    cw.add_argument("--replace", action="store_true", help="overwrite the existing UCCIF block")
+
     h = sub.add_parser("hook", help="run a hook handler (reads hook JSON on stdin)")
     h.add_argument("event")
 
@@ -100,6 +105,40 @@ def _drift_cmd(args):
     else:
         return 2
     print("\n".join(items) if items else "No drift.")
+    return 0
+
+
+BEGIN, END = "<!-- UCCIF:BEGIN -->", "<!-- UCCIF:END -->"
+
+
+def _claude_md_cmd(args):
+    from pathlib import Path
+    from uccif_lib.paths import write_text_atomic
+    body = sys.stdin.read().strip()
+    if BEGIN in body and END in body:
+        body = body[body.index(BEGIN):body.index(END) + len(END)]
+    elif body:
+        body = "%s\n%s\n%s" % (BEGIN, body, END)
+    else:
+        print("uccif: empty block on stdin", file=sys.stderr)
+        return 1
+    path = Path(resolve_project().root) / "CLAUDE.md"
+    try:
+        old = path.read_text(encoding="utf-8")
+    except OSError:
+        old = None
+    if old is None:
+        new, what = body + "\n", "created"
+    elif BEGIN in old and END in old:
+        if not args.replace:
+            print("CLAUDE.md already has a UCCIF block: show the diff, ask, then rerun with --replace.")
+            return 3
+        i, j = old.index(BEGIN), old.index(END) + len(END)
+        new, what = old[:i] + body + old[j:], "block replaced in"
+    else:
+        new, what = old.rstrip("\n") + ("\n\n" if old.strip() else "") + body + "\n", "block appended to"
+    write_text_atomic(path, new)
+    print("%s %s" % (what, path))
     return 0
 
 
@@ -210,6 +249,8 @@ def main(argv=None):
             return _drift_cmd(args)
         if args.cmd == "maintain":
             return maintain()
+        if args.cmd == "claude-md" and args.action:
+            return _claude_md_cmd(args)
     except task.TaskError as e:
         print("uccif: %s" % e, file=sys.stderr)
         return 1

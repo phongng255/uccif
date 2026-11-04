@@ -42,12 +42,12 @@ at the lowest token cost. Read little, write short, mark every claim.
    <only conventions a newcomer would get wrong; each with [src:]>
    <!-- UCCIF:END -->
    ```
-   Three cases, decided by `detect.claude_md_block` and whether `CLAUDE.md` exists:
-   - **No `CLAUDE.md`**: create it holding only this block. No question needed.
-   - **`CLAUDE.md` without the block**: append the block at the end; never touch the existing
-     text. No question needed.
-   - **Block already present**: show the diff and **ask before writing**. Replace only the text
-     between the markers; never touch the rest.
+   Write it with `uccif claude-md write` (block on stdin, a heredoc), never with a hand edit:
+   - **No `CLAUDE.md`**: the command creates it holding only the block. No question needed.
+   - **`CLAUDE.md` without the block**: it appends the block; existing text is untouched. No
+     question needed.
+   - **Block already present**: the command refuses (exit 3). Show the diff, **ask**, then rerun
+     with `--replace`; only the text between the markers changes.
    Never finish init with no UCCIF block in `CLAUDE.md` unless the user declined a replacement.
 7. **UCCIF v2 migration** (only if `detect.uccif_v2` is non-empty). Do not delete anything.
    - Read `.claude/settings.json` / `settings.local.json`; list the exact hook entries that
