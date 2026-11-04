@@ -77,7 +77,7 @@ agy plugin list
 
 ```text
 Installed plugins:
-- uccif (enabled, 1.1.0)
+- uccif (enabled, 1.2.0)
     Source:     antigravity
     Components: 3 skills, 1 rule, 1 MCP server, 1 hook
 ```

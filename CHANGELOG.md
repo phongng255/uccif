@@ -1,6 +1,13 @@
 # Changelog
 
-## Unreleased — Antigravity plugin (stage 3)
+## 1.2.0 — Claude Code, Gemini CLI and Antigravity
+
+### Fixes
+
+- Two sessions starting in one project at the same moment could fail SessionStart: they shared one
+  temp file when writing state (`FileNotFoundError` on `hosts.json.tmp`). Each writer now has its own.
+
+### Antigravity plugin
 
 Gemini CLI stopped serving unpaid and Google One users on June 18, 2026 in favour of Antigravity CLI
 (`agy`), so Antigravity comes first. The Gemini extension stays for paid Gemini CLI users.
@@ -32,7 +39,7 @@ behaviour is the same.
 skips the whole file ("cannot unmarshal", or "command hook must specify 'command'" without the
 `description` key). Skills and MCP arrive, hooks do not. Install the plugin instead.
 
-## Unreleased — Gemini CLI extension (stage 2)
+### Gemini CLI extension
 
 - The repo root is also a Gemini CLI extension: `gemini-extension.json`, `hooks/hooks.json` and
   `skills/`. `gemini extensions install <github url>` reads the manifest only at the repo root
@@ -53,7 +60,7 @@ skips the whole file ("cannot unmarshal", or "command hook must specify 'command
   message is appended again under the same id; older whole-JSON sessions are read too.
 - CI: `gemini extensions validate .` and a skills sync check.
 
-## Unreleased — one core for Claude Code, Gemini CLI and Antigravity (stage 1)
+### One core for all hosts
 
 - Host adapter (`uccif_lib/hosts.py`): `uccif hook --host claude|gemini|antigravity <event>`.
   It translates event names (Gemini SessionStart, BeforeAgent, BeforeTool, AfterTool, AfterAgent,

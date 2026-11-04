@@ -1,5 +1,6 @@
 import os
 import shutil
+import threading
 
 from conftest import git
 from uccif_lib import paths
@@ -91,3 +92,26 @@ def test_root_commit_is_cached_after_first_resolve(project, repo, monkeypatch):
     again = paths.resolve_project()
     assert again.root_commit == project.root_commit
     assert calls == []
+
+
+def test_write_text_atomic_survives_concurrent_writers(tmp_path):
+    # two sessions starting together used to share one temp file and crash SessionStart
+    state = tmp_path / "state"
+    target = state / "hosts.json"
+    errors = []
+
+    def writer(n):
+        for _ in range(100):
+            try:
+                paths.write_text_atomic(target, "writer %d\n" % n)
+            except OSError as e:
+                errors.append(e)
+
+    threads = [threading.Thread(target=writer, args=(n,)) for n in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert not errors
+    assert target.read_text(encoding="utf-8").startswith("writer ")
+    assert [p.name for p in state.iterdir()] == ["hosts.json"]

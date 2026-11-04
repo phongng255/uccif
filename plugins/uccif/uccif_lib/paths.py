@@ -14,6 +14,7 @@ import os
 import shutil
 import subprocess
 import time
+import uuid
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
@@ -33,9 +34,17 @@ def now_iso():
 def write_text_atomic(path, text):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(text, encoding="utf-8")
-    os.replace(str(tmp), str(path))
+    # a name per writer: two sessions starting together write the same file
+    tmp = path.with_name("%s.%s.tmp" % (path.name, uuid.uuid4().hex))
+    try:
+        tmp.write_text(text, encoding="utf-8")
+        os.replace(str(tmp), str(path))
+    except OSError:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
 
 
 class LockTimeout(Exception):

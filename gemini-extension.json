@@ -1,6 +1,6 @@
 {
   "name": "uccif",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Task memory, token line, project notes and CodeGraph setup for any repository. Same core as the UCCIF Claude Code plugin. Never blocks.",
   "contextFileName": "plugins/uccif/gemini/CONTEXT.md",
   "mcpServers": {
