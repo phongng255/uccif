@@ -59,7 +59,7 @@ AGENTS = sorted((PLUGIN / "agents").glob("*.md"))
 
 def test_expected_components_exist():
     assert {p.parent.name for p in SKILLS} == {
-        "init", "task-context", "smart-code-search", "code-impact-analysis", "code-review", "resume", "codegraph"}
+        "init", "resume", "codegraph"}
     assert {p.stem for p in AGENTS} == {"project-analyst", "code-impact-analyzer", "change-reviewer"}
 
 
@@ -85,9 +85,9 @@ def test_agents_are_read_only(path):
     assert len(text.splitlines()) <= 80
 
 
-def test_core_rules_at_most_8():
+def test_core_rules_at_most_5():
     numbered = re.findall(r"^\d+\. ", rules.CORE_RULES, re.M)
-    assert len(numbered) == 8
+    assert len(numbered) <= 5 and len(rules.CORE_RULES.splitlines()) <= 6
     assert "{reply_language}" not in rules.core_rules("vi")
 
 

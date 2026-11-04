@@ -1,80 +1,36 @@
 ---
 name: init
-description: Survey this repository once and write UCCIF project docs (.claude/uccif/summary.md, architecture.md) plus the project's UCCIF block in CLAUDE.md. Use when a hook says the project is not surveyed yet, before the first code change in a new repo, when the user asks to set up or refresh UCCIF, or when migrating from UCCIF v2.
+description: Optional. Writes what the code graph cannot know (purpose, conventions, external services) to .claude/uccif/summary.md and a small CLAUDE.md block. Use when the user asks to set up or refresh UCCIF notes.
 argument-hint: "[refresh]"
 ---
 
-# UCCIF init — limited project survey
+# UCCIF init — notes the graph does not have
 
-Goal: give future sessions enough project knowledge to find code without re-scanning the repo,
-at the lowest token cost. Read little, write short, mark every claim.
+The `<project>-map` / `-mod-*` skills already hold modules, entry points, routes and commands:
+do not re-derive them. Budget: ≤ 10 tool calls (normally 7). Run every command on its own (no `;`, `&&`,
+`echo`): compound commands need approval.
 
-## Steps
+1. `uccif detect`. `codegraph.indexed` false → run the `uccif:codegraph` skill first.
+2. Load the `<project>-map` skill.
+3. Read at most 4 files, in one parallel batch, offset/limit: README, main manifest, and
+   up to 2 of: the existing `.claude/uccif/summary.md`, CONTRIBUTING / AGENTS.md, an env example.
+   Never lockfiles, generated files, `.env`.
+4. Pipe the summary into `uccif summary write` (heredoc; `--replace` if one exists, merged with
+   the user's text). **≤ 20 lines, only what the graph cannot know**: what the project is for,
+   conventions a newcomer would get wrong, external services. Each claim ends with
+   `[src: file]`. No modules, commands or layout, and nothing CLAUDE.md / AGENTS.md already
+   says (Claude Code loads those anyway): point to them instead. Never use Write/Edit under `.claude/`.
+   The command also stores the drift baseline.
+5. `uccif verify-tests`, once: it lists the tests (vitest list, jest --listTests, pytest
+   --collect-only, go test -list, cargo test -- --list) or runs them only when the runner has no
+   list mode, with a 60 s timeout, installing nothing. Whatever it prints, do not retry, do not
+   try another command, do not install anything: an unverified command is marked as such.
+6. Pipe 2–3 description lines into `uccif claude-md write` (heredoc). It composes the ≤ 15-line
+   block (commands from the manifests, `(unverified)` next to those not verified, a pointer to the
+   map skill) and appends it at the end of CLAUDE.md. Exit 3 = a block exists: show the change,
+   ask, rerun with `--replace`.
+7. UCCIF v2 (`detect.uccif_v2` non-empty): list the hook lines calling `uccif.py` in
+   `.claude/settings*.json` for the user to remove. Delete nothing yourself.
 
-1. **Mechanical survey.** `uccif detect` (JSON); `detect.codegraph.indexed` false → run the
-   `uccif:codegraph` skill first. Then read the generated `<project>-map` skill (modules, routes,
-   entry points, commands) and map the rest with `codegraph explore` / `codegraph files`, not by
-   opening files. Do not re-derive what these report.
-2. **Choose the reader.**
-   `large_repo: false` → survey yourself. `large_repo: true` → delegate to the
-   `uccif:project-analyst` agent, one call per top-level module, and use only its summaries.
-3. **Read at most ~25 files**: manifests, entry candidates, router/DI/build config, and one
-   representative file per top-level source dir. Use offset/limit; never read lockfiles,
-   generated or minified files. Skip anything already in existing docs unless `$ARGUMENTS`
-   is `refresh`.
-4. **Write `.claude/uccif/summary.md`** (≤ 40 lines): what the project does, stack, how to
-   run/build/test (exact commands from `detect`), top-level layout, external services.
-5. **Write `.claude/uccif/architecture.md`**: one section per module — responsibility, entry
-   points, main dependencies, conventions. Every behaviour claim ends with
-   `[src: path/to/file]` (a file, not a dir) and a tag `verified` (you read it), `inferred`
-   (from names/structure) or `unknown`. Directories in `[src:]` only for structure claims.
-   Merge into existing files: keep the user's text, update only stale sections.
-6. **Prepare the CLAUDE.md block** — project facts only, ≤ 30 lines, never the CORE RULES
-   (hooks inject those):
-   ```
-   <!-- UCCIF:BEGIN -->
-   ## Project (UCCIF)
-   <3–5 line summary>  · Docs: .claude/uccif/summary.md, architecture.md
-   ## Commands
-   <build / test / lint / run, exact>
-   ## Conventions
-   <only conventions a newcomer would get wrong; each with [src:]>
-   <!-- UCCIF:END -->
-   ```
-   Write it with `uccif claude-md write` (block on stdin, heredoc), never by hand. No
-   `CLAUDE.md`: it creates the file; file without the block: it appends; no question for either.
-   Block already present: it refuses (exit 3); show the diff, **ask**, rerun with `--replace`.
-7. **UCCIF v2 migration** (only if `detect.uccif_v2` is non-empty). Do not delete anything.
-   - Read `.claude/settings.json` / `settings.local.json`; list the exact hook entries that
-     call `uccif.py`, with line numbers, and any `deny`/`ask` rules v2 added. Claude Code
-     protects these files: try one Edit only if the user agrees; if blocked, give the user
-     the exact lines to remove. Running v2 and v3 hooks together double-logs and v2 may block.
-   - Keep `.claude/data/project/*` — copy useful facts into the new docs (re-tag them).
-   - The old v2 CLAUDE.md block (CORE RULES, workflow) is replaced by the v3 block in step 6.
-   - Suggest, not perform, removing `.claude/scripts/uccif.py` and `.claude/data/` afterwards.
-8. **User rules file.** Only if `.claude/uccif/rules.md` is missing, create it holding one
-   comment: `<!-- Project rules for Claude, one per line, max 15 loaded after the core rules. e.g.
-   Run npm run lint before saying a change is done. Every project: ~/.claude/uccif/rules.md -->`.
-9. **Baseline.** After writing the docs run `uccif drift ack`, so later structural changes
-   (new module, new dependency) are reported to you automatically.
-10. **Check.** Run `uccif doctor`; report its WARN lines only (INFO lines need nothing).
-   LSP: only a language in `detect.lsp` with `installed: false` is worth one question —
-   offer its `install` command; never install unasked. Languages in `detect.no_lsp` (e.g. vue)
-   have no LSP in this plugin and are covered by CodeGraph: do not mention or ask.
-
-## Output to the user (in their language)
-
-- Files written/updated, each with one line on its role.
-- Stack and commands found.
-- Claims tagged `inferred`/`unknown` that the user could confirm.
-- Files to commit: `.claude/uccif/` docs and `.claude/uccif/.gitignore` (UCCIF's own; it keeps
-  `.local/` out of git). State this in one line; do not ask about them, and commit only if the
-  user asks. Unrelated untracked files are not init's business: leave them alone.
-- What still needs the user: CLAUDE.md approval, v2 settings lines, and an LSP install only
-  when a configured language server is missing.
-
-## Never
-
-Edit source code; install anything; read `.env` or secrets; claim a command works without
-running it; write empty placeholder docs (create decisions.md / known-issues.md only through
-`uccif task checkpoint --decision/--issue`).
+Reply in the user's language, ≤ 5 lines: files written, what the user may want to confirm.
+Never: edit source code, install anything, read secrets, write placeholder docs.

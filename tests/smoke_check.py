@@ -38,7 +38,8 @@ for ev in ("session-start", "user-prompt-submit", "pre-tool-use", "stop", "subag
     check("hook %s ran" % ev, ev in events)
 check("no hook errors", not [h for h in hooks if h.get("decision") == "error"],
       "; ".join(h.get("error", "") for h in hooks if h.get("decision") == "error"))
-check("uccif on PATH (task started)", (data / "tasks" / "current.json").exists())
+check("uccif on PATH (task started)",  # task state lives in the project, not the data dir
+      (Path(repo) / ".claude" / "uccif" / ".local" / "tasks" / "current.json").exists())
 check("CLAUDE_ENV_FILE reaches Bash (UCCIF_DATA_DIR set)",
       "SOURCE=UCCIF_DATA_DIR" in (result.get("result") or ""), (result.get("result") or "")[:160])
 sub_pre = [h for h in hooks if h.get("event") == "pre-tool-use" and h.get("agent_id")]

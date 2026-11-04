@@ -185,11 +185,14 @@ def add_modified(project, path):
 @_locked
 def _add_modified(project, path):
     task = load_current(project)
-    if not task or task.get("status") == "done" or path in task["files"]:
+    if not task or task.get("status") == "done":
         return False
-    task["files"].append(path)
+    task["last_edit"] = now_iso()
+    added = path not in task["files"]
+    if added:
+        task["files"].append(path)
     _save(project, task)
-    return True
+    return added
 
 
 @_locked
@@ -203,6 +206,125 @@ def close(project, decisions=None, issues=None, no_findings=False):
     _save(project, task)
     snapshot(project, label=task["id"])
     return task
+
+
+def guess_type(prompt):
+    import re
+    p = (prompt or "").lower()
+    for ttype, pat in (("bug", r"fix|bug|error|crash|broken|fail|lỗi|sửa"), ("refactor", r"refactor|rename|clean"),
+                       ("test", r"\btests?\b|kiểm thử"), ("ui", r"\bui\b|css|style|giao diện")):
+        if re.search(pat, p):
+            return ttype
+    return "feature"
+
+
+def auto_title(prompt):
+    line = " ".join((prompt or "").split())
+    return (line[:77] + "...") if len(line) > 80 else (line or "Code change")
+
+
+# Matching runs on lowercased, accent-free words ("sửa lỗi" == "sua loi"). Action verbs and fillers
+# are not topic words; continuation words mean "the same work".
+STOP_WORDS = set("""
+the and for with this that from into then also please can you make add use not but are was
+fix fixed change update new now let lets code file files bug error issue work
+mot nhung cac cho cua va voi nay khi thi duoc khong co lam hay can nhu vao trong de la o
+sua them xem thu giup minh toi ban nhe di roi chut cai kia bi loi phan
+""".split())
+CONTINUE_WORDS = {"luon", "tiep", "nua", "vay", "do", "van", "lai", "con", "cung", "again", "still",
+                  "too", "also", "same", "continue", "it", "that", "those"}  # not "them": accent-free "thêm"
+SWITCH_WORDS = {"gio", "now", "next", "instead"}
+STALE_HOURS = 24
+
+
+def _words(text):
+    import re
+    import unicodedata
+    text = unicodedata.normalize("NFD", (text or "").lower().replace("đ", "d"))
+    text = "".join(c for c in text if unicodedata.category(c) != "Mn")
+    return re.findall(r"[a-z0-9_]+", text)
+
+
+def topic_words(text):
+    return {w for w in _words(text) if len(w) >= 2 and not w.isdigit()
+            and w not in STOP_WORDS and w not in CONTINUE_WORDS and w not in SWITCH_WORDS}
+
+
+def is_new_topic(prompt, task):
+    """True only when the prompt clearly starts other work than `task`. Doubt -> same task: closing
+    a task by mistake costs more than keeping one open too long.
+    - any continuation word ("luôn", "tiếp", "nữa", "đó", "vậy", "also") -> same task
+      ("tiếp theo" = next item, a switch);
+    - >= 3 topic words, under 20% of them seen in the task's title / earlier prompts -> new;
+    - a switch word ("giờ", "now", "next") and >= 2 topic words, none seen -> new."""
+    words = _words(prompt)
+    text = " ".join(words)
+    switch = bool(SWITCH_WORDS & set(words)) or "tiep theo" in text
+    if not switch and CONTINUE_WORDS & set(words):
+        return False
+    content = topic_words(prompt)
+    seen = set(task.get("topic") or []) | topic_words(task.get("title"))
+    hit = len(content & seen) / float(len(content)) if content else 1.0
+    if len(content) >= 3 and hit < 0.2:
+        return True
+    return switch and len(content) >= 2 and hit == 0
+
+
+def _new_auto(project, prompt):
+    p = _paths(project)
+    state = read_json(p["state"], {"next_id": 1})
+    tid = "T-%03d" % state["next_id"]
+    state["next_id"] += 1
+    write_json(p["state"], state)
+    task = {"id": tid, "title": auto_title(prompt), "type": guess_type(prompt), "status": "in_progress",
+            "goal": "", "modules": "", "next": "", "rewrite": False, "auto": True,
+            "topic": sorted(topic_words(prompt))[:40],
+            "files": [], "decisions": [], "tests": [], "issues": [], "started": now_iso()}
+    _save(project, task)
+    return task
+
+
+def _close_quietly(project, task, reason):
+    task["status"] = "done"
+    task["closed"] = now_iso()
+    task["closed_by"] = reason
+    _save(project, task)
+    snapshot(project, label=task["id"])
+
+
+@_locked
+def on_first_edit(project, prompt):
+    """PostToolUse, first edit of a prompt. No open task -> open one. Open task and the prompt is
+    clearly other work -> close it without findings and open a new one. Otherwise the prompt joins
+    the open task's topic. Returns (opened, closed) tasks or None."""
+    cur = load_current(project)
+    if cur and cur.get("status") != "done":
+        if not is_new_topic(prompt, cur):
+            cur["topic"] = sorted(set(cur.get("topic") or []) | topic_words(prompt))[:80]
+            _save(project, cur)
+            return None, None
+        _close_quietly(project, cur, "new-topic")
+        return _new_auto(project, prompt), cur
+    return _new_auto(project, prompt), None
+
+
+def _age_hours(task):
+    from datetime import datetime
+    try:
+        then = datetime.fromisoformat(task.get("last_edit") or task.get("started"))
+        return (datetime.now(then.tzinfo) - then).total_seconds() / 3600.0
+    except (TypeError, ValueError):
+        return 0.0
+
+
+@_locked
+def close_stale(project, hours=STALE_HOURS):
+    """SessionStart: close an open task with no edit for `hours`."""
+    cur = load_current(project)
+    if not cur or cur.get("status") == "done" or _age_hours(cur) < hours:
+        return None
+    _close_quietly(project, cur, "stale")
+    return cur
 
 
 def snapshot(project, label=None):
@@ -224,7 +346,8 @@ def summary_lines(project, limit=2):
     task = load_current(project)
     if not task or task.get("status") == "done":
         return []
-    lines = ["Open task %s (%s): %s" % (task["id"], task["type"], task["title"])]
+    n = len(task.get("files") or [])
+    lines = ["Open task: %s (%d file%s) [%s]" % (task["title"], n, "" if n == 1 else "s", task["id"])]
     if task.get("next"):
         lines.append("Next step: %s" % task["next"])
     return lines[:limit]

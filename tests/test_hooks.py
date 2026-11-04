@@ -57,10 +57,10 @@ def test_session_start_injects_rules_on_startup_and_compact(base, project, tmp_p
     monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_REPLY_LANGUAGE", "en")
     for source in ("startup", "clear", "compact"):
         _, out = run_hook("session-start", dict(base, source=source))
-        assert "UCCIF CORE RULES" in ctx(out) and "Reply to the user in en" in ctx(out)
+        assert "UCCIF CORE RULES" in ctx(out) and "Reply in en" in ctx(out)
     _, out = run_hook("session-start", dict(base, source="resume"))
     assert "UCCIF CORE RULES" not in ctx(out)
-    assert "not been surveyed" in ctx(out)
+    assert "surveyed" not in ctx(out) and "uccif:init" not in ctx(out)  # init is optional
     assert "export UCCIF_DATA_DIR=" in env.read_text()
 
 
@@ -69,8 +69,8 @@ def test_session_start_mentions_docs_and_open_task(base, project):
     (project.docs_dir / "summary.md").write_text("x")
     task.start(project, "Fix login", "bug")
     _, out = run_hook("session-start", dict(base, source="startup"))
-    assert "Project docs: .claude/uccif/" in ctx(out)
-    assert "Open task T-001 (bug): Fix login" in ctx(out)
+    assert ".claude/uccif/summary.md" in ctx(out)
+    assert "Open task: Fix login (0 files)" in ctx(out)
 
 
 def test_session_start_marks_previous_unclean(base, project):
@@ -81,15 +81,12 @@ def test_session_start_marks_previous_unclean(base, project):
     assert ends == [dict(ends[0], session="OLD", reason="unclean")]
 
 
-def test_user_prompt_submit(base, project):
+def test_user_prompt_submit_is_silent_without_news(base, project):
     _, out = run_hook("user-prompt-submit", dict(base, prompt="hello"))
-    assert "Reply in vi. Do ops work yourself. To find code, query CodeGraph first" in ctx(out)
+    assert out is None
     task.start(project, "Fix login", "bug")
     _, out = run_hook("user-prompt-submit", dict(base, prompt="go on"))
-    lines = ctx(out).splitlines()
-    assert len(lines) <= 3 and lines[0].startswith("Open task T-001")
-    _, out = run_hook("user-prompt-submit", dict(base, prompt="#quick fix typo"))
-    assert len(ctx(out).splitlines()) == 1 and ctx(out).startswith("Reply in vi.")
+    assert out is None  # the open task is already in SessionStart's context
 
 
 @pytest.mark.parametrize("agent,cmd,decision", [
@@ -117,10 +114,9 @@ def _edit(base, project, name="src/a.ts"):
     return dict(base, tool_name="Edit", tool_input={"file_path": str(project.root / name)})
 
 
-def test_edit_without_task_is_nudged(base, project):
+def test_edit_is_never_nudged(base, project):
     code, out = run_hook("pre-tool-use", _edit(base, project))
-    assert code == 0 and "no open task" in ctx(out)
-    assert hook_log(project)[0]["rule"] == "edit-no-task"
+    assert code == 0 and out is None
 
 
 def test_edit_with_task_quick_or_framework_file_is_not_nudged(base, project):
@@ -143,11 +139,94 @@ def test_search_nudge_once_per_window(base, project):
     assert out is None
 
 
-def test_prompt_without_task_asks_for_one(base, project):
-    _, out = run_hook("user-prompt-submit", dict(base, prompt="sửa bug"))
-    assert "No open UCCIF task" in ctx(out)
-    _, out = run_hook("user-prompt-submit", dict(base, prompt="sửa #quick"))
-    assert "No open UCCIF task" not in ctx(out)
+def _turn(base, project, prompt, path="src/a.ts"):
+    run_hook("user-prompt-submit", dict(base, prompt=prompt))
+    run_hook("post-tool-use", dict(base, tool_name="Edit",
+                                   tool_input={"file_path": str(project.root / path)}))
+    run_hook("stop", dict(base))
+
+
+def test_task_lives_across_turns_and_clear(base, project):
+    _turn(base, project, "sửa lỗi đăng nhập khi mật khẩu rỗng")
+    cur = task.load_current(project)
+    assert cur["auto"] and cur["type"] == "bug" and cur["title"].startswith("sửa lỗi đăng nhập")
+    assert cur["status"] == "in_progress"  # Stop no longer closes it
+    _turn(base, project, "tiếp, thêm test cho trường hợp đó", "tests/login.test.ts")
+    _turn(base, project, "đăng nhập vẫn lỗi khi mật khẩu có dấu cách", "src/b.ts")
+    cur = task.load_current(project)
+    assert cur["id"] == "T-001" and cur["files"] == ["src/a.ts", "tests/login.test.ts", "src/b.ts"]
+    _, out = run_hook("session-start", dict(base, source="clear"))
+    assert "Open task: sửa lỗi đăng nhập khi mật khẩu rỗng (3 files)" in ctx(out)
+
+
+def test_close_with_a_finding(base, project):
+    _turn(base, project, "fix the crash when the cart is empty")
+    task.close(project, issues=["empty cart -> guard in total()"])
+    cur = task.load_current(project)
+    assert cur["status"] == "done" and cur["issues"] == ["empty cart -> guard in total()"]
+    assert "empty cart" in (project.docs_dir / "known-issues.md").read_text(encoding="utf-8")
+    _turn(base, project, "add dark mode toggle to settings page")
+    assert task.load_current(project)["id"] == "T-002"
+
+
+def test_new_topic_closes_the_old_task_and_opens_a_new_one(base, project):
+    _turn(base, project, "fix the crash when the cart is empty")
+    _turn(base, project, "add a dark mode toggle to the settings page", "src/settings.ts")
+    old = task.load_current(project)
+    assert old["id"] == "T-002" and old["files"] == ["src/settings.ts"]
+    hist = sorted((project.local_dir / "tasks" / "history").glob("*_T-001.md"))
+    assert hist  # T-001 closed (no findings) and snapshotted
+
+
+def test_stale_task_is_closed_by_session_start(base, project):
+    import json
+    _turn(base, project, "fix the crash when the cart is empty")
+    cur_path = project.local_dir / "tasks" / "current.json"
+    data = json.loads(cur_path.read_text())
+    data["last_edit"] = "2000-01-01T00:00:00+00:00"
+    cur_path.write_text(json.dumps(data))
+    _, out = run_hook("session-start", dict(base, source="startup"))
+    assert task.load_current(project)["status"] == "done"
+    assert "Open task" not in ctx(out)
+
+
+VI_TASK = {"title": "sửa lỗi nút thanh toán không bấm được", "topic": []}
+
+
+@pytest.mark.parametrize("prompt", [
+    "sửa luôn cái nút đó", "sua luon cai nut do", "fix tiep loi do", "fix tiếp lỗi đó",
+    "thêm test nữa", "vậy còn màu nút", "nút thanh toán vẫn lỗi", "nut thanh toan van loi",
+    "ok", "tiếp đi", "kiểm tra lại giúp mình",
+])
+def test_vietnamese_continuation_keeps_the_task(prompt):
+    assert not task.is_new_topic(prompt, VI_TASK)
+
+
+@pytest.mark.parametrize("prompt", [
+    "giờ làm trang login", "gio lam trang login", "tiếp theo làm trang đăng ký tài khoản",
+    "thêm chức năng xuất báo cáo excel theo tháng", "them chuc nang xuat bao cao excel theo thang",
+])
+def test_vietnamese_new_work_switches(prompt):
+    assert task.is_new_topic(prompt, VI_TASK)
+
+
+def test_accents_do_not_matter():
+    assert task.topic_words("sửa lỗi đăng nhập") == task.topic_words("sua loi dang nhap")
+
+
+def test_new_topic_heuristic():
+    t = {"title": "fix the crash when the cart is empty", "topic": []}
+    assert not task.is_new_topic("also check the totals", t)  # continuation word
+    assert not task.is_new_topic("tiếp đi", t)
+    assert not task.is_new_topic("cart still crashes when empty", t)
+    assert task.is_new_topic("add dark mode toggle to settings", t)
+
+
+def test_quick_prompt_opens_no_task(base, project):
+    run_hook("user-prompt-submit", dict(base, prompt="sửa typo #quick"))
+    run_hook("post-tool-use", dict(base, tool_name="Edit",
+                                   tool_input={"file_path": str(project.root / "src" / "a.ts")}))
+    assert task.load_current(project) is None
 
 
 def test_post_tool_use_records_file(base, project):
@@ -248,26 +327,36 @@ def test_session_start_offers_codegraph_when_missing(base, project, monkeypatch)
     _cg_env(monkeypatch, project)
     _, out = run_hook("session-start", dict(base, source="startup"))
     text = ctx(out)
-    assert "CodeGraph is not installed" in text and "uccif:codegraph" in text
-    assert "never `npx codegraph`" in text
+    assert "NOT installed" in text and "FIRST reply" in text and "yes/no" in text
+    assert "uccif:codegraph" in text and "uccif skills generate" in text
+    assert "Never `npx codegraph`" in text
+
+
+def test_codegraph_decline_stops_the_offer(base, project, monkeypatch):
+    from uccif_lib import cli
+    _cg_env(monkeypatch, project)
+    assert cli.main(["codegraph", "decline"]) == 0
+    _, out = run_hook("session-start", dict(base, source="startup"))
+    assert "FIRST reply" not in ctx(out) and "declined" in ctx(out)
 
 
 def test_session_start_cli_without_index(base, project, monkeypatch):
     _cg_env(monkeypatch, project, cli=True)
     _, out = run_hook("session-start", dict(base, source="startup"))
-    assert "indexed in the background" in ctx(out) and "codegraph init --yes" in ctx(out)
+    assert "indexing this project in the background" in ctx(out) and "codegraph init --yes" in ctx(out)
 
 
 def test_session_start_codegraph_active(base, project, monkeypatch):
     _cg_env(monkeypatch, project, cli=True, mcp=True, indexed=True)
     _, out = run_hook("session-start", dict(base, source="startup"))
-    assert "CodeGraph is active" in ctx(out) and "`codegraph_explore` MCP tool FIRST" in ctx(out)
+    assert "CodeGraph is active" in ctx(out) and "core rule 2" in ctx(out)
+    assert "`codegraph_explore`" in ctx(out)  # the routing itself lives in the core rules
 
 
 def test_session_start_index_without_mcp(base, project, monkeypatch):
     _cg_env(monkeypatch, project, cli=True, indexed=True)  # an older plugin without .mcp.json
     _, out = run_hook("session-start", dict(base, source="startup"))
-    assert "not wired into Claude Code" in ctx(out)
+    assert "not wired" in ctx(out)
 
 
 def test_session_start_active_with_plugin_provided_mcp(base, project, monkeypatch):
@@ -300,7 +389,7 @@ def test_drift_reaches_claude_then_ack_clears_it(base, project):
     _src(project, "src/payments/pay.ts", "export const p = 1\n")
     run_hook("stop", dict(base))
     _, out = run_hook("user-prompt-submit", dict(base, prompt="hi"))
-    assert "stale" not in ctx(out)  # no docs yet: nothing to keep in sync
+    assert out is None or "stale" not in ctx(out)  # no docs yet: nothing to keep in sync
     _src(project, ".claude/uccif/summary.md", "# x\n")
     drift.ack(project)
     _src(project, "src/orders/o.ts", "export const o = 1\n")
@@ -308,14 +397,15 @@ def test_drift_reaches_claude_then_ack_clears_it(base, project):
     run_hook("stop", dict(base))
     _, out = run_hook("user-prompt-submit", dict(base, prompt="hi"))
     text = ctx(out)
-    assert "new source dirs: src/orders" in text and "added pinia" in text and "uccif drift ack" in text
+    assert "added pinia" in text and "uccif drift ack" in text
+    assert "src/orders" not in text and "architecture" not in text  # dirs: the map skill refreshes itself
     edit = dict(base, tool_name="Edit", tool_input={"file_path": str(project.root / "src" / "a.ts")})
     _src(project, "src/a.ts", "export const a = 2\n")  # a change inside code is not drift
     run_hook("post-tool-use", edit)
     drift.ack(project)
     run_hook("stop", dict(base))
     _, out = run_hook("user-prompt-submit", dict(base, prompt="hi"))
-    assert "stale" not in ctx(out)
+    assert out is None or "stale" not in ctx(out)
 
 
 def test_lsp_offer_once_per_binary(base, project, monkeypatch):

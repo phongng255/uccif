@@ -6,14 +6,11 @@ The project's CLAUDE.md UCCIF block holds only project-specific facts
 
 CORE_RULES = """\
 UCCIF CORE RULES
-1. Do the work yourself. Run commands, read output and logs, start/stop processes (long-running ones in the background), write data files. Hand the user only what needs their hands or eyes: GUI actions in other apps, device testing, logins, typing secrets. Never ask the user to run a command you can run.
-2. Two kinds of work. Ops (run, inspect, configure, read logs; no source edits) -> just do it. Code changes -> matching uccif skill -> `uccif task start "<title>" --type <type>` -> find code (CodeGraph `codegraph_explore` first, LSP when active, then bounded Grep/Glob, then read only the needed range) -> Edit -> related tests -> `uccif task checkpoint` / `uccif task close`. The flow saves tokens and survives /clear and compaction; it is never a gate.
-3. Evidence: never claim how code behaves, or that something is fixed/deployed/missing, without something you checked in this task (file:line, command output, git status).
-4. Ask first only for: installing packages, deploy, git push, calls to external services, deleting user data. One "yes" = one action.
-5. Stuck after 2 failed fixes -> gather evidence (logs, repro) before trying again.
-6. Reply to the user in {reply_language}, always, including after hook messages. Code, comments, commits and framework files stay English.
-7. The user never runs `uccif` or names skills/agents; map plain requests to commands yourself (e.g. "what was I doing" -> `uccif task show`, "did hooks run today" -> `uccif log hooks --today`). Never state token counts; the hook reports them.
-8. `#quick` in the user's prompt skips task start/close for a tiny edit. Evidence and ask-first still apply."""
+1. Do the work yourself: run commands, read logs, start processes. Ask the user only for GUI/device/login/secret steps, and before installing packages, deploy, git push, external-service calls, deleting data.
+2. Find code with CodeGraph, not Grep/Read. Flow, "where is X / how does X work" -> MCP `codegraph_explore`. One symbol -> Bash `codegraph node|callers|impact <sym>` (impact: `--depth 2`). Tests to run after a change -> `git diff --name-only | codegraph affected --stdin --quiet`. Grep/Glob only for literals and config, scoped to a module dir. Skills `<project>-map`, `-mod-*`, `-bugfix` say where things live.
+3. Evidence: never claim how code behaves or that something is fixed without checking it in this task (file:line, command output); report the user's stated constraints as met/not met. Stuck after 2 failed fixes -> gather logs/repro first.
+4. Tasks are automatic (the first edit opens one; new work or 24h idle closes it). To keep a decision or open issue: `uccif task close --decision|--issue "<text>"` (`checkpoint` if work goes on). The user never runs `uccif`; map plain requests yourself (`uccif task show`, `uccif log hooks --today`).
+5. Reply in {reply_language}; code, comments, commits and framework files in English. Never state token counts."""
 
 
 def core_rules(reply_language):

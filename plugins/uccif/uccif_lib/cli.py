@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import os
 import sys
 
 from uccif_lib import SCHEMA_VERSION, __version__, codegraph, detect, drift, hooks, log, task, usage
@@ -37,7 +38,9 @@ def build_parser():
     cl.add_argument("--issue", action="append")
     cl.add_argument("--no-findings", action="store_true")
 
-    sub.add_parser("codegraph", help="CodeGraph state for this project as JSON (cli, indexed, mcp)")
+    cgp = sub.add_parser("codegraph", help="CodeGraph state for this project as JSON (cli, indexed, mcp)")
+    cgp.add_argument("action", nargs="?", choices=("decline",),
+                     help="decline: the user does not want CodeGraph; stop offering it")
     sk = sub.add_parser("skills", help="project skills generated from the CodeGraph index").add_subparsers(dest="action")
     sg = sk.add_parser("generate", help="write/refresh .claude/skills/<project>-map, -bugfix, -mod-*")
     sg.add_argument("--force", action="store_true", help="also overwrite generated files you edited")
@@ -55,6 +58,15 @@ def build_parser():
     cw = cm.add_parser("write", help="read the block from stdin: create CLAUDE.md, or append the block "
                                      "when it has none; replace an existing block only with --replace")
     cw.add_argument("--replace", action="store_true", help="overwrite the existing UCCIF block")
+    cw.add_argument("--verified", default="", metavar="PURPOSES",
+                    help="comma list of commands you ran successfully (e.g. test,build); the others "
+                         "are marked (unverified)")
+
+    sub.add_parser("verify-tests", help="check once (list mode, 60 s timeout, nothing installed) that "
+                                        "the test runner works; claude-md write marks the result")
+    sm = sub.add_parser("summary", help=".claude/uccif/summary.md").add_subparsers(dest="action")
+    sw = sm.add_parser("write", help="read summary.md (<= 20 lines) from stdin and store the drift baseline")
+    sw.add_argument("--replace", action="store_true", help="overwrite an existing summary.md")
 
     h = sub.add_parser("hook", help="run a hook handler (reads hook JSON on stdin)")
     h.add_argument("event")
@@ -111,18 +123,54 @@ def _drift_cmd(args):
 BEGIN, END = "<!-- UCCIF:BEGIN -->", "<!-- UCCIF:END -->"
 
 
+MAX_BLOCK_LINES = 15
+CMD_ORDER = ("build", "test", "lint", "dev", "run", "start", "typecheck")
+
+
+def build_block(project, desc, verified=()):
+    from uccif_lib import verify
+    """The CLAUDE.md block, composed here so it stays small and has one source: 2-3 description
+    lines from Claude, commands from the manifests, one pointer to the generated map skill."""
+    from pathlib import Path
+    from uccif_lib import skillgen, stack
+    name = Path(project.root).name
+    out = [BEGIN, "## %s" % name] + [l.strip() for l in desc.splitlines() if l.strip()][:3]
+    cmds = dict(reversed(stack.commands(project.root)))
+    label = verify.test_label(project, "test" in verified)
+    shown = ["%s `%s`%s" % (k, cmds[k], label if k == "test" else "") for k in CMD_ORDER if k in cmds][:4]
+    if shown:
+        out.append("Commands: " + " · ".join(shown))
+        src = stack._pm(project.root) if (Path(project.root) / "package.json").exists() else ""
+        out.append("Commands from %smanifest; only test is verified." % (src + "/" if src else ""))
+    maps = [n for n in skillgen.generated(project) if n.endswith("-map")]
+    ptr = "Code map: skill `%s` (modules, entry points, how to look code up)." % maps[0] if maps else ""
+    if (project.docs_dir / "summary.md").exists():
+        ptr += " Purpose, conventions, external services: `.claude/uccif/summary.md`."
+    if ptr.strip():
+        out.append(ptr.strip())
+    return "\n".join(out + [END])
+
+
 def _claude_md_cmd(args):
     from pathlib import Path
     from uccif_lib.paths import write_text_atomic
+    proj = resolve_project()
     body = sys.stdin.read().strip()
-    if BEGIN in body and END in body:
-        body = body[body.index(BEGIN):body.index(END) + len(END)]
-    elif body:
-        body = "%s\n%s\n%s" % (BEGIN, body, END)
-    else:
+    if not body:
         print("uccif: empty block on stdin", file=sys.stderr)
         return 1
-    path = Path(resolve_project().root) / "CLAUDE.md"
+    if BEGIN in body and END in body:  # a complete block: used as given
+        body = body[body.index(BEGIN):body.index(END) + len(END)]
+    else:  # 1-3 description lines: the command composes the rest
+        verified = {v.strip() for v in (args.verified or "").split(",") if v.strip()}
+        body = build_block(proj, body, verified)
+    if len(body.splitlines()) > MAX_BLOCK_LINES:
+        print("uccif: block has %d lines, max %d. Shorten it." % (len(body.splitlines()), MAX_BLOCK_LINES),
+              file=sys.stderr)
+        return 1
+    path = Path(proj.root) / "CLAUDE.md"
+    if path.is_symlink():  # e.g. CLAUDE.md -> AGENTS.md: edit the target, keep the link
+        path = Path(os.path.realpath(str(path)))
     try:
         old = path.read_text(encoding="utf-8")
     except OSError:
@@ -135,10 +183,38 @@ def _claude_md_cmd(args):
             return 3
         i, j = old.index(BEGIN), old.index(END) + len(END)
         new, what = old[:i] + body + old[j:], "block replaced in"
-    else:
+    else:  # appended at the end: the user's own text above is never touched
         new, what = old.rstrip("\n") + ("\n\n" if old.strip() else "") + body + "\n", "block appended to"
     write_text_atomic(path, new)
     print("%s %s" % (what, path))
+    return 0
+
+
+MAX_SUMMARY_LINES = 20
+
+
+def _summary_cmd(args):
+    """Written through Bash on purpose: Claude Code treats a Write/Edit under .claude/ as a
+    sensitive file and asks every time."""
+    from uccif_lib.paths import write_text_atomic
+    proj = resolve_project()
+    body = sys.stdin.read().strip()
+    lines = body.splitlines()
+    if not body:
+        print("uccif: empty summary on stdin", file=sys.stderr)
+        return 1
+    if len(lines) > MAX_SUMMARY_LINES:
+        print("uccif: summary has %d lines, max %d. Keep only what the graph cannot know."
+              % (len(lines), MAX_SUMMARY_LINES), file=sys.stderr)
+        return 1
+    path = proj.docs_dir / "summary.md"
+    if path.exists() and not args.replace:
+        print("summary.md exists: merge your lines into its text, then rerun with --replace.")
+        return 3
+    path.parent.mkdir(parents=True, exist_ok=True)
+    write_text_atomic(path, body + "\n")
+    drift.ack(proj)
+    print("wrote %s (%d lines); drift baseline stored" % (path, len(lines)))
     return 0
 
 
@@ -242,6 +318,10 @@ def main(argv=None):
             return _skills_cmd(args)
         if args.cmd == "codegraph":
             proj = resolve_project()
+            if args.action == "decline":
+                codegraph.decline(proj)
+                print("CodeGraph offer declined for this project.")
+                return 0
             st = dict(codegraph.state(proj), gitignored=codegraph.gitignored(proj), package=codegraph.PACKAGE)
             print(json.dumps(st, indent=1))
             return 0
@@ -249,6 +329,15 @@ def main(argv=None):
             return _drift_cmd(args)
         if args.cmd == "maintain":
             return maintain()
+        if args.cmd == "verify-tests":
+            from uccif_lib import verify
+            r = verify.verify(resolve_project())
+            state = "verified" if r["ok"] else ("deps not installed" if r.get("deps_missing") else "unverified")
+            print("test %s: %s (%s%s)" % (state, r["cmd"] or "-",
+                                         r["reason"], ", %s mode" % r["mode"] if r["mode"] else ""))
+            return 0  # never a reason to retry: the block shows (unverified)
+        if args.cmd == "summary" and args.action:
+            return _summary_cmd(args)
         if args.cmd == "claude-md" and args.action:
             return _claude_md_cmd(args)
     except task.TaskError as e:

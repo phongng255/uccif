@@ -92,7 +92,7 @@ def test_generate_writes_map_bugfix_and_module_skills(project, app):
     assert "- `src/main.py`" in text  # entry point: nothing imports it
     assert "yaml" not in text.split("\n## Modules")[0]
     bug = (app / (".claude/skills/%s-bugfix/SKILL.md" % slug)).read_text(encoding="utf-8")
-    assert "codegraph explore" in bug and "codegraph affected --stdin" in bug
+    assert "core rule 2" in bug and "uccif task start" not in bug
     assert "python -m pytest -q {file}" in bug and "cd web && npx vitest run {file}" in bug
     api = (app / (".claude/skills/%s-mod-api/SKILL.md" % slug)).read_text(encoding="utf-8")
     assert "- `tests/test_routes.py`" in api and "run one: `python -m pytest -q tests/test_routes.py`" in api
@@ -191,7 +191,7 @@ def test_session_start_bootstraps_and_lists_project_skills(project, app, tmp_pat
     assert (app / (".claude/skills/%s-map/SKILL.md" % slug)).exists()
     _, out = run_hook("session-start", dict(base, source="startup"))
     text = out["hookSpecificOutput"]["additionalContext"]
-    assert "Project skills generated from CodeGraph" in text and "%s-bugfix" % slug in text
+    assert "Code map: skill `%s-map`" % slug in text and "%s-bugfix" % slug in text and "surveyed" not in text
 
 
 def test_auto_setup_off_writes_nothing(project, app, tmp_path, monkeypatch):

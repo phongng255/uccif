@@ -30,7 +30,8 @@ from uccif_lib.paths import ensure_local, now_iso, read_json, write_json, write_
 SKILLS_DIR = Path(".claude") / "skills"
 TARGET_MODULES = 10
 MAX_MODULES = 24
-MAX_MODULE_SKILLS = 10
+MAX_MODULE_SKILLS = 5  # the largest modules; the others are rows of the map table
+MAX_DESC = 200
 MIN_MODULE_FILES = 3
 USE_EDGES = ("calls", "references", "instantiates", "extends", "implements", "imports", "renders", "decorates")
 NOTES_RE = re.compile(r"(<!-- uccif:notes -->\n)(.*?)(<!-- /uccif:notes -->)", re.S)
@@ -222,6 +223,7 @@ def analyse(project):
             dep[a][b] += n
     for i, m in enumerate(mods):
         fs = m["files"]
+        m["nodes"] = sum(files[f]["nodes"] for f in fs)
         m["label"] = label_of(m["dir"])
         m["role"] = role_of(m["dir"])
         m["langs"] = [l for l, _ in Counter(files[f]["lang"] for f in fs).most_common(3)]
@@ -259,7 +261,9 @@ def _sym(s):
 
 
 def _front(name, description):
-    description = re.sub(r"\s+", " ", description).strip().replace('"', "'")[:1000]
+    description = re.sub(r"\s+", " ", description).strip().replace('"', "'")
+    if len(description) > MAX_DESC:
+        description = description[:MAX_DESC - 3].rstrip(" ,;") + "..."
     return '---\nname: %s\ndescription: "%s"\n---\n\n%s\n' % (name, description, HEADER)
 
 
@@ -277,16 +281,14 @@ def _tests_block(runners, cmds):
 def render_map(name, proj, a, cmds, mod_skills):
     lang_txt = ", ".join("%s (%d)" % (l, n) for l, n in a["langs"])
     mods = a["modules"]
-    desc = ("Map of the %s codebase: where each kind of code lives (modules %s), entry points, routes, "
-            "build/test commands and how to look code up with CodeGraph. Use first when you need to know "
-            "where something is in %s, before searching or reading files."
-            % (proj, ", ".join(m["dir"] for m in mods[:8]), proj))
+    desc = ("Where code lives in %s: modules, entry points, routes, commands. Use first to locate anything in "
+            "%s, before searching or reading files." % (proj, proj))
     out = [_front(name, desc), "# %s — project map\n" % proj,
            "%d indexed files · %s · %d test files\n" % (a["files"], lang_txt, a["n_tests"]),
-           "## Modules\n", "| dir | files | role | skill |", "|---|---|---|---|"]
+           "## Modules\n", "| dir | files | role | skill, or key symbols |", "|---|---|---|---|"]
     for m in sorted(mods, key=lambda m: -len(m["files"]))[:20]:
-        out.append("| `%s` | %d | %s | %s |" % (m["dir"], len(m["files"]), m["role"] or "—",
-                                                mod_skills.get(m["dir"], "—")))
+        more = mod_skills.get(m["dir"]) or ", ".join("`%s`" % x["name"] for x in m["key_symbols"][:3]) or "—"
+        out.append("| `%s` | %d | %s | %s |" % (m["dir"], len(m["files"]), m["role"] or "—", more))
     if len(mods) > 20:
         out.append("| … | +%d smaller modules | | |" % (len(mods) - 20))
     if a["entries"]:
@@ -300,38 +302,27 @@ def render_map(name, proj, a, cmds, mod_skills):
         out += ["", "## Most-used symbols (a change here spreads)", ""] + ["- " + _sym(s) for s in a["hotspots"]]
     if cmds:
         out += ["", "## Commands", ""] + ["- %s: `%s`" % pc for pc in cmds[:12]]
-    out += ["", "## Look code up (cheapest first)", "",
-            "1. `codegraph_explore` MCP tool — or `codegraph explore \"<question>\"` in Bash / subagents.",
-            "2. `codegraph node <symbol|file>`, `codegraph callers|callees <symbol>`, "
-            "`codegraph files --filter <dir>`.",
-            "3. Grep/Glob with a `path` from the table above, only for literals, config and non-code files.",
-            "4. Read only the line range you still need.", "", NOTES % ""]
+    out += ["", "Look code up with CodeGraph (UCCIF core rule 2); Grep only with a `path` from the table above.",
+            "", NOTES % ""]
     return "\n".join(out)
 
 
 def render_bugfix(name, proj, a, runners, cmds):
-    desc = ("Shortest path to fix a bug, error, crash, failing test or wrong behaviour in %s: locate it with "
-            "CodeGraph from the error message or symptom, trace callers, check impact, make the smallest fix and "
-            "run only the affected tests. Use whenever the user reports something broken in %s." % (proj, proj))
+    desc = ("Fix a bug, error, crash or failing test in %s: locate with CodeGraph, check impact, smallest fix, run "
+            "only affected tests. Use whenever the user reports something broken." % proj)
     out = [_front(name, desc), "# Fix a bug in %s — shortest path\n" % proj,
-           "Every step answers from the graph first; open files only for lines it did not return.\n",
-           "1. **Locate.** `codegraph explore \"<error message | failing test name | symptom>\"`. With a stack",
-           "   trace, take the deepest frame inside this repo and run `codegraph node <that file>` (or the",
-           "   function name). The returned source counts as read.",
-           "2. **Trace the cause, not the symptom.** `codegraph callers <symbol>` (who passes the bad",
-           "   input) and `codegraph callees <symbol>` (what it relies on). Stop at the first frame whose",
-           "   input is already wrong.",
-           "3. **Literals the graph cannot see** (error text, config keys, env vars, SQL, templates):",
-           "   Grep with `path` set to the module dir from `%s-map`." % name.rsplit("-", 1)[0],
-           "4. **Reproduce** with the narrowest test or command before editing when it is cheap.",
-           "5. **Impact before editing a shared symbol:** `codegraph impact <symbol> --depth 2`. If it",
-           "   reaches more than one module, use the `uccif:code-impact-analysis` skill.",
-           "6. **Fix** with the smallest edit at the cause.",
-           "7. **Test only what is affected:** `git diff --name-only | codegraph affected --stdin --quiet`,",
-           "   then run those files:", ""]
+           "Lookups follow UCCIF core rule 2; returned source counts as read.\n",
+           "1. **Locate** from the error text, failing test or symptom (explore). With a stack trace, start at",
+           "   the deepest frame inside this repo (node).",
+           "2. **Trace the cause, not the symptom** (callers): stop at the first frame whose input is wrong.",
+           "3. **Literals the graph cannot see** (error text, config keys, env vars): Grep with `path` set to",
+           "   the module dir from `%s-map`." % name.rsplit("-", 1)[0],
+           "4. **Reproduce** with the narrowest test or command when it is cheap.",
+           "5. **Impact** before editing a shared symbol (impact, depth 2). It reaches more than one module →",
+           "   delegate to the `uccif:code-impact-analyzer` agent.",
+           "6. **Fix** with the smallest edit at the cause, then run the affected tests:", ""]
     out += ["   " + l for l in _tests_block(runners, cmds)]
-    out += ["", "8. Two failed fixes in a row → stop and gather evidence (logs, repro) first.",
-            "9. Record it: `uccif task checkpoint --issue \"<cause> -> <fix>\"`."]
+    out += ["", "7. A non-obvious cause worth keeping: `uccif task checkpoint --issue \"<cause> -> <fix>\"`."]
     if a["hotspots"]:
         out += ["", "## Hotspots (most-used symbols: a bug here shows up in many places)", ""]
         out += ["- " + _sym(s) for s in a["hotspots"][:6]]
@@ -343,9 +334,8 @@ def render_bugfix(name, proj, a, runners, cmds):
 
 def render_module(name, proj, m, runners):
     syms = [s["name"] for s in m["key_symbols"][:6]]
-    desc = ("%s module `%s/`%s%s. Use when reading, changing, debugging or reviewing code under %s/ "
-            "or these symbols." % (proj, m["dir"], (" (%s)" % m["role"]) if m["role"] else "",
-                                   (": " + ", ".join(syms)) if syms else "", m["dir"]))
+    desc = ("Use when reading or changing code under %s/ (%s%s)."
+            % (m["dir"], m["role"] or proj, (": " + ", ".join(syms[:4])) if syms else ""))
     out = [_front(name, desc),
            "# %s — `%s/`%s\n" % (proj, m["dir"], (" · " + m["role"]) if m["role"] else ""),
            "%d files · %s\n" % (len(m["files"]), ", ".join(m["langs"]))]
@@ -368,10 +358,7 @@ def render_module(name, proj, m, runners):
         cmd = stack.run_one(runners, m["tests"][0])
         if cmd:
             out.append("- run one: `%s`" % cmd)
-    out += ["", "## Look up here", "",
-            "- `codegraph explore \"<question> in %s\"`" % m["dir"],
-            "- `codegraph files --filter %s`" % m["dir"],
-            "- before changing a key symbol: `codegraph impact <symbol>`", "", NOTES % ""]
+    out += ["", NOTES % ""]
     return "\n".join(out)
 
 
@@ -422,7 +409,8 @@ def generate(project, force=False, dry_run=False):
     slug = slugify(proj, 30)
     runners = stack.test_runners(project.root)
     cmds = stack.commands(project.root)
-    mods = [m for m in sorted(a["modules"], key=lambda m: -len(m["files"]))
+    # largest by symbols, not files: a dir of 50 translation files is not a big module
+    mods = [m for m in sorted(a["modules"], key=lambda m: (-m.get("nodes", 0), -len(m["files"])))
             if len(m["files"]) >= MIN_MODULE_FILES and m["dir"] != "."][:MAX_MODULE_SKILLS]
     names, mod_skills = set(), {}
     for m in mods:

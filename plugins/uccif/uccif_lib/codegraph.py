@@ -73,6 +73,34 @@ def state(project):
     return {"cli": cli(), "indexed": indexed(project), "mcp": via is not None, "mcp_via": via}
 
 
+INSTALLER_MARK = "<!-- CODEGRAPH_START -->"
+
+
+def installer_leftovers(project):
+    """What `codegraph install --target=claude` writes and the plugin already provides: the
+    CLAUDE.md section (global ~/.claude/CLAUDE.md, ./.claude/CLAUDE.md or ./CLAUDE.md), a second
+    MCP server entry, its UserPromptSubmit hook. Read only: user files are never edited."""
+    home = Path(os.path.expanduser("~"))
+    root = Path(project.root)
+    out = []
+    for f in (home / ".claude" / "CLAUDE.md", root / ".claude" / "CLAUDE.md", root / "CLAUDE.md"):
+        try:
+            if INSTALLER_MARK in f.read_text(encoding="utf-8", errors="replace"):
+                out.append("instructions block in %s" % f)
+        except OSError:
+            pass
+    if plugin_mcp() and any(_mcp_in(p) for p in (home / ".claude.json", root / ".mcp.json")):
+        out.append("second codegraph MCP server in ~/.claude.json or .mcp.json")
+    for f in (home / ".claude" / "settings.json", root / ".claude" / "settings.json"):
+        try:
+            data = json.loads(f.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(data, dict) and "codegraph" in json.dumps(data.get("hooks") or {}).lower():
+            out.append("codegraph hook in %s" % f)
+    return out
+
+
 def gitignored(project):
     if (Path(project.root) / INDEX_DIR / ".gitignore").exists():  # newer CodeGraph ignores itself
         return True
@@ -87,25 +115,38 @@ def context_line(project):
     """One SessionStart line for Claude: how to look code up, or how to get CodeGraph."""
     st = state(project)
     if st["indexed"] and not st["cli"]:
-        return ("CodeGraph index exists (.codegraph/) but the `codegraph` CLI is not installed, so its MCP server "
-                "cannot start. Use bounded Grep/Glob, and offer the user once to run the uccif:codegraph skill "
-                "(installs the CLI; needs a Claude Code restart).")
+        return ("CodeGraph index exists but the `codegraph` CLI is not installed, so rule 2 cannot work: offer once "
+                "to reinstall it (uccif:codegraph skill); meanwhile bounded Grep/Glob.")
     if st["indexed"] and st["mcp"]:
-        return ("CodeGraph is active for this project (.codegraph/). To find or understand code, call the "
-                "`codegraph_explore` MCP tool FIRST (subagents / shell: `codegraph explore \"<question>\"`); "
-                "trust its source output instead of re-reading files, and use Grep/Glob only for what it cannot "
-                "answer (string literals, config, non-code files).")
+        return "CodeGraph is active (.codegraph/): follow core rule 2; trust its returned source as read."
     if st["indexed"]:
-        return ("CodeGraph index exists (.codegraph/) but its MCP server is not wired into Claude Code. Use "
-                "`codegraph explore \"<question>\"` in Bash before Grep/Read, and offer the user once to run the "
-                "uccif:codegraph skill (wires the MCP tool; needs a Claude Code restart).")
+        return ("CodeGraph index exists but its MCP server is not wired: use the Bash CLI forms of rule 2 "
+                "(`codegraph explore \"<question>\"`).")
     if st["cli"]:
-        return ("CodeGraph CLI is installed and this project is being indexed in the background "
-                "(`codegraph init --yes`); until `.codegraph/` exists use `codegraph explore` once it finishes, "
-                "or bounded Grep/Glob. If it never appears, run the uccif:codegraph skill.")
-    return ("CodeGraph is not installed. It replaces grep/find exploration with a pre-built code graph and saves "
-            "tokens. Ask the user once, in your next reply, whether to set it up; if they agree, run the "
-            "uccif:codegraph skill (never `npx codegraph`: that npm name is an unrelated package).")
+        return ("CodeGraph is indexing this project in the background (`codegraph init --yes`); until "
+                "`.codegraph/` exists use bounded Grep/Glob.")
+    if declined(project):
+        return "CodeGraph is not installed (the user declined): use bounded Grep/Glob."
+    return ("CodeGraph (pre-built code graph: finds and explains code for far fewer tokens than Grep/Read) is NOT "
+            "installed. In your FIRST reply, before other work, ask the user exactly one yes/no question: install "
+            "it now? On yes do it yourself in this session with the uccif:codegraph skill (install, "
+            "`codegraph init --yes`, `uccif skills generate`), then tell them one Claude Code restart loads "
+            "its MCP tool (use `codegraph explore` in Bash until then). On no run `uccif codegraph decline` "
+            "and never ask again. Never `npx codegraph`: that npm name is another package.")
+
+
+def _declined_path(project):
+    return Path(project.local_dir) / "codegraph.declined"
+
+
+def declined(project):
+    return _declined_path(project).exists()
+
+
+def decline(project):
+    from uccif_lib.paths import ensure_local
+    ensure_local(project)
+    _declined_path(project).write_text("1", encoding="utf-8")
 
 
 # ---- background bootstrap (run by `uccif maintain`, never by Claude's Bash) -------------
