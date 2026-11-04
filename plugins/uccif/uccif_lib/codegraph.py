@@ -103,9 +103,28 @@ def context_line(project):
         return ("CodeGraph CLI is installed and this project is being indexed in the background "
                 "(`codegraph init --yes`); until `.codegraph/` exists use `codegraph explore` once it finishes, "
                 "or bounded Grep/Glob. If it never appears, run the uccif:codegraph skill.")
-    return ("CodeGraph is not installed. It replaces grep/find exploration with a pre-built code graph and saves "
-            "tokens. Ask the user once, in your next reply, whether to set it up; if they agree, run the "
-            "uccif:codegraph skill (never `npx codegraph`: that npm name is an unrelated package).")
+    if declined(project):
+        return "CodeGraph is not installed (the user declined): use bounded Grep/Glob."
+    return ("CodeGraph (pre-built code graph: finds and explains code for far fewer tokens than Grep/Read) is NOT "
+            "installed. In your FIRST reply, before other work, ask the user exactly one yes/no question: install "
+            "it now? On yes do it yourself in this session with the uccif:codegraph skill (install, "
+            "`codegraph init --yes`, `uccif skills generate`), then tell them one Claude Code restart loads "
+            "its MCP tool (use `codegraph explore` in Bash until then). On no run `uccif codegraph decline` "
+            "and never ask again. Never `npx codegraph`: that npm name is another package.")
+
+
+def _declined_path(project):
+    return Path(project.local_dir) / "codegraph.declined"
+
+
+def declined(project):
+    return _declined_path(project).exists()
+
+
+def decline(project):
+    from uccif_lib.paths import ensure_local
+    ensure_local(project)
+    _declined_path(project).write_text("1", encoding="utf-8")
 
 
 # ---- background bootstrap (run by `uccif maintain`, never by Claude's Bash) -------------

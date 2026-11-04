@@ -98,7 +98,7 @@ def detect(project):
         "test_dirs": tests,
         "node": _package_json(root) if (root / "package.json").exists() else None,
         "docs": {n: (project.docs_dir / n).exists()
-                 for n in ("summary.md", "architecture.md", "decisions.md", "known-issues.md")},
+                 for n in ("summary.md", "decisions.md", "known-issues.md")},
         "claude_md_block": _has_block(root / "CLAUDE.md"),
         "uccif_v2": _v2_traces(root),
         "codegraph": dict(codegraph.state(project), gitignored=codegraph.gitignored(project)),
@@ -225,8 +225,8 @@ def doctor(project):
     check(cg["indexed"], "project indexed by CodeGraph (.codegraph/)",
           "project not indexed by CodeGraph (`codegraph init --yes`)")
     d = detect(project)
-    check(d["claude_md_block"], "CLAUDE.md has UCCIF block", "CLAUDE.md has no UCCIF block (run uccif:init)")
-    check(d["docs"]["summary.md"], "project docs present", "no .claude/uccif/summary.md (run uccif:init)")
+    info("CLAUDE.md UCCIF block: %s; project summary.md: %s (both optional, written by uccif:init)"
+         % ("present" if d["claude_md_block"] else "absent", "present" if d["docs"]["summary.md"] else "absent"))
     check(not d["uccif_v2"], "no UCCIF v2 leftovers", "UCCIF v2 still installed: %s" % ", ".join(d["uccif_v2"]))
     for lang, s in d["lsp"].items():
         check(s["installed"], "LSP for %s: %s" % (lang, s["binary"]),

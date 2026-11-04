@@ -13,7 +13,7 @@ description: Use before fixing a bug, adding a feature, writing tests or changin
    `uccif task close` it first (`--no-findings` if nothing worth keeping).
 3. `uccif task start "<title>" --type <type> --goal "<one line>"` — run it as its own command.
    Add `--rewrite` only if the user asked for a rewrite of an existing file.
-4. Scope: read `.claude/uccif/architecture.md` sections for the modules involved, then use
+4. Scope: load the `<project>-mod-*` skill of the modules involved, then use
    `uccif:smart-code-search`. List the files to read/change and the open questions.
 5. Constraints from the user's prompt ("don't change logic", "use tokens", "keep light theme")
    are acceptance criteria. Write them into the goal; at the end report each one as
@@ -36,8 +36,7 @@ description: Use before fixing a bug, adding a feature, writing tests or changin
 
 ## When to use an agent
 
-Only when much reading must shrink to a short answer: `uccif:project-analyst` (module not in
-architecture.md), `uccif:code-impact-analyzer` (shared change), `uccif:change-reviewer`
+Only when much reading must shrink to a short answer: `uccif:project-analyst` (module purpose unclear), `uccif:code-impact-analyzer` (shared change), `uccif:change-reviewer`
 (before close, per step 9). Not when the file is known or one search answers it.
 
 ## Output

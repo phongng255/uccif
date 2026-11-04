@@ -37,7 +37,9 @@ def build_parser():
     cl.add_argument("--issue", action="append")
     cl.add_argument("--no-findings", action="store_true")
 
-    sub.add_parser("codegraph", help="CodeGraph state for this project as JSON (cli, indexed, mcp)")
+    cgp = sub.add_parser("codegraph", help="CodeGraph state for this project as JSON (cli, indexed, mcp)")
+    cgp.add_argument("action", nargs="?", choices=("decline",),
+                     help="decline: the user does not want CodeGraph; stop offering it")
     sk = sub.add_parser("skills", help="project skills generated from the CodeGraph index").add_subparsers(dest="action")
     sg = sk.add_parser("generate", help="write/refresh .claude/skills/<project>-map, -bugfix, -mod-*")
     sg.add_argument("--force", action="store_true", help="also overwrite generated files you edited")
@@ -111,18 +113,47 @@ def _drift_cmd(args):
 BEGIN, END = "<!-- UCCIF:BEGIN -->", "<!-- UCCIF:END -->"
 
 
+MAX_BLOCK_LINES = 15
+CMD_ORDER = ("build", "test", "lint", "dev", "run", "start", "typecheck")
+
+
+def build_block(project, desc):
+    """The CLAUDE.md block, composed here so it stays small and has one source: 2-3 description
+    lines from Claude, commands from the manifests, one pointer to the generated map skill."""
+    from pathlib import Path
+    from uccif_lib import skillgen, stack
+    name = Path(project.root).name
+    out = [BEGIN, "## %s" % name] + [l.strip() for l in desc.splitlines() if l.strip()][:3]
+    cmds = dict(reversed(stack.commands(project.root)))
+    shown = ["%s `%s`" % (k, cmds[k]) for k in CMD_ORDER if k in cmds][:4]
+    if shown:
+        out.append("Commands: " + " · ".join(shown))
+    maps = [n for n in skillgen.generated(project) if n.endswith("-map")]
+    ptr = "Code map: skill `%s` (modules, entry points, how to look code up)." % maps[0] if maps else ""
+    if (project.docs_dir / "summary.md").exists():
+        ptr += " Purpose, conventions, external services: `.claude/uccif/summary.md`."
+    if ptr.strip():
+        out.append(ptr.strip())
+    return "\n".join(out + [END])
+
+
 def _claude_md_cmd(args):
     from pathlib import Path
     from uccif_lib.paths import write_text_atomic
+    proj = resolve_project()
     body = sys.stdin.read().strip()
-    if BEGIN in body and END in body:
-        body = body[body.index(BEGIN):body.index(END) + len(END)]
-    elif body:
-        body = "%s\n%s\n%s" % (BEGIN, body, END)
-    else:
+    if not body:
         print("uccif: empty block on stdin", file=sys.stderr)
         return 1
-    path = Path(resolve_project().root) / "CLAUDE.md"
+    if BEGIN in body and END in body:  # a complete block: used as given
+        body = body[body.index(BEGIN):body.index(END) + len(END)]
+    else:  # 1-3 description lines: the command composes the rest
+        body = build_block(proj, body)
+    if len(body.splitlines()) > MAX_BLOCK_LINES:
+        print("uccif: block has %d lines, max %d. Shorten it." % (len(body.splitlines()), MAX_BLOCK_LINES),
+              file=sys.stderr)
+        return 1
+    path = Path(proj.root) / "CLAUDE.md"
     try:
         old = path.read_text(encoding="utf-8")
     except OSError:
@@ -135,7 +166,7 @@ def _claude_md_cmd(args):
             return 3
         i, j = old.index(BEGIN), old.index(END) + len(END)
         new, what = old[:i] + body + old[j:], "block replaced in"
-    else:
+    else:  # appended at the end: the user's own text above is never touched
         new, what = old.rstrip("\n") + ("\n\n" if old.strip() else "") + body + "\n", "block appended to"
     write_text_atomic(path, new)
     print("%s %s" % (what, path))
@@ -242,6 +273,10 @@ def main(argv=None):
             return _skills_cmd(args)
         if args.cmd == "codegraph":
             proj = resolve_project()
+            if args.action == "decline":
+                codegraph.decline(proj)
+                print("CodeGraph offer declined for this project.")
+                return 0
             st = dict(codegraph.state(proj), gitignored=codegraph.gitignored(proj), package=codegraph.PACKAGE)
             print(json.dumps(st, indent=1))
             return 0

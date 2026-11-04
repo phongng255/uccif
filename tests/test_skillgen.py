@@ -191,7 +191,7 @@ def test_session_start_bootstraps_and_lists_project_skills(project, app, tmp_pat
     assert (app / (".claude/skills/%s-map/SKILL.md" % slug)).exists()
     _, out = run_hook("session-start", dict(base, source="startup"))
     text = out["hookSpecificOutput"]["additionalContext"]
-    assert "Project skills generated from CodeGraph" in text and "%s-bugfix" % slug in text
+    assert "Code map: skill `%s-map`" % slug in text and "%s-bugfix" % slug in text and "surveyed" not in text
 
 
 def test_auto_setup_off_writes_nothing(project, app, tmp_path, monkeypatch):

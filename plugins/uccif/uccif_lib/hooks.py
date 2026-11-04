@@ -153,21 +153,15 @@ def on_session_start(data, project):
     spawn(["maintain"], project)  # drift check, CodeGraph index + project skills in the background
     parts.append(codegraph.context_line(project))
     mine = skillgen.generated(project)
-    if mine:
-        maps = [n for n in mine if n.endswith("-map")]
-        fixes = [n for n in mine if n.endswith("-bugfix")]
-        parts.append("Project skills generated from CodeGraph in .claude/skills/: %s%s, %d module skills. "
-                     "Use the map skill to know where code lives and the bugfix skill for any reported bug."
-                     % (", ".join(maps + fixes), "" if maps else " (no map)", len(mine) - len(maps) - len(fixes)))
+    maps = [n for n in mine if n.endswith("-map")]
+    if maps:  # the map skill is the code map; init is optional
+        parts.append("Code map: skill `%s` (modules, entry points, commands). Module skills: `%s-mod-*`; "
+                     "bug reports: `%s-bugfix`." % (maps[0], maps[0][:-4], maps[0][:-4]))
     offer = lsp_offer(project)
     if offer:
         parts.append(offer)
-    docs = project.docs_dir
-    if (docs / "summary.md").exists():
-        parts.append("Project docs: .claude/uccif/ (summary.md, architecture.md). Read only the section you need.")
-    else:
-        parts.append("UCCIF: this project has not been surveyed yet. Before the first code change, "
-                     "run the uccif:init skill (limited survey, read-only until docs are written).")
+    if (project.docs_dir / "summary.md").exists():
+        parts.append("Project purpose, conventions, external services: .claude/uccif/summary.md.")
     lines = task.summary_lines(project)
     if lines:
         parts.append("\n".join(lines) + "\nIf the user's request continues it, use the uccif:resume skill.")

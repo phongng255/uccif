@@ -60,7 +60,7 @@ def test_session_start_injects_rules_on_startup_and_compact(base, project, tmp_p
         assert "UCCIF CORE RULES" in ctx(out) and "Reply to the user in en" in ctx(out)
     _, out = run_hook("session-start", dict(base, source="resume"))
     assert "UCCIF CORE RULES" not in ctx(out)
-    assert "not been surveyed" in ctx(out)
+    assert "surveyed" not in ctx(out) and "uccif:init" not in ctx(out)  # init is optional
     assert "export UCCIF_DATA_DIR=" in env.read_text()
 
 
@@ -69,7 +69,7 @@ def test_session_start_mentions_docs_and_open_task(base, project):
     (project.docs_dir / "summary.md").write_text("x")
     task.start(project, "Fix login", "bug")
     _, out = run_hook("session-start", dict(base, source="startup"))
-    assert "Project docs: .claude/uccif/" in ctx(out)
+    assert ".claude/uccif/summary.md" in ctx(out)
     assert "Open task T-001 (bug): Fix login" in ctx(out)
 
 
@@ -248,8 +248,17 @@ def test_session_start_offers_codegraph_when_missing(base, project, monkeypatch)
     _cg_env(monkeypatch, project)
     _, out = run_hook("session-start", dict(base, source="startup"))
     text = ctx(out)
-    assert "CodeGraph is not installed" in text and "uccif:codegraph" in text
-    assert "never `npx codegraph`" in text
+    assert "NOT installed" in text and "FIRST reply" in text and "yes/no" in text
+    assert "uccif:codegraph" in text and "uccif skills generate" in text
+    assert "Never `npx codegraph`" in text
+
+
+def test_codegraph_decline_stops_the_offer(base, project, monkeypatch):
+    from uccif_lib import cli
+    _cg_env(monkeypatch, project)
+    assert cli.main(["codegraph", "decline"]) == 0
+    _, out = run_hook("session-start", dict(base, source="startup"))
+    assert "FIRST reply" not in ctx(out) and "declined" in ctx(out)
 
 
 def test_session_start_cli_without_index(base, project, monkeypatch):
@@ -308,7 +317,8 @@ def test_drift_reaches_claude_then_ack_clears_it(base, project):
     run_hook("stop", dict(base))
     _, out = run_hook("user-prompt-submit", dict(base, prompt="hi"))
     text = ctx(out)
-    assert "new source dirs: src/orders" in text and "added pinia" in text and "uccif drift ack" in text
+    assert "added pinia" in text and "uccif drift ack" in text
+    assert "src/orders" not in text and "architecture" not in text  # dirs: the map skill refreshes itself
     edit = dict(base, tool_name="Edit", tool_input={"file_path": str(project.root / "src" / "a.ts")})
     _src(project, "src/a.ts", "export const a = 2\n")  # a change inside code is not drift
     run_hook("post-tool-use", edit)

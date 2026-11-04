@@ -3,9 +3,11 @@
 A fingerprint of the repo's shape (source dirs to depth 2, manifest hashes,
 declared dependencies) is kept in <project>/.claude/uccif/.local/drift.json,
 git-ignored so branches and teammates never conflict over it. `check` compares it with the
-current repo and records pending items naming the doc to update; the next
-UserPromptSubmit hook hands them to Claude. Changes inside a function never
-count as drift. `ack` stores the current fingerprint once docs are updated.
+current repo. Moved/added source dirs are not reported: the generated map skill is rewritten
+by `uccif maintain` by itself. What only a person can know (external services after a new
+dependency, commands after a build change) is recorded as pending items naming summary.md or
+the CLAUDE.md block, and only when summary.md exists. The next UserPromptSubmit hook hands them
+to Claude. Changes inside a function never count as drift. `ack` stores the current fingerprint.
 """
 
 import hashlib
@@ -72,24 +74,18 @@ def fingerprint(project, files=None):
 def diff(old, new):
     """Human-readable drift items: (what changed, doc to update)."""
     items = []
-    add = sorted(set(new["dirs"]) - set(old.get("dirs", [])))
-    rem = sorted(set(old.get("dirs", [])) - set(new["dirs"]))
-    if add:
-        items.append(("new source dirs: %s" % ", ".join(add[:6]), "architecture.md (+ summary.md layout)"))
-    if rem:
-        items.append(("removed source dirs: %s" % ", ".join(rem[:6]), "architecture.md (+ summary.md layout)"))
     dadd = sorted(set(new["deps"]) - set(old.get("deps", [])))
     drem = sorted(set(old.get("deps", [])) - set(new["deps"]))
     if dadd or drem:
         parts = (["added " + ", ".join(d.split(":", 1)[1] for d in dadd[:6])] if dadd else []) + \
                 (["removed " + ", ".join(d.split(":", 1)[1] for d in drem[:6])] if drem else [])
-        items.append(("dependencies: %s" % "; ".join(parts), "summary.md (stack)"))
+        items.append(("dependencies: %s" % "; ".join(parts), "summary.md (external services, conventions)"))
     om, nm = old.get("manifests", {}), new["manifests"]
     changed = sorted(m for m in set(om) | set(nm) if om.get(m) != nm.get(m))
     other = [m for m in changed if m not in ("package.json", "requirements.txt") or not (dadd or drem)]
     if other:
         items.append(("build/config files changed: %s" % ", ".join(other[:6]),
-                      "summary.md (commands) and architecture.md if entry/routing/build changed"))
+                      "CLAUDE.md block commands (`uccif claude-md write --replace`) and summary.md if conventions changed"))
     return items
 
 
