@@ -154,9 +154,48 @@ def test_stack_runners_in_sub_packages(tmp_path):
 def fake_cli(tmp_path, ok=True):
     """A `codegraph` executable that builds the fake index (or fails)."""
     script = tmp_path / "fakecg.py"
-    script.write_text("import sys, os\nsys.path.insert(0, %r)\nfrom test_skillgen import make_db\n"
-                      "from pathlib import Path\n%s\n" % (os.path.dirname(__file__),
-                                                         "make_db(Path.cwd())" if ok else "sys.exit(3)"))
+    # Execute make_db without importing test_skillgen so child subprocess doesn't import pytest
+    code = f'''import sys, os, sqlite3, json
+from pathlib import Path
+if not {ok}:
+    sys.exit(3)
+FILES = {repr(FILES)}
+root = Path.cwd()
+d = root / ".codegraph"
+d.mkdir(exist_ok=True)
+if (d / "codegraph.db").exists():
+    (d / "codegraph.db").unlink()
+con = sqlite3.connect(str(d / "codegraph.db"))
+con.executescript("""
+    CREATE TABLE files (path TEXT PRIMARY KEY, content_hash TEXT, language TEXT, size INTEGER,
+                        modified_at INTEGER, indexed_at INTEGER, node_count INTEGER);
+    CREATE TABLE nodes (id TEXT PRIMARY KEY, kind TEXT, name TEXT, qualified_name TEXT, file_path TEXT,
+                        language TEXT, start_line INTEGER, end_line INTEGER);
+    CREATE TABLE edges (id INTEGER PRIMARY KEY AUTOINCREMENT, source TEXT, target TEXT, kind TEXT,
+                        metadata TEXT, line INTEGER);
+""")
+for p, lang in FILES.items():
+    con.execute("INSERT INTO files VALUES (?,?,?,?,?,?,?)", (p, "h", lang, 10, 0, 0, 2))
+    con.execute("INSERT INTO nodes VALUES (?,?,?,?,?,?,?,?)", ("file:" + p, "file", p, p, p, lang, 1, 1))
+syms = [("get_db", "function", "src/core/db.py", 10), ("Settings", "class", "src/core/config.py", 3),
+        ("current_user", "function", "src/api/deps.py", 7), ("fmt", "function", "src/utils/fmt.py", 1),
+        ("Button", "function", "web/src/Button.tsx", 4)]
+for name, kind, path, line in syms:
+    con.execute("INSERT INTO nodes VALUES (?,?,?,?,?,?,?,?)",
+                ("%s:%s" % (kind, name), kind, name, name, path, "python", line, line + 5))
+con.execute("INSERT INTO nodes VALUES ('route:1','route','GET /items','GET /items','src/api/routes.py',"
+            "'python',12,12)")
+uses = [("src/api/routes.py", "function:get_db"), ("src/api/deps.py", "function:get_db"),
+        ("src/api/auth.py", "function:get_db"), ("src/api/routes.py", "function:current_user"),
+        ("src/api/auth.py", "class:Settings"), ("src/core/db.py", "class:Settings"),
+        ("tests/test_routes.py", "function:current_user"), ("web/src/App.tsx", "function:Button"),
+        ("src/main.py", "function:fmt")]
+for src, dst in uses:
+    con.execute("INSERT INTO edges (source, target, kind, line) VALUES (?,?,?,1)", ("file:" + src, dst, "calls"))
+con.commit()
+con.close()
+'''
+    script.write_text(code, encoding="utf-8")
     if os.name == "nt":
         exe = tmp_path / "codegraph.bat"
         exe.write_text('@"%s" "%s" %%*\n' % (sys.executable, script))
