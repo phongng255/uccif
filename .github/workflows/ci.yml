@@ -36,3 +36,5 @@ jobs:
       - run: npm install -g @anthropic-ai/claude-code
       - run: claude plugin validate plugins/uccif --strict
       - run: claude plugin validate . --strict
+      - run: python3 plugins/uccif/scripts/build_gemini.py --check
+      - run: npx -y @google/gemini-cli@0.66.0 extensions validate .

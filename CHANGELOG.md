@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased — Gemini CLI extension (stage 2)
+
+- The repo root is also a Gemini CLI extension: `gemini-extension.json`, `hooks/hooks.json` and
+  `skills/`. `gemini extensions install <github url>` reads the manifest only at the repo root
+  (tested with Gemini CLI 0.66.0: "Configuration file not found at
+  /tmp/gemini-extension…/gemini-extension.json" when it sits in a subdirectory), so it cannot live
+  under `plugins/`.
+  - The manifest declares the same CodeGraph MCP server as the Claude plugin
+    (`codegraph serve --mcp`, `CODEGRAPH_MCP_TOOLS=explore`), a 4-line context file and three
+    settings (`UCCIF_REPLY_LANGUAGE`, `UCCIF_TOKEN_REPORT`, `UCCIF_AUTO_SETUP`).
+  - Hooks call `"${extensionPath}${/}plugins${/}uccif${/}bin${/}uccif" hook --host gemini <Event>`
+    for SessionStart, BeforeAgent, BeforeTool, AfterTool, AfterAgent, PreCompress and SessionEnd.
+  - `skills/` is generated from `plugins/uccif/skills/` by `plugins/uccif/scripts/build_gemini.py`.
+    It is one source, and CI fails when the copies are stale.
+- Under Gemini, SessionStart also gives the full path of `uccif`, because it is not on PATH there,
+  and the UCCIF block of AGENTS.md. Gemini reads only GEMINI.md by default, and the rest of a
+  user's AGENTS.md is never injected.
+- The token line reads Gemini CLI transcripts: JSONL records with `tokens`, where an updated
+  message is appended again under the same id; older whole-JSON sessions are read too.
+- CI: `gemini extensions validate .` and a skills sync check.
+
 ## Unreleased — one core for Claude Code, Gemini CLI and Antigravity (stage 1)
 
 - Host adapter (`uccif_lib/hosts.py`): `uccif hook --host claude|gemini|antigravity <event>`.

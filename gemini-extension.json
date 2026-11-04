@@ -1,0 +1,33 @@
+{
+  "name": "uccif",
+  "version": "1.1.0",
+  "description": "Task memory, token line, project notes and CodeGraph setup for any repository. Same core as the UCCIF Claude Code plugin. Never blocks.",
+  "contextFileName": "plugins/uccif/gemini/CONTEXT.md",
+  "mcpServers": {
+    "codegraph": {
+      "command": "codegraph",
+      "args": ["serve", "--mcp"],
+      "env": {
+        "CODEGRAPH_MCP_TOOLS": "explore",
+        "CODEGRAPH_TELEMETRY": "0"
+      }
+    }
+  },
+  "settings": [
+    {
+      "name": "Reply language",
+      "description": "Language Gemini uses when replying to you (framework files stay English). Example: vi, en.",
+      "envVar": "UCCIF_REPLY_LANGUAGE"
+    },
+    {
+      "name": "Token line",
+      "description": "true or false: one line with the real token usage after each reply.",
+      "envVar": "UCCIF_TOKEN_REPORT"
+    },
+    {
+      "name": "Automatic project setup",
+      "description": "true or false: index each project with CodeGraph in the background and write project skills to .agents/skills/.",
+      "envVar": "UCCIF_AUTO_SETUP"
+    }
+  ]
+}

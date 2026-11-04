@@ -64,15 +64,21 @@ def main():
         return ((json.loads(text).get("hookSpecificOutput") or {}).get("additionalContext") or "") if text else ""
 
     base = {"session_id": "s1", "cwd": str(repo)}
-    ss = hook("session-start", dict(base, source="startup"))
+    if host == "claude":
+        ss = hook("session-start", dict(base, source="startup"))
     sys.stdin = io.StringIO("A demo lib.\nAdds numbers.")
     real_stdout, sys.stdout = sys.stdout, io.StringIO()
     cli.main(["claude-md", "write"])
     sys.stdout = real_stdout
+    if host != "claude":  # the AGENTS.md block reaches Gemini through SessionStart
+        ss = hook("session-start", dict(base, source="startup"))
     ups = hook("user-prompt-submit", dict(base, prompt="fix the add function"))
-    instr = expand(repo / "CLAUDE.md")
-    rows = [("SessionStart context", ss), ("UserPromptSubmit context", ups),
-            ("instructions as loaded (CLAUDE.md + imports)", instr)]
+    if host == "claude":
+        instr, label = expand(repo / "CLAUDE.md"), "instructions as loaded (CLAUDE.md + imports)"
+    else:  # Gemini loads the extension's context file; it reads no AGENTS.md / CLAUDE.md by default
+        ctx_file = json.loads((HERE.parent / "gemini-extension.json").read_text(encoding="utf-8"))["contextFileName"]
+        instr, label = (HERE.parent / ctx_file).read_text(encoding="utf-8"), "extension context file"
+    rows = [("SessionStart context", ss), ("UserPromptSubmit context", ups), (label, instr)]
     print("| what | chars | ~tokens (chars/4) |\n|---|---:|---:|")
     for name, text in rows:
         print("| %s | %d | %d |" % (name, len(text), round(len(text) / 4)))

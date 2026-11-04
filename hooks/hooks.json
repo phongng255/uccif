@@ -1,0 +1,91 @@
+{
+  "description": "UCCIF core hooks for Gemini CLI. Every handler exits 0 and none of them blocks. Logic is shared with the Claude Code plugin (uccif hook --host gemini).",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "name": "uccif-SessionStart",
+            "command": "\"${extensionPath}${/}plugins${/}uccif${/}bin${/}uccif\" hook --host gemini SessionStart",
+            "timeout": 10000
+          }
+        ]
+      }
+    ],
+    "BeforeAgent": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "name": "uccif-BeforeAgent",
+            "command": "\"${extensionPath}${/}plugins${/}uccif${/}bin${/}uccif\" hook --host gemini BeforeAgent",
+            "timeout": 5000
+          }
+        ]
+      }
+    ],
+    "BeforeTool": [
+      {
+        "matcher": "run_shell_command|grep_search|glob",
+        "hooks": [
+          {
+            "type": "command",
+            "name": "uccif-BeforeTool",
+            "command": "\"${extensionPath}${/}plugins${/}uccif${/}bin${/}uccif\" hook --host gemini BeforeTool",
+            "timeout": 5000
+          }
+        ]
+      }
+    ],
+    "AfterTool": [
+      {
+        "matcher": "replace|write_file|run_shell_command|grep_search|glob",
+        "hooks": [
+          {
+            "type": "command",
+            "name": "uccif-AfterTool",
+            "command": "\"${extensionPath}${/}plugins${/}uccif${/}bin${/}uccif\" hook --host gemini AfterTool",
+            "timeout": 5000
+          }
+        ]
+      }
+    ],
+    "AfterAgent": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "name": "uccif-AfterAgent",
+            "command": "\"${extensionPath}${/}plugins${/}uccif${/}bin${/}uccif\" hook --host gemini AfterAgent",
+            "timeout": 10000
+          }
+        ]
+      }
+    ],
+    "PreCompress": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "name": "uccif-PreCompress",
+            "command": "\"${extensionPath}${/}plugins${/}uccif${/}bin${/}uccif\" hook --host gemini PreCompress",
+            "timeout": 10000
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "name": "uccif-SessionEnd",
+            "command": "\"${extensionPath}${/}plugins${/}uccif${/}bin${/}uccif\" hook --host gemini SessionEnd",
+            "timeout": 10000
+          }
+        ]
+      }
+    ]
+  }
+}

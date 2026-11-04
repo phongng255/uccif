@@ -49,9 +49,10 @@ def options():
     """userConfig values. Hooks get CLAUDE_PLUGIN_OPTION_*; Bash-run commands
     don't, so SessionStart caches them in <data_root>/options.json."""
     cached = read_json(data_root() / CORE_MARKER, {})
-    lang = os.environ.get("CLAUDE_PLUGIN_OPTION_REPLY_LANGUAGE") or cached.get("reply_language") or "vi"
-    report = _bool(os.environ.get("CLAUDE_PLUGIN_OPTION_TOKEN_REPORT"), cached.get("token_report", True))
-    setup = _bool(os.environ.get("CLAUDE_PLUGIN_OPTION_AUTO_SETUP"), cached.get("auto_setup", True))
+    env = lambda key: os.environ.get("CLAUDE_PLUGIN_OPTION_" + key) or os.environ.get("UCCIF_" + key)
+    lang = env("REPLY_LANGUAGE") or cached.get("reply_language") or "vi"  # UCCIF_*: Gemini extension settings
+    report = _bool(env("TOKEN_REPORT"), cached.get("token_report", True))
+    setup = _bool(env("AUTO_SETUP"), cached.get("auto_setup", True))
     return {"reply_language": lang, "token_report": report, "auto_setup": setup}
 
 
@@ -170,10 +171,31 @@ def on_session_start(data, project):
     lines = task.summary_lines(project)
     if lines:
         parts.append("\n".join(lines) + " (continue it if the request is related: uccif:resume)")
+    host = data.get("_host") or "claude"
+    if host != "claude":
+        parts.extend(_other_host_lines(project, host))
     fields = {"rule": "context", "target": source}
     if n_user:
         fields["user_rules"] = n_user
     return _ctx("SessionStart", "\n\n".join(parts)), fields
+
+
+UCCIF_BIN = Path(__file__).resolve().parent.parent / "bin" / "uccif"
+
+
+def _other_host_lines(project, host):
+    """What Claude Code gets from the plugin system and other hosts do not: the `uccif` command
+    on PATH, and the project's AGENTS.md (Gemini CLI reads only GEMINI.md by default). Only the
+    UCCIF block is injected, never the rest of a user's AGENTS.md."""
+    out = ['`uccif` is not on PATH here: run it as `"%s"` (same arguments).' % UCCIF_BIN.as_posix()]
+    try:
+        text = (Path(project.root) / "AGENTS.md").read_text(encoding="utf-8")
+    except OSError:
+        text = ""
+    b, e = "<!-- UCCIF:BEGIN -->", "<!-- UCCIF:END -->"
+    if b in text and e in text:
+        out.append("Project notes (AGENTS.md):\n" + text[text.index(b) + len(b):text.index(e)].strip())
+    return out
 
 
 def _prompt_path(project):
