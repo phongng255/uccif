@@ -16,9 +16,8 @@ at the lowest token cost. Read little, write short, mark every claim.
    entry points, commands) and map the rest with `codegraph explore` / `codegraph files`, not by
    opening files. Do not re-derive what these report.
 2. **Choose the reader.**
-   - `large_repo: false` → survey yourself.
-   - `large_repo: true` → delegate to the `uccif:project-analyst` agent, one call per top-level
-     module, and use only its summaries.
+   `large_repo: false` → survey yourself. `large_repo: true` → delegate to the
+   `uccif:project-analyst` agent, one call per top-level module, and use only its summaries.
 3. **Read at most ~25 files**: manifests, entry candidates, router/DI/build config, and one
    representative file per top-level source dir. Use offset/limit; never read lockfiles,
    generated or minified files. Skip anything already in existing docs unless `$ARGUMENTS`
@@ -42,13 +41,9 @@ at the lowest token cost. Read little, write short, mark every claim.
    <only conventions a newcomer would get wrong; each with [src:]>
    <!-- UCCIF:END -->
    ```
-   Write it with `uccif claude-md write` (block on stdin, a heredoc), never with a hand edit:
-   - **No `CLAUDE.md`**: the command creates it holding only the block. No question needed.
-   - **`CLAUDE.md` without the block**: it appends the block; existing text is untouched. No
-     question needed.
-   - **Block already present**: the command refuses (exit 3). Show the diff, **ask**, then rerun
-     with `--replace`; only the text between the markers changes.
-   Never finish init with no UCCIF block in `CLAUDE.md` unless the user declined a replacement.
+   Write it with `uccif claude-md write` (block on stdin, heredoc), never by hand. No
+   `CLAUDE.md`: it creates the file; file without the block: it appends; no question for either.
+   Block already present: it refuses (exit 3); show the diff, **ask**, rerun with `--replace`.
 7. **UCCIF v2 migration** (only if `detect.uccif_v2` is non-empty). Do not delete anything.
    - Read `.claude/settings.json` / `settings.local.json`; list the exact hook entries that
      call `uccif.py`, with line numbers, and any `deny`/`ask` rules v2 added. Claude Code

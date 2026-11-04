@@ -83,7 +83,7 @@ def test_session_start_marks_previous_unclean(base, project):
 
 def test_user_prompt_submit(base, project):
     _, out = run_hook("user-prompt-submit", dict(base, prompt="hello"))
-    assert ctx(out).startswith("Reply in vi. Do ops work yourself. To find code, query CodeGraph first")
+    assert "Reply in vi. Do ops work yourself. To find code, query CodeGraph first" in ctx(out)
     task.start(project, "Fix login", "bug")
     _, out = run_hook("user-prompt-submit", dict(base, prompt="go on"))
     lines = ctx(out).splitlines()
@@ -111,6 +111,43 @@ def test_pre_tool_use_agent_bash(agent, cmd, decision, base, project):
         assert rows == []  # skipped PreToolUse calls are not logged
     else:
         assert rows[0]["decision"] == decision
+
+
+def _edit(base, project, name="src/a.ts"):
+    return dict(base, tool_name="Edit", tool_input={"file_path": str(project.root / name)})
+
+
+def test_edit_without_task_is_nudged(base, project):
+    code, out = run_hook("pre-tool-use", _edit(base, project))
+    assert code == 0 and "no open task" in ctx(out)
+    assert hook_log(project)[0]["rule"] == "edit-no-task"
+
+
+def test_edit_with_task_quick_or_framework_file_is_not_nudged(base, project):
+    _, out = run_hook("pre-tool-use", _edit(base, project, ".claude/x.md"))
+    assert out is None
+    run_hook("user-prompt-submit", dict(base, prompt="fix typo #quick"))
+    _, out = run_hook("pre-tool-use", _edit(base, project))
+    assert out is None
+    run_hook("user-prompt-submit", dict(base, prompt="real change"))
+    task.start(project, "a", "ui")
+    _, out = run_hook("pre-tool-use", _edit(base, project))
+    assert out is None
+
+
+def test_search_nudge_once_per_window(base, project):
+    data = dict(base, tool_name="Grep", tool_input={"pattern": "x"})
+    _, out = run_hook("pre-tool-use", data)
+    assert "CodeGraph" in ctx(out)
+    _, out = run_hook("pre-tool-use", data)
+    assert out is None
+
+
+def test_prompt_without_task_asks_for_one(base, project):
+    _, out = run_hook("user-prompt-submit", dict(base, prompt="sửa bug"))
+    assert "No open UCCIF task" in ctx(out)
+    _, out = run_hook("user-prompt-submit", dict(base, prompt="sửa #quick"))
+    assert "No open UCCIF task" not in ctx(out)
 
 
 def test_post_tool_use_records_file(base, project):

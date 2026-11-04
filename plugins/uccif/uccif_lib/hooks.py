@@ -181,7 +181,13 @@ def on_user_prompt_submit(data, project):
     prompt = data.get("prompt") or ""
     lang = options()["reply_language"]
     quick = "#quick" in prompt
+    _set_quick(project, quick)
     lines = [] if quick else task.summary_lines(project)
+    if not quick and not lines:
+        lines.append("No open UCCIF task. If this prompt changes code: load the matching uccif / project "
+                     "skill, then `uccif task start \"<title>\" --type <type>` before the first edit "
+                     "(a new change = a new task, even after the last one was closed). Ops work and "
+                     "`#quick` edits need no task.")
     stale = drift.pending(project)
     if stale:
         lines.append("Project docs are stale (.claude/uccif/): " + "; ".join(stale) +
@@ -193,9 +199,76 @@ def on_user_prompt_submit(data, project):
                                                        "drift": len(stale) or None}
 
 
+EDIT_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
+NUDGE_EVERY = 600  # seconds between two search nudges
+
+
+def _quick_path(project):
+    return Path(project.data_dir) / "quick.flag"
+
+
+def _set_quick(project, quick):
+    try:
+        if quick:
+            _quick_path(project).parent.mkdir(parents=True, exist_ok=True)
+            _quick_path(project).write_text("1", encoding="utf-8")
+        else:
+            _quick_path(project).unlink()
+    except OSError:
+        pass
+
+
+def _is_quick(project):
+    return _quick_path(project).exists()
+
+
+def _nudge_due(project, name):
+    """True at most once per NUDGE_EVERY seconds for the marker `name`."""
+    f = Path(project.data_dir) / name
+    try:
+        if time.time() - f.stat().st_mtime < NUDGE_EVERY:
+            return False
+    except OSError:
+        pass
+    try:
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text("1", encoding="utf-8")
+    except OSError:
+        pass
+    return True
+
+
+def _main_agent_nudge(data, project):
+    """Reminders (never a block) for the main agent: edit without a task, search without CodeGraph."""
+    tool = data.get("tool_name")
+    ti = data.get("tool_input") or {}
+    if tool in EDIT_TOOLS:
+        path = ti.get("file_path") or ti.get("notebook_path") or ""
+        rel = _rel(project, path) if path else None
+        cur = task.load_current(project)
+        if (not rel or rel.startswith(".claude/") or _is_quick(project)
+                or (cur and cur.get("status") != "done")):
+            return None, {"decision": "skip"}
+        msg = ("UCCIF: you are about to edit %s with no open task. Start one first: load the matching "
+               "skill (the project's -mod-* / -bugfix skill, or uccif:task-context), then "
+               "`uccif task start \"<title>\" --type <type>`. If this is a tiny edit the user marked "
+               "#quick, ignore this." % rel)
+        return _ctx("PreToolUse", msg), {"rule": "edit-no-task", "target": rel}
+    is_search = tool in ("Grep", "Glob") or (
+        tool == "Bash" and SEARCH_CMD.search(" " + (ti.get("command") or "")))
+    if is_search and _nudge_due(project, "search.nudge"):
+        msg = ("UCCIF: to find code, ask CodeGraph first (`codegraph_explore`, or `codegraph explore` "
+               "in Bash) and read the matching project -mod-* skill. If Grep/Glob is still needed "
+               "(a literal string), scope it to the module directory, not the whole repo.")
+        return _ctx("PreToolUse", msg), {"rule": "search-codegraph-first", "target": tool}
+    return None, {"decision": "skip"}
+
+
 def on_pre_tool_use(data, project):
     agent = (data.get("agent_type") or "").split(":")[-1]
-    if not data.get("agent_id") or agent not in AGENT_BASH:
+    if not data.get("agent_id"):
+        return _main_agent_nudge(data, project)
+    if agent not in AGENT_BASH:
         return None, {"decision": "skip"}
     cmd = ((data.get("tool_input") or {}).get("command") or "").strip()
     if any(re.match(p, cmd) for p in AGENT_BASH[agent]):
