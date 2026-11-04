@@ -178,25 +178,39 @@ Bạn **không cần nhớ lệnh**: cứ nói bằng tiếng Việt bình thư�
 
 Thêm `#quick` vào prompt để bỏ qua bước mở/đóng task khi chỉ sửa nhỏ.
 
-### Lệnh `uccif` (để tự kiểm tra; AI cũng tự chạy được)
+### Lệnh CLI `uccif` (quản trị, cài đặt & kiểm tra)
 
-Trong Claude Code, gọi `uccif` trực tiếp. Trong terminal thường hoặc `agy`, gọi qua đường dẫn
-`sh <thư mục plugin>/bin/uccif`.
+Sau khi cài đặt bằng script hoặc `npx`, bạn có thể gõ `uccif <lệnh>` trực tiếp trong terminal bất kỳ:
 
+#### Quản lý CLI & Plugin:
 | Lệnh | Tác dụng |
 |---|---|
-| `uccif doctor` | kiểm tra cài đặt: Python, CodeGraph, LSP, rules |
-| `uccif codegraph` | trạng thái CodeGraph (JSON: `cli`, `indexed`, `mcp`) |
-| `uccif skills generate [--target auto\|claude\|agents\|all]` | sinh hoặc làm mới skill của project |
-| `uccif skills list` | các skill đã sinh |
-| `uccif task show` | task đang mở |
-| `uccif task start "<tiêu đề>" --type bug` | mở task |
-| `uccif task checkpoint --decision "..." --next "..."` | lưu tiến độ |
-| `uccif task close` | đóng task |
-| `uccif drift show` / `uccif drift ack` | xem hoặc xác nhận tài liệu đã cũ so với cấu trúc code |
-| `uccif log hooks --today` | các hook đã chạy hôm nay |
-| `uccif log sessions` | các phiên làm việc |
-| `uccif where` | đường dẫn project và thư mục dữ liệu |
+| `uccif status` | Xem trạng thái cài đặt toàn diện: Host Engine đang chọn, docs folder, CLI và plugin của Antigravity/Claude, CodeGraph |
+| `uccif set-agent antigravity` | Đặt mặc định host engine là **Antigravity (Gemini)** (dùng docs `.gemini/uccif/`, rules `GEMINI.md`, skill `.agents/skills/`) |
+| `uccif set-agent claude` | Đặt mặc định host engine là **Claude Code** (dùng docs `.claude/uccif/`, rules `CLAUDE.md`, skill `.claude/skills/`) |
+| `uccif install [--target auto\|antigravity\|claude\|all]` | Tự động cài đặt plugin vào Antigravity (`agy`) và/hoặc Claude Code |
+| `uccif update [--target auto\|antigravity\|claude\|all]` | Tự động `git pull` code mới nhất và cập nhật lại plugin |
+| `uccif uninstall [--target auto\|antigravity\|claude\|all]` | Gỡ cài đặt plugin khỏi môi trường |
+
+#### Thao tác trong dự án:
+| Lệnh | Tác dụng |
+|---|---|
+| `uccif init` | Khởi tạo cấu trúc UCCIF cho project hiện tại |
+| `uccif doctor` | Kiểm tra cài đặt trong project: Python, CodeGraph, LSP, rules |
+| `uccif codegraph` | Trạng thái CodeGraph (JSON: `cli`, `indexed`, `mcp`) |
+| `uccif skillgen` | Tự động phân tích CodeGraph và sinh module skills của project (`<project>-map`, `-bugfix`, `-mod-*`) |
+| `uccif skillgen --target .agents/skills` | Chỉ định xuất module skills vào `.agents/skills/` |
+| `uccif skills generate [--target auto\|claude\|agents\|all]` | Lệnh gốc sinh hoặc làm mới skill của project |
+| `uccif skills list` | Danh sách các skill đã sinh |
+| `uccif maintain` | Lệnh bảo trì tự động: kiểm tra độ lệch code (`drift`), cập nhật CodeGraph và làm mới skills |
+| `uccif task show` | Task đang mở |
+| `uccif task start "<tiêu đề>" --type bug` | Mở task mới |
+| `uccif task checkpoint --decision "..." --next "..."` | Lưu tiến độ làm việc |
+| `uccif task close` | Đóng task khi hoàn thành |
+| `uccif drift show` / `uccif drift ack` | Xem hoặc xác nhận tài liệu đã cũ so với cấu trúc code |
+| `uccif log hooks --today` | Các hook đã chạy hôm nay |
+| `uccif log sessions` | Lịch sử các phiên làm việc |
+| `uccif where` | Đường dẫn project, active host agent và thư mục dữ liệu |
 
 ### Đích ghi skill của project (`--target`)
 
