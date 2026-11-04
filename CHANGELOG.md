@@ -13,6 +13,9 @@
   `uccif agents-md write` (`claude-md write` is still an alias): it creates AGENTS.md or appends
   the block to it, creates CLAUDE.md as `@AGENTS.md` or appends that line once, moves a 1.1 block
   out of CLAUDE.md, and leaves a CLAUDE.md symlink in place. The user's own text is never changed.
+  Exception: when the user already has an AGENTS.md that CLAUDE.md does not import, no import is
+  added, because it would load the whole file into every Claude session. The same block, built
+  from one source with the same markers, goes into both files instead, and `--replace` updates both.
 - Generated project skills go to the skill dir of each host the project uses: `.claude/skills/`
   (Claude Code), `.agents/skills/` (Gemini CLI workspace alias, Antigravity). A project counts as
   using a host after that host ran a session there (`.claude/uccif/.local/hosts.json`), or for

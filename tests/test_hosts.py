@@ -177,12 +177,58 @@ def test_fresh_repo_gets_agents_md_and_claude_import(project, repo, monkeypatch)
     assert (repo / "CLAUDE.md").read_text() == "@AGENTS.md\n"  # never twice
 
 
-def test_user_agents_md_and_claude_md_text_kept(project, repo, monkeypatch):
-    (repo / "AGENTS.md").write_text("# team rules\nuse tabs\n")
+def _block(text):
+    return text[text.index("<!-- UCCIF:BEGIN -->"):text.index("<!-- UCCIF:END -->")]
+
+
+def test_user_agents_md_not_imported_gets_block_in_both(project, repo, monkeypatch):
+    """A user's AGENTS.md that CLAUDE.md does not import is never imported (it could be big):
+    the same block goes into both files."""
+    (repo / "AGENTS.md").write_text("# team rules\n" + "use tabs\n" * 300)
     (repo / "CLAUDE.md").write_text("# mine\nbe brief\n")
+    assert _write(monkeypatch, "A lib.") == 0
+    agents, claude = (repo / "AGENTS.md").read_text(), (repo / "CLAUDE.md").read_text()
+    assert agents.startswith("# team rules\n" + "use tabs\n" * 300)
+    assert claude.startswith("# mine\nbe brief\n\n<!-- UCCIF:BEGIN -->")
+    assert "@AGENTS.md" not in claude and "@AGENTS.md" not in agents
+    assert _block(agents) == _block(claude) and "A lib." in _block(claude)
+
+
+def test_dual_block_refuses_then_replaces_both(project, repo, monkeypatch):
+    (repo / "AGENTS.md").write_text("# team\n")
+    (repo / "CLAUDE.md").write_text("# mine\n")
+    assert _write(monkeypatch, "Old.") == 0
+    assert _write(monkeypatch, "New.") == 3  # either file has a block: ask first
+    assert _write(monkeypatch, "New.", "--replace") == 0
+    agents, claude = (repo / "AGENTS.md").read_text(), (repo / "CLAUDE.md").read_text()
+    assert _block(agents) == _block(claude) and "New." in claude and "Old." not in agents
+    assert agents.startswith("# team\n") and claude.startswith("# mine\n")
+    assert agents.count("UCCIF:BEGIN") == claude.count("UCCIF:BEGIN") == 1
+
+
+def test_user_agents_md_without_claude_md_gets_block_copy_not_import(project, repo, monkeypatch):
+    (repo / "AGENTS.md").write_text("# team\n")
     assert _write(monkeypatch) == 0
-    assert (repo / "AGENTS.md").read_text().startswith("# team rules\nuse tabs\n")
-    assert (repo / "CLAUDE.md").read_text() == "# mine\nbe brief\n\n@AGENTS.md\n"
+    claude = (repo / "CLAUDE.md").read_text()
+    assert claude.startswith("<!-- UCCIF:BEGIN -->") and "@AGENTS.md" not in claude
+    assert _block(claude) == _block((repo / "AGENTS.md").read_text())
+
+
+def test_1_1_block_with_user_agents_md_is_updated_in_place(project, repo, monkeypatch):
+    (repo / "AGENTS.md").write_text("# team\n")
+    (repo / "CLAUDE.md").write_text("# mine\n\n<!-- UCCIF:BEGIN -->\nold\n<!-- UCCIF:END -->\n\nafter\n")
+    assert _write(monkeypatch, "New.") == 3
+    assert _write(monkeypatch, "New.", "--replace") == 0
+    claude = (repo / "CLAUDE.md").read_text()
+    assert claude.startswith("# mine\n\n<!-- UCCIF:BEGIN -->") and claude.endswith("<!-- UCCIF:END -->\n\nafter\n")
+    assert "old" not in claude and "@AGENTS.md" not in claude
+    assert _block(claude) == _block((repo / "AGENTS.md").read_text())
+
+
+def test_uccif_created_agents_md_keeps_import_mode(project, repo, monkeypatch):
+    assert _write(monkeypatch, "A.") == 0  # creates AGENTS.md + CLAUDE.md = @AGENTS.md
+    assert _write(monkeypatch, "B.", "--replace") == 0  # AGENTS.md exists now, but is imported
+    assert (repo / "CLAUDE.md").read_text() == "@AGENTS.md\n"
 
 
 def test_claude_md_already_importing_is_untouched(project, repo, monkeypatch):

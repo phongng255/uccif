@@ -181,29 +181,43 @@ def _claude_md_cmd(args):
     a_real = Path(os.path.realpath(str(agents)))  # a symlinked file: edit the target, keep the link
     c_real = Path(os.path.realpath(str(claude)))
     same = c_real == a_real  # CLAUDE.md -> AGENTS.md: one file, no import line needed
-    old = _read(a_real)
+    a_old = _read(a_real)
+    c_old = None if same else _read(c_real)
+    # The user's own AGENTS.md that CLAUDE.md does not import: importing it would load the whole
+    # file into every Claude session. The same block goes into both files instead.
+    dual = not same and a_old is not None and not _imports(c_old)
+    targets = [(a_real, agents.name, a_old)] + ([(c_real, claude.name, c_old)] if dual else [])
+    blocked = [name for _, name, old in targets if old and BEGIN in old and END in old]
+    if blocked and not args.replace:
+        print("%s already has a UCCIF block: show the diff, ask, then rerun with --replace."
+              % " and ".join(blocked))
+        return 3
     moved = None
-    if not same:
-        c_old = _read(c_real)
-        if c_old and BEGIN in c_old and END in c_old and (old is None or BEGIN not in old):
-            moved = c_old  # 1.1 kept the block in CLAUDE.md: it moves to AGENTS.md
-    if old is None:
-        new, what = body + "\n", "created"
-    elif BEGIN in old and END in old:
-        if not args.replace:
-            print("AGENTS.md already has a UCCIF block: show the diff, ask, then rerun with --replace.")
-            return 3
-        i, j = old.index(BEGIN), old.index(END) + len(END)
-        new, what = old[:i] + body + old[j:], "block replaced in"
-    else:  # appended at the end: the user's own text above is never touched
-        new, what = old.rstrip("\n") + ("\n\n" if old.strip() else "") + body + "\n", "block appended to"
-    write_text_atomic(a_real, new)
-    print("%s %s" % (what, agents))
-    if not same:
+    if not same and not dual and c_old and BEGIN in c_old and END in c_old:
+        moved = c_old  # 1.1 kept the block in CLAUDE.md: it moves to AGENTS.md
+    for path, name, old in targets:
+        new, what = _with_block(old, body)
+        write_text_atomic(path, new)
+        print("%s %s" % (what, root / name))
+    if not same and not dual:
         note = _claude_pointer(c_real, moved)
         if note:
             print(note)
     return 0
+
+
+def _with_block(old, body):
+    """(new text, verb): the block replaces the old one, or is appended after the user's text."""
+    if old is None:
+        return body + "\n", "created"
+    if BEGIN in old and END in old:
+        i, j = old.index(BEGIN), old.index(END) + len(END)
+        return old[:i] + body + old[j:], "block replaced in"
+    return old.rstrip("\n") + ("\n\n" if old.strip() else "") + body + "\n", "block appended to"
+
+
+def _imports(text):
+    return bool(text) and any(l.strip() == IMPORT_LINE for l in text.splitlines())
 
 
 IMPORT_LINE = "@AGENTS.md"

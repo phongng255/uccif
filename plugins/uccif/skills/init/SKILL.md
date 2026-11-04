@@ -27,7 +27,7 @@ do not re-derive them. Budget: ≤ 10 tool calls (normally 7). Run every command
    try another command, do not install anything: an unverified command is marked as such.
 6. Pipe 2–3 description lines into `uccif agents-md write` (heredoc). It composes the ≤ 15-line
    block (commands from the manifests, `(unverified)` next to those not verified, a pointer to the
-   map skill), appends it to AGENTS.md and adds `@AGENTS.md` to CLAUDE.md. Exit 3 = a block exists: show the change,
+   map skill) and writes it to AGENTS.md (CLAUDE.md imports it, or gets a copy). Exit 3 = a block exists: show the change,
    ask, rerun with `--replace`.
 7. UCCIF v2 (`detect.uccif_v2` non-empty): list the hook lines calling `uccif.py` in
    `.claude/settings*.json` for the user to remove. Delete nothing yourself.
