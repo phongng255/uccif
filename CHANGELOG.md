@@ -23,8 +23,10 @@
 - `uccif verify-tests` checks the test runner once: list mode first (`vitest list`,
   `jest --listTests`, `pytest --collect-only`, `go test -list`, `cargo test -- --list`, …), a real run
   only for runners without one, 60 s hard timeout, nothing installed (`npx --no-install`). Error,
-  timeout or a sign the tests need a DB/server/network → the command stays `(unverified)` in the
-  CLAUDE.md block, with no retry; init never tries another way.
+  timeout or a sign the tests need a DB/server/network → the test command is marked `(unverified)`
+  in the CLAUDE.md block, or `(deps not installed)` when node_modules / the venv is missing; no
+  retry, init never tries another way. Only the test command is labelled; one line says
+  "Commands from <packageManager>/manifest; only test is verified."
 - `uccif summary write`: ≤ 20 lines from stdin, refuses to overwrite without `--replace`, stores the
   drift baseline. Init never copies what CLAUDE.md / AGENTS.md already say.
 - Drift no longer reports new/removed source dirs (the map skill refreshes itself); dependency and

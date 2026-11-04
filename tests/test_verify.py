@@ -37,21 +37,34 @@ def test_run_ok_error_timeout_and_service(repo):
     assert not ok and "database/server/network" in why
 
 
-@pytest.mark.parametrize("cmd,verified", [("ok", True), ("fail", False), ("slow", False)])
-def test_claude_md_block_follows_the_verification(project, repo, monkeypatch, cmd, verified):
+@pytest.mark.parametrize("cmd,deps,label", [
+    ("ok", True, ""),
+    ("fail", True, " (unverified)"),
+    ("slow", True, " (unverified)"),
+    ("fail", False, " (deps not installed)"),  # package.json without node_modules
+    ("nomod", True, " (deps not installed)"),  # python: No module named pytest
+])
+def test_claude_md_block_labels_only_test(project, repo, monkeypatch, cmd, deps, label):
     import io
     from uccif_lib import cli
-    (repo / "package.json").write_text(json.dumps({"scripts": {"test": "vitest", "build": "vite build"},
+    (repo / "package.json").write_text(json.dumps({"scripts": {"test": "vitest", "build": "vite build",
+                                                               "lint": "eslint ."},
                                                    "devDependencies": {"vitest": "1"}}))
+    if deps:
+        (repo / "node_modules").mkdir()
     py = '"%s" -c ' % sys.executable
     prog = {"ok": py + '"print(1)"', "fail": py + '"import sys; sys.exit(1)"',
-            "slow": py + '"import time; time.sleep(30)"'}[cmd]
+            "slow": py + '"import time; time.sleep(30)"',
+            "nomod": py + '"import sys; print(\'No module named pytest\'); sys.exit(1)"'}[cmd]
     monkeypatch.setattr(verify, "choose", lambda root: (prog, "list"))
-    monkeypatch.setattr(verify, "TIMEOUT", 1)
-    res = verify.verify(project, timeout=1)
-    assert res["ok"] is verified
+    verify.verify(project, timeout=1)
     monkeypatch.setattr("sys.stdin", io.StringIO("A lib."))
     assert cli.main(["claude-md", "write"]) == 0
     block = (repo / "CLAUDE.md").read_text()
-    assert ("test `npm test` (unverified)" in block) is not verified
-    assert "build `npm run build` (unverified)" in block  # never run: never verified
+    line = next(l for l in block.splitlines() if l.startswith("Commands: "))
+    assert "test `npm test`%s" % label in line
+    if not label:
+        assert "test `npm test` (" not in line
+    assert "build `npm run build` ·" in line + " ·" and "lint `npm run lint`" in line
+    assert "(unverified)" not in line.replace("test `npm test` (unverified)", "")  # only test is labelled
+    assert "Commands from npm/manifest; only test is verified." in block

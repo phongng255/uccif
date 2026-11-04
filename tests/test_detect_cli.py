@@ -211,9 +211,9 @@ def test_package_manager_detection(repo, pkg, lock, pm):
     assert cmds["test"] == "%s test" % pm and cmds["build"] == "%s run build" % pm
 
 
-def test_claude_md_marks_unverified_commands(project, repo, monkeypatch):
+def test_claude_md_verified_flag_and_no_labels_on_other_commands(project, repo, monkeypatch):
     make_web_app(repo)
     assert _claude_md(monkeypatch, project, "A shop.", "--verified", "test") == 0
     text = (repo / "CLAUDE.md").read_text()
     assert "test `npm test`" in text and "test `npm test` (unverified)" not in text
-    assert "build `npm run build` (unverified)" in text
+    assert "build `npm run build`" in text and "(unverified)" not in text

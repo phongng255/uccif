@@ -44,6 +44,23 @@ def choose(root):
     return (test, "run") if test else (None, None)
 
 
+MISSING_DEPS = re.compile(r"No module named|ModuleNotFoundError|could not determine executable|"
+                          r"command not found|not found: (vitest|jest|playwright)|Cannot find module|"
+                          r"npx canceled due to missing packages|cannot find package", re.I)
+
+
+def deps_missing(root, cmd, reason):
+    """True when the check failed because dependencies were never installed."""
+    from pathlib import Path
+    root = Path(root)
+    m = re.match(r"cd (\S+) && ", cmd or "")
+    pkg = root / m.group(1) if m else root
+    if (pkg / "package.json").exists() and not (pkg / "node_modules").is_dir() \
+            and not (root / "node_modules").is_dir():
+        return True
+    return bool(MISSING_DEPS.search(reason or ""))
+
+
 def run(cmd, cwd, timeout=TIMEOUT):
     """(ok, reason). Never raises; the whole process group dies at the timeout."""
     kw = {"cwd": str(cwd), "shell": True, "stdin": subprocess.DEVNULL, "stdout": subprocess.PIPE,
@@ -70,8 +87,9 @@ def run(cmd, cwd, timeout=TIMEOUT):
     if NEEDS_SERVICE.search(text):
         return False, "needs a database/server/network"
     if p.returncode != 0:
+        hit = MISSING_DEPS.search(text)
         last = [l for l in text.strip().splitlines() if l.strip()][-1:] or [""]
-        return False, "exit %d: %s" % (p.returncode, last[0][:160])
+        return False, "exit %d: %s" % (p.returncode, (hit.group(0) if hit else last[0])[:160])
     return True, "ok"
 
 
@@ -82,11 +100,20 @@ def verify(project, timeout=TIMEOUT):
     else:
         t0 = time.time()
         ok, reason = run(cmd, project.root, timeout)
-        res = {"ok": ok, "reason": reason, "cmd": cmd, "mode": mode, "s": round(time.time() - t0, 1)}
+        res = {"ok": ok, "reason": reason, "cmd": cmd, "mode": mode, "s": round(time.time() - t0, 1),
+               "deps_missing": (not ok) and deps_missing(project.root, cmd, reason)}
     res["at"] = now_iso()
     ensure_local(project)
     write_json(project.local_dir / "verify.json", {"test": res})
     return res
+
+
+def test_label(project, verified_flag=False):
+    """Suffix for the test command in the CLAUDE.md block: "" when verified."""
+    res = (read_json(project.local_dir / "verify.json", {}) or {}).get("test") or {}
+    if verified_flag or res.get("ok"):
+        return ""
+    return " (deps not installed)" if res.get("deps_missing") else " (unverified)"
 
 
 def verified(project):
