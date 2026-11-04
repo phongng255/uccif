@@ -42,8 +42,13 @@ at the lowest token cost. Read little, write short, mark every claim.
    <only conventions a newcomer would get wrong; each with [src:]>
    <!-- UCCIF:END -->
    ```
-   Show the block (or the diff against an existing block) to the user and **ask before
-   writing CLAUDE.md**. Replace only the text between the markers; never touch the rest.
+   Three cases, decided by `detect.claude_md_block` and whether `CLAUDE.md` exists:
+   - **No `CLAUDE.md`**: create it holding only this block. No question needed.
+   - **`CLAUDE.md` without the block**: append the block at the end; never touch the existing
+     text. No question needed.
+   - **Block already present**: show the diff and **ask before writing**. Replace only the text
+     between the markers; never touch the rest.
+   Never finish init with no UCCIF block in `CLAUDE.md` unless the user declined a replacement.
 7. **UCCIF v2 migration** (only if `detect.uccif_v2` is non-empty). Do not delete anything.
    - Read `.claude/settings.json` / `settings.local.json`; list the exact hook entries that
      call `uccif.py`, with line numbers, and any `deny`/`ask` rules v2 added. Claude Code
