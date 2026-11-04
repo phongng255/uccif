@@ -9,8 +9,9 @@ A Claude Code plugin marketplace. Install the core plugin `uccif` once; from the
   to query `codegraph_explore` before any Grep/Read;
 - **LSP** for TypeScript/JavaScript and Python (Claude offers to install a missing server once);
 - **CORE RULES** and a token-saving workflow injected by hooks at every session and prompt;
-- **automatic task memory**: the first edit of a turn opens a task (title from your prompt), edited
-  files are recorded, the end of the turn closes it unless a decision or issue was worth keeping;
+- **automatic task memory**: the first edit opens a task (title from your prompt), edited files are
+  recorded, the task survives turns and `/clear`, and closes on new work, after 24 h idle, or when
+  Claude records a decision or issue;
 - **project skills** generated from the graph (`<project>-map`, `-bugfix`, up to 5 `-mod-*`): the
   code map, one source of truth. `/uccif:init` is optional: it only adds what the graph cannot
   know (purpose, conventions, external services) to `.claude/uccif/summary.md` and a ≤ 15-line
@@ -124,9 +125,9 @@ codegraph init --yes
 
 then `uccif skills generate`, keeps `.codegraph/` out of git and checks `codegraph status`. The MCP
 server is declared by the plugin itself (`.mcp.json`: `codegraph serve --mcp`, with
-`CODEGRAPH_MCP_TOOLS=explore,node,callers,impact`), so nothing is written to your Claude config.
+`CODEGRAPH_MCP_TOOLS=explore`), so nothing is written to your Claude config.
 Lookup routing (one definition, CORE RULE 2): flows and "where/how" → `codegraph_explore`; one
-symbol → `codegraph_node` / `codegraph_callers` / `codegraph_impact`; tests after a change →
+symbol → `codegraph node` / `callers` / `impact` in Bash; tests after a change →
 `git diff --name-only | codegraph affected --stdin --quiet`; Grep only for literals, scoped.
 Restart Claude Code once afterwards so `codegraph_explore` loads; its first call may ask you to
 allow the tool. `uccif codegraph` prints the current state (`mcp_via` says where the server comes

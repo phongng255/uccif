@@ -9,7 +9,7 @@
       ],
       "alwaysLoad": true,
       "env": {
-        "CODEGRAPH_MCP_TOOLS": "explore,node,callers,impact",
+        "CODEGRAPH_MCP_TOOLS": "explore",
         "CODEGRAPH_TELEMETRY": "0"
       }
     }

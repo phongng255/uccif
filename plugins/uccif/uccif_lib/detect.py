@@ -224,6 +224,10 @@ def doctor(project):
           "codegraph MCP server not wired (update the plugin, or `codegraph install --target=claude --location=global --yes`)")
     check(cg["indexed"], "project indexed by CodeGraph (.codegraph/)",
           "project not indexed by CodeGraph (`codegraph init --yes`)")
+    dups = codegraph.installer_leftovers(project)
+    check(not dups, "no CodeGraph installer blocks duplicating the plugin",
+          "CodeGraph installer output duplicates the plugin's MCP server/guidance (costs tokens every "
+          "session): %s. Remove with `codegraph uninstall --target=claude`" % "; ".join(dups))
     d = detect(project)
     info("CLAUDE.md UCCIF block: %s; project summary.md: %s (both optional, written by uccif:init)"
          % ("present" if d["claude_md_block"] else "absent", "present" if d["docs"]["summary.md"] else "absent"))

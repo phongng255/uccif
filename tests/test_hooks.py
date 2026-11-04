@@ -70,7 +70,7 @@ def test_session_start_mentions_docs_and_open_task(base, project):
     task.start(project, "Fix login", "bug")
     _, out = run_hook("session-start", dict(base, source="startup"))
     assert ".claude/uccif/summary.md" in ctx(out)
-    assert "Open task T-001 (bug): Fix login" in ctx(out)
+    assert "Open task: Fix login (0 files)" in ctx(out)
 
 
 def test_session_start_marks_previous_unclean(base, project):
@@ -81,13 +81,12 @@ def test_session_start_marks_previous_unclean(base, project):
     assert ends == [dict(ends[0], session="OLD", reason="unclean")]
 
 
-def test_user_prompt_submit(base, project):
+def test_user_prompt_submit_is_silent_without_news(base, project):
     _, out = run_hook("user-prompt-submit", dict(base, prompt="hello"))
-    assert out is None  # nothing new: nothing injected
+    assert out is None
     task.start(project, "Fix login", "bug")
     _, out = run_hook("user-prompt-submit", dict(base, prompt="go on"))
-    lines = ctx(out).splitlines()
-    assert len(lines) <= 2 and lines[0].startswith("Open task T-001")
+    assert out is None  # the open task is already in SessionStart's context
 
 
 @pytest.mark.parametrize("agent,cmd,decision", [
@@ -140,24 +139,63 @@ def test_search_nudge_once_per_window(base, project):
     assert out is None
 
 
-def test_first_edit_opens_an_implicit_task_and_stop_closes_it(base, project):
-    edit = dict(base, tool_name="Edit", tool_input={"file_path": str(project.root / "src" / "a.ts")})
-    _, out = run_hook("user-prompt-submit", dict(base, prompt="sửa lỗi đăng nhập khi mật khẩu rỗng"))
-    assert out is None
-    run_hook("post-tool-use", edit)
+def _turn(base, project, prompt, path="src/a.ts"):
+    run_hook("user-prompt-submit", dict(base, prompt=prompt))
+    run_hook("post-tool-use", dict(base, tool_name="Edit",
+                                   tool_input={"file_path": str(project.root / path)}))
+    run_hook("stop", dict(base))
+
+
+def test_task_lives_across_turns_and_clear(base, project):
+    _turn(base, project, "sửa lỗi đăng nhập khi mật khẩu rỗng")
     cur = task.load_current(project)
     assert cur["auto"] and cur["type"] == "bug" and cur["title"].startswith("sửa lỗi đăng nhập")
-    assert cur["files"] == ["src/a.ts"] and cur["status"] == "in_progress"
-    run_hook("stop", dict(base))
-    assert task.load_current(project)["status"] == "done"  # nothing worth keeping: closed
-    run_hook("user-prompt-submit", dict(base, prompt="add a logout button"))
-    run_hook("post-tool-use", edit)
-    task.checkpoint(project, decisions=["logout clears the session store"])
-    run_hook("stop", dict(base))
+    assert cur["status"] == "in_progress"  # Stop no longer closes it
+    _turn(base, project, "tiếp, thêm test cho trường hợp đó", "tests/login.test.ts")
+    _turn(base, project, "đăng nhập vẫn lỗi khi mật khẩu có dấu cách", "src/b.ts")
     cur = task.load_current(project)
-    assert cur["id"] == "T-002" and cur["status"] == "in_progress"  # a decision keeps it open
-    _, out = run_hook("user-prompt-submit", dict(base, prompt="go on"))
-    assert "Open task T-002" in ctx(out)
+    assert cur["id"] == "T-001" and cur["files"] == ["src/a.ts", "tests/login.test.ts", "src/b.ts"]
+    _, out = run_hook("session-start", dict(base, source="clear"))
+    assert "Open task: sửa lỗi đăng nhập khi mật khẩu rỗng (3 files)" in ctx(out)
+
+
+def test_close_with_a_finding(base, project):
+    _turn(base, project, "fix the crash when the cart is empty")
+    task.close(project, issues=["empty cart -> guard in total()"])
+    cur = task.load_current(project)
+    assert cur["status"] == "done" and cur["issues"] == ["empty cart -> guard in total()"]
+    assert "empty cart" in (project.docs_dir / "known-issues.md").read_text(encoding="utf-8")
+    _turn(base, project, "add dark mode toggle to settings page")
+    assert task.load_current(project)["id"] == "T-002"
+
+
+def test_new_topic_closes_the_old_task_and_opens_a_new_one(base, project):
+    _turn(base, project, "fix the crash when the cart is empty")
+    _turn(base, project, "add a dark mode toggle to the settings page", "src/settings.ts")
+    old = task.load_current(project)
+    assert old["id"] == "T-002" and old["files"] == ["src/settings.ts"]
+    hist = sorted((project.local_dir / "tasks" / "history").glob("*_T-001.md"))
+    assert hist  # T-001 closed (no findings) and snapshotted
+
+
+def test_stale_task_is_closed_by_session_start(base, project):
+    import json
+    _turn(base, project, "fix the crash when the cart is empty")
+    cur_path = project.local_dir / "tasks" / "current.json"
+    data = json.loads(cur_path.read_text())
+    data["last_edit"] = "2000-01-01T00:00:00+00:00"
+    cur_path.write_text(json.dumps(data))
+    _, out = run_hook("session-start", dict(base, source="startup"))
+    assert task.load_current(project)["status"] == "done"
+    assert "Open task" not in ctx(out)
+
+
+def test_new_topic_heuristic():
+    t = {"title": "fix the crash when the cart is empty", "topic": []}
+    assert not task.is_new_topic("also check the totals", t)  # continuation word
+    assert not task.is_new_topic("tiếp đi", t)
+    assert not task.is_new_topic("cart still crashes when empty", t)
+    assert task.is_new_topic("add dark mode toggle to settings", t)
 
 
 def test_quick_prompt_opens_no_task(base, project):

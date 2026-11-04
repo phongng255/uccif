@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import os
 import sys
 
 from uccif_lib import SCHEMA_VERSION, __version__, codegraph, detect, drift, hooks, log, task, usage
@@ -57,6 +58,10 @@ def build_parser():
     cw = cm.add_parser("write", help="read the block from stdin: create CLAUDE.md, or append the block "
                                      "when it has none; replace an existing block only with --replace")
     cw.add_argument("--replace", action="store_true", help="overwrite the existing UCCIF block")
+
+    sm = sub.add_parser("summary", help=".claude/uccif/summary.md").add_subparsers(dest="action")
+    sw = sm.add_parser("write", help="read summary.md (<= 20 lines) from stdin and store the drift baseline")
+    sw.add_argument("--replace", action="store_true", help="overwrite an existing summary.md")
 
     h = sub.add_parser("hook", help="run a hook handler (reads hook JSON on stdin)")
     h.add_argument("event")
@@ -154,6 +159,8 @@ def _claude_md_cmd(args):
               file=sys.stderr)
         return 1
     path = Path(proj.root) / "CLAUDE.md"
+    if path.is_symlink():  # e.g. CLAUDE.md -> AGENTS.md: edit the target, keep the link
+        path = Path(os.path.realpath(str(path)))
     try:
         old = path.read_text(encoding="utf-8")
     except OSError:
@@ -170,6 +177,34 @@ def _claude_md_cmd(args):
         new, what = old.rstrip("\n") + ("\n\n" if old.strip() else "") + body + "\n", "block appended to"
     write_text_atomic(path, new)
     print("%s %s" % (what, path))
+    return 0
+
+
+MAX_SUMMARY_LINES = 20
+
+
+def _summary_cmd(args):
+    """Written through Bash on purpose: Claude Code treats a Write/Edit under .claude/ as a
+    sensitive file and asks every time."""
+    from uccif_lib.paths import write_text_atomic
+    proj = resolve_project()
+    body = sys.stdin.read().strip()
+    lines = body.splitlines()
+    if not body:
+        print("uccif: empty summary on stdin", file=sys.stderr)
+        return 1
+    if len(lines) > MAX_SUMMARY_LINES:
+        print("uccif: summary has %d lines, max %d. Keep only what the graph cannot know."
+              % (len(lines), MAX_SUMMARY_LINES), file=sys.stderr)
+        return 1
+    path = proj.docs_dir / "summary.md"
+    if path.exists() and not args.replace:
+        print("summary.md exists: merge your lines into its text, then rerun with --replace.")
+        return 3
+    path.parent.mkdir(parents=True, exist_ok=True)
+    write_text_atomic(path, body + "\n")
+    drift.ack(proj)
+    print("wrote %s (%d lines); drift baseline stored" % (path, len(lines)))
     return 0
 
 
@@ -284,6 +319,8 @@ def main(argv=None):
             return _drift_cmd(args)
         if args.cmd == "maintain":
             return maintain()
+        if args.cmd == "summary" and args.action:
+            return _summary_cmd(args)
         if args.cmd == "claude-md" and args.action:
             return _claude_md_cmd(args)
     except task.TaskError as e:

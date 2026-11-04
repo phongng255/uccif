@@ -73,6 +73,34 @@ def state(project):
     return {"cli": cli(), "indexed": indexed(project), "mcp": via is not None, "mcp_via": via}
 
 
+INSTALLER_MARK = "<!-- CODEGRAPH_START -->"
+
+
+def installer_leftovers(project):
+    """What `codegraph install --target=claude` writes and the plugin already provides: the
+    CLAUDE.md section (global ~/.claude/CLAUDE.md, ./.claude/CLAUDE.md or ./CLAUDE.md), a second
+    MCP server entry, its UserPromptSubmit hook. Read only: user files are never edited."""
+    home = Path(os.path.expanduser("~"))
+    root = Path(project.root)
+    out = []
+    for f in (home / ".claude" / "CLAUDE.md", root / ".claude" / "CLAUDE.md", root / "CLAUDE.md"):
+        try:
+            if INSTALLER_MARK in f.read_text(encoding="utf-8", errors="replace"):
+                out.append("instructions block in %s" % f)
+        except OSError:
+            pass
+    if plugin_mcp() and any(_mcp_in(p) for p in (home / ".claude.json", root / ".mcp.json")):
+        out.append("second codegraph MCP server in ~/.claude.json or .mcp.json")
+    for f in (home / ".claude" / "settings.json", root / ".claude" / "settings.json"):
+        try:
+            data = json.loads(f.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(data, dict) and "codegraph" in json.dumps(data.get("hooks") or {}).lower():
+            out.append("codegraph hook in %s" % f)
+    return out
+
+
 def gitignored(project):
     if (Path(project.root) / INDEX_DIR / ".gitignore").exists():  # newer CodeGraph ignores itself
         return True

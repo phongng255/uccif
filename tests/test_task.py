@@ -70,7 +70,7 @@ def test_summary_lines(project):
     assert task.summary_lines(project) == []
     task.start(project, "Fix login", "bug")
     task.checkpoint(project, next="repro")
-    assert task.summary_lines(project) == ["Open task T-001 (bug): Fix login", "Next step: repro"]
+    assert task.summary_lines(project) == ["Open task: Fix login (0 files) [T-001]", "Next step: repro"]
 
 
 def test_concurrent_starts_get_distinct_ids(project):

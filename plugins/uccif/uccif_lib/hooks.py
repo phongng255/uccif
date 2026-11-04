@@ -129,6 +129,10 @@ def on_session_start(data, project):
     prev = log.last_session_unclosed(project)
     if prev and prev != sid:
         log.session(project, session=prev, type="end", reason="unclean")
+    try:
+        task.close_stale(project)
+    except task.TaskError:
+        pass
     cur = task.load_current(project)
     log.session(project, session=sid, type="start", source=source,
                 task=cur["id"] if cur and cur.get("status") != "done" else None)
@@ -175,6 +179,10 @@ def _prompt_path(project):
     return Path(project.data_dir) / "last_prompt.txt"
 
 
+def _edited_path(project):
+    return Path(project.data_dir) / "prompt_edited.flag"
+
+
 def on_user_prompt_submit(data, project):
     """Injects only news: an open task kept across turns, or stale docs. Nothing new -> nothing."""
     prompt = data.get("prompt") or ""
@@ -184,9 +192,11 @@ def on_user_prompt_submit(data, project):
         _prompt_path(project).write_text(prompt[:400], encoding="utf-8")
     except OSError:
         pass
-    lines = task.summary_lines(project)
-    if lines:
-        lines[-1] += " (continue it if this prompt is related: uccif:resume)"
+    try:  # the next edit is the first one of this prompt
+        _edited_path(project).unlink()
+    except OSError:
+        pass
+    lines = []  # the open task is in SessionStart's context already
     stale = drift.pending(project)
     if stale:
         lines.append("Project notes are stale: " + "; ".join(stale) +
@@ -265,20 +275,24 @@ def on_post_tool_use(data, project):
     rel = _rel(project, path) if path else None
     if not rel or rel.startswith(".claude/"):
         return None, {"decision": "skip", "target": path}
-    opened = None
-    if not _is_quick(project):
+    opened = closed = None
+    if not _is_quick(project) and not _edited_path(project).exists():
         try:
             prompt = _prompt_path(project).read_text(encoding="utf-8")
         except OSError:
             prompt = ""
         try:
-            opened = task.start_auto(project, prompt)
-        except task.TaskError:
-            opened = None
+            opened, closed = task.on_first_edit(project, prompt)
+            _edited_path(project).parent.mkdir(parents=True, exist_ok=True)
+            _edited_path(project).write_text("1", encoding="utf-8")
+        except (task.TaskError, OSError):
+            pass
     added = task.add_modified(project, rel)
     fields = {"rule": "task-files" if added else "no-task", "target": rel}
     if opened:
         fields["opened"] = opened["id"]
+    if closed:
+        fields["closed"] = closed["id"]
     return None, fields
 
 
@@ -315,10 +329,6 @@ def on_stop(data, project):
         return None, {"decision": "skip", "rule": "rerun"}
     # structural changes made by Bash, by the user, or by git pull/checkout this turn
     spawn(["maintain"], project)
-    try:
-        task.auto_close(project)
-    except task.TaskError:
-        pass
     cfg = project_config(project)
     window = cfg["context_window"] if isinstance(cfg["context_window"], int) else "auto"
     s = usage.summarize(data.get("transcript_path"), window)

@@ -185,11 +185,14 @@ def add_modified(project, path):
 @_locked
 def _add_modified(project, path):
     task = load_current(project)
-    if not task or task.get("status") == "done" or path in task["files"]:
+    if not task or task.get("status") == "done":
         return False
-    task["files"].append(path)
+    task["last_edit"] = now_iso()
+    added = path not in task["files"]
+    if added:
+        task["files"].append(path)
     _save(project, task)
-    return True
+    return added
 
 
 @_locked
@@ -220,13 +223,34 @@ def auto_title(prompt):
     return (line[:77] + "...") if len(line) > 80 else (line or "Code change")
 
 
-@_locked
-def start_auto(project, prompt):
-    """Open an implicit task at the first edit when none is open (PostToolUse). Never raises
-    for an open task: returns None instead."""
-    cur = load_current(project)
-    if cur and cur.get("status") != "done":
-        return None
+STOP_WORDS = set("""the and for with this that from into then also please can you make add use not but are was
+code file files một những các cho của và với này khi thì được không có làm hãy cần như vào trong để
+""".split())
+CONTINUE_RE = r"^\s*(tiếp|tiếp tục|continue|go on|also|again|still|now|vẫn|lại|thêm|nữa|ok|còn)\b"
+STALE_HOURS = 24
+
+
+def topic_words(text):
+    import re
+    return {w for w in re.findall(r"\w+", (text or "").lower())
+            if len(w) >= 3 and not w.isdigit() and w not in STOP_WORDS}
+
+
+def is_new_topic(prompt, task):
+    """True when the prompt clearly starts other work than `task`: at least 3 content words and
+    under 20% of them seen in the task's title or earlier prompts. Short or continuing prompts
+    ("tiếp", "also fix the test") always belong to the open task."""
+    import re
+    if re.match(CONTINUE_RE, (prompt or "").lower()):
+        return False
+    words = topic_words(prompt)
+    if len(words) < 3:
+        return False
+    seen = set(task.get("topic") or []) | topic_words(task.get("title"))
+    return len(words & seen) / float(len(words)) < 0.2
+
+
+def _new_auto(project, prompt):
     p = _paths(project)
     state = read_json(p["state"], {"next_id": 1})
     tid = "T-%03d" % state["next_id"]
@@ -234,23 +258,53 @@ def start_auto(project, prompt):
     write_json(p["state"], state)
     task = {"id": tid, "title": auto_title(prompt), "type": guess_type(prompt), "status": "in_progress",
             "goal": "", "modules": "", "next": "", "rewrite": False, "auto": True,
+            "topic": sorted(topic_words(prompt))[:40],
             "files": [], "decisions": [], "tests": [], "issues": [], "started": now_iso()}
     _save(project, task)
     return task
 
 
-@_locked
-def auto_close(project):
-    """Stop hook: close an implicit task that recorded nothing worth keeping."""
-    task = load_current(project)
-    if (not task or task.get("status") == "done" or not task.get("auto")
-            or task.get("decisions") or task.get("issues") or task.get("next")):
-        return None
+def _close_quietly(project, task, reason):
     task["status"] = "done"
     task["closed"] = now_iso()
+    task["closed_by"] = reason
     _save(project, task)
     snapshot(project, label=task["id"])
-    return task
+
+
+@_locked
+def on_first_edit(project, prompt):
+    """PostToolUse, first edit of a prompt. No open task -> open one. Open task and the prompt is
+    clearly other work -> close it without findings and open a new one. Otherwise the prompt joins
+    the open task's topic. Returns (opened, closed) tasks or None."""
+    cur = load_current(project)
+    if cur and cur.get("status") != "done":
+        if not is_new_topic(prompt, cur):
+            cur["topic"] = sorted(set(cur.get("topic") or []) | topic_words(prompt))[:80]
+            _save(project, cur)
+            return None, None
+        _close_quietly(project, cur, "new-topic")
+        return _new_auto(project, prompt), cur
+    return _new_auto(project, prompt), None
+
+
+def _age_hours(task):
+    from datetime import datetime
+    try:
+        then = datetime.fromisoformat(task.get("last_edit") or task.get("started"))
+        return (datetime.now(then.tzinfo) - then).total_seconds() / 3600.0
+    except (TypeError, ValueError):
+        return 0.0
+
+
+@_locked
+def close_stale(project, hours=STALE_HOURS):
+    """SessionStart: close an open task with no edit for `hours`."""
+    cur = load_current(project)
+    if not cur or cur.get("status") == "done" or _age_hours(cur) < hours:
+        return None
+    _close_quietly(project, cur, "stale")
+    return cur
 
 
 def snapshot(project, label=None):
@@ -272,7 +326,8 @@ def summary_lines(project, limit=2):
     task = load_current(project)
     if not task or task.get("status") == "done":
         return []
-    lines = ["Open task %s (%s): %s" % (task["id"], task["type"], task["title"])]
+    n = len(task.get("files") or [])
+    lines = ["Open task: %s (%d file%s) [%s]" % (task["title"], n, "" if n == 1 else "s", task["id"])]
     if task.get("next"):
         lines.append("Next step: %s" % task["next"])
     return lines[:limit]

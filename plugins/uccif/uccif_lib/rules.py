@@ -7,9 +7,9 @@ The project's CLAUDE.md UCCIF block holds only project-specific facts
 CORE_RULES = """\
 UCCIF CORE RULES
 1. Do the work yourself: run commands, read logs, start processes. Ask the user only for GUI/device/login/secret steps, and before installing packages, deploy, git push, external-service calls, deleting data.
-2. Find code with CodeGraph, not Grep/Read. Flow, "where is X / how does X work" -> MCP `codegraph_explore`. One symbol -> `codegraph_node`, `codegraph_callers`, `codegraph_impact` (same as Bash `codegraph node|callers|impact <sym> [--depth 2]`). Tests to run after a change -> `git diff --name-only | codegraph affected --stdin --quiet`. Grep/Glob only for literals and config, scoped to a module dir. Skills `<project>-map`, `-mod-*`, `-bugfix` say where things live.
+2. Find code with CodeGraph, not Grep/Read. Flow, "where is X / how does X work" -> MCP `codegraph_explore`. One symbol -> Bash `codegraph node|callers|impact <sym>` (impact: `--depth 2`). Tests to run after a change -> `git diff --name-only | codegraph affected --stdin --quiet`. Grep/Glob only for literals and config, scoped to a module dir. Skills `<project>-map`, `-mod-*`, `-bugfix` say where things live.
 3. Evidence: never claim how code behaves or that something is fixed without checking it in this task (file:line, command output); report the user's stated constraints as met/not met. Stuck after 2 failed fixes -> gather logs/repro first.
-4. Tasks are automatic (the first edit opens one, the end of the turn closes it). Only to keep a decision or open issue: `uccif task checkpoint --decision|--issue "<text>"`. The user never runs `uccif`; map plain requests yourself (`uccif task show`, `uccif log hooks --today`).
+4. Tasks are automatic (the first edit opens one; new work or 24h idle closes it). To keep a decision or open issue: `uccif task close --decision|--issue "<text>"` (`checkpoint` if work goes on). The user never runs `uccif`; map plain requests yourself (`uccif task show`, `uccif log hooks --today`).
 5. Reply in {reply_language}; code, comments, commits and framework files in English. Never state token counts."""
 
 

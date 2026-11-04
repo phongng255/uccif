@@ -155,3 +155,36 @@ def test_claude_md_block_over_15_lines_is_refused(project, repo, monkeypatch):
     block = "<!-- UCCIF:BEGIN -->\n" + "line\n" * 20 + "<!-- UCCIF:END -->"
     assert _claude_md(monkeypatch, project, block) == 1
     assert not (repo / "CLAUDE.md").exists()
+
+
+def test_doctor_warns_on_codegraph_installer_duplicates(project, repo, tmp_path):
+    home = Path(os.environ["HOME"])
+    (home / ".claude").mkdir(parents=True, exist_ok=True)
+    md = home / ".claude" / "CLAUDE.md"
+    md.write_text("mine\n<!-- CODEGRAPH_START -->\nuse codegraph\n<!-- CODEGRAPH_END -->\n")
+    before = md.read_text()
+    _, lines = detect.doctor(project)
+    assert any(l.startswith("WARN") and "CODEGRAPH" not in l and "instructions block" in l for l in lines)
+    assert md.read_text() == before  # never edited
+
+
+def test_summary_write_caps_lines_and_stores_baseline(project, repo, monkeypatch):
+    import io
+    from uccif_lib import cli, drift
+    monkeypatch.setattr("sys.stdin", io.StringIO("x\n" * 21))
+    assert cli.main(["summary", "write"]) == 1
+    monkeypatch.setattr("sys.stdin", io.StringIO("Shop for bikes [src: README.md]\n"))
+    assert cli.main(["summary", "write"]) == 0
+    assert (project.docs_dir / "summary.md").read_text().startswith("Shop for bikes")
+    assert drift.pending(project) == []
+    monkeypatch.setattr("sys.stdin", io.StringIO("again\n"))
+    assert cli.main(["summary", "write"]) == 3
+
+
+def test_claude_md_symlink_is_kept(project, repo, monkeypatch):
+    if os.name == "nt":
+        return
+    (repo / "AGENTS.md").write_text("# agents\n")
+    os.symlink("AGENTS.md", str(repo / "CLAUDE.md"))
+    assert _claude_md(monkeypatch, project, "A lib.") == 0
+    assert (repo / "CLAUDE.md").is_symlink() and "UCCIF:BEGIN" in (repo / "AGENTS.md").read_text()
