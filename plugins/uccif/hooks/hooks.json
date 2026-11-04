@@ -25,7 +25,7 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "Bash|Grep|Glob|Edit|Write|MultiEdit|NotebookEdit",
+        "matcher": "Bash|Grep|Glob",
         "hooks": [
           {
             "type": "command",

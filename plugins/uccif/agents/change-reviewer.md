@@ -1,6 +1,6 @@
 ---
 name: change-reviewer
-description: Read-only. Use before closing a UCCIF task that changed 3 or more files, or whose request carried user constraints ("don't change logic", "use design tokens", "keep light theme"). Input is a git diff range plus the constraint list; returns a met/violated checklist and findings by severity.
+description: Read-only reviewer. Use to review a diff, branch or PR, or before finishing a change of 3+ files or one with user constraints. Input: diff range + constraints; returns met/violated + findings.
 tools: Read, Grep, Glob, Bash
 disallowedTools: Write, Edit, MultiEdit, NotebookEdit
 maxTurns: 30
@@ -22,8 +22,9 @@ A diff range (default: working tree vs HEAD) and the list of constraints from th
    may have missed; `git diff --name-only | codegraph affected --stdin` lists the tests.
 2. For each constraint, find the lines in the diff that satisfy or break it.
 3. Read surrounding code where the diff alone is not enough (offset/limit).
-4. Look for logic errors, unhandled cases, security issues, hard-coded values where the
-   project has tokens/config, and tests that no longer match.
+4. Look for logic and edge cases, error handling, security (injection, secrets, auth, unsafe
+   input), async/concurrency, backwards compatibility, hard-coded values where the project has
+   tokens/config, tests that no longer match, dead code left behind.
 
 # Output format (≤ 40 lines, nothing else)
 

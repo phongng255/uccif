@@ -1,6 +1,6 @@
 ---
 name: resume
-description: Use when the user wants to continue earlier work ("tiếp tục", "continue", "what was I doing", "where did we stop") or when SessionStart reports an open UCCIF task and the new request relates to it.
+description: Use when the user wants to continue earlier work ("tiếp tục", "continue", "what was I doing") or a hook reports an open UCCIF task the request relates to.
 ---
 
 # Resume

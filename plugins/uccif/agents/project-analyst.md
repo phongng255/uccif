@@ -1,6 +1,6 @@
 ---
 name: project-analyst
-description: Read-only. Use when a module's purpose, conventions or external services are unclear and the map skill does not say. Input is one module or directory; returns ≤ 10 lines with [src:] and verified/inferred tags.
+description: Read-only. Use when a module's purpose, conventions or external services are unclear and its map skill does not say. Input: one module dir; returns <=10 tagged lines.
 tools: Read, Grep, Glob, Bash
 disallowedTools: Write, Edit, MultiEdit, NotebookEdit
 maxTurns: 40

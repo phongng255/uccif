@@ -9,11 +9,14 @@ A Claude Code plugin marketplace. Install the core plugin `uccif` once; from the
   to query `codegraph_explore` before any Grep/Read;
 - **LSP** for TypeScript/JavaScript and Python (Claude offers to install a missing server once);
 - **CORE RULES** and a token-saving workflow injected by hooks at every session and prompt;
-- **task memory** (`uccif task …`) that survives `/clear`, compaction and new sessions;
-- **project docs** (`.claude/uccif/`) written once by `/uccif:init`, with **drift detection**
-  that tells Claude which section to update when the project's structure changes;
+- **automatic task memory**: the first edit of a turn opens a task (title from your prompt), edited
+  files are recorded, the end of the turn closes it unless a decision or issue was worth keeping;
+- **project skills** generated from the graph (`<project>-map`, `-bugfix`, up to 5 `-mod-*`): the
+  code map, one source of truth. `/uccif:init` is optional: it only adds what the graph cannot
+  know (purpose, conventions, external services) to `.claude/uccif/summary.md` and a ≤ 15-line
+  block at the end of `CLAUDE.md`;
 - a **real token line** after each reply, read from the transcript — never estimated;
-- read-only **agents** for module analysis, impact analysis and change review;
+- read-only **agents** for impact analysis, change review and module purpose;
 - **logs** of every hook run and session (`uccif log hooks|sessions`).
 
 The plugin **never blocks** a tool call or a stop: every hook exits 0.
@@ -25,7 +28,8 @@ The plugin **never blocks** a tool call or a stop: every hook exits 0.
 /plugin install uccif@uccif
 ```
 
-Then open a project and ask for anything; the first session suggests `/uccif:init`.
+Then open a project and ask for anything. Without CodeGraph, Claude asks once whether to install it
+and, on yes, installs, indexes and writes the project skills in the same session.
 Options (`/config`): `reply_language` (default `vi`), `token_report` (default on).
 
 Requirements: Python 3.8+ (`python3`, `python` or `py -3`), git. macOS, Linux and Windows (Git
@@ -49,7 +53,7 @@ restart.
   version; ask Claude to run `uccif version` to see the one that is running.
 - Your data stays where it is: project docs and task memory live in your project
   (`.claude/uccif/`, `.claude/uccif/.local/`) and the code index in CodeGraph's `.codegraph/`.
-  Nothing has to be rerun after an update; `/uccif:init` is only for a project without docs.
+  Nothing has to be rerun after an update.
 - If an update does not take effect: `claude plugin uninstall uccif@uccif`, then
   `claude plugin install uccif@uccif`, and restart.
 
@@ -83,8 +87,7 @@ The rule files are plain Markdown, one rule per line. They are read at session s
 `/clear` and after compaction, the same moments as the CORE RULES (every-project file first, then
 the project's). Each file contributes at most 15 non-empty lines (`<!-- -->` comments do not count);
 a longer file is cut with a pointer to the rest. A missing or unreadable file is skipped.
-`uccif doctor` lists which rule files are loaded. `/uccif:init` offers an empty project file with
-commented examples, and never overwrites one.
+`uccif doctor` lists which rule files are loaded. UCCIF never writes these files.
 
 ## Develop
 
@@ -107,9 +110,9 @@ of reinstalling.
 ## CodeGraph
 
 UCCIF has no code index of its own: [CodeGraph](https://github.com/colbymchenry/codegraph)
-is the index. After installing UCCIF, the first session says whether CodeGraph is missing, not
-wired or not indexed for this project, and Claude offers to run the `uccif:codegraph` skill, which
-runs:
+is the index. When the CLI is missing, Claude asks one yes/no question in its first reply (no:
+`uccif codegraph decline` stops the question for that project); on yes the `uccif:codegraph`
+skill runs, in the same session:
 
 ```bash
 npm install -g @colbymchenry/codegraph
@@ -119,8 +122,12 @@ npm install -g @colbymchenry/codegraph
 codegraph init --yes
 ```
 
-then keeps `.codegraph/` out of git and checks `codegraph status`. The MCP server is declared by the
-plugin itself (`.mcp.json`: `codegraph serve --mcp`), so nothing is written to your Claude config.
+then `uccif skills generate`, keeps `.codegraph/` out of git and checks `codegraph status`. The MCP
+server is declared by the plugin itself (`.mcp.json`: `codegraph serve --mcp`, with
+`CODEGRAPH_MCP_TOOLS=explore,node,callers,impact`), so nothing is written to your Claude config.
+Lookup routing (one definition, CORE RULE 2): flows and "where/how" → `codegraph_explore`; one
+symbol → `codegraph_node` / `codegraph_callers` / `codegraph_impact`; tests after a change →
+`git diff --name-only | codegraph affected --stdin --quiet`; Grep only for literals, scoped.
 Restart Claude Code once afterwards so `codegraph_explore` loads; its first call may ask you to
 allow the tool. `uccif codegraph` prints the current state (`mcp_via` says where the server comes
 from). Do not also run `codegraph install --target=claude`: that registers a second server with
@@ -133,9 +140,9 @@ machine, opening any project indexes it in the background (`codegraph init --yes
 
 | Skill | Content |
 |---|---|
-| `.claude/skills/<project>-map` | modules (dir, size, role), entry points, routes, most-used symbols, commands, how to look code up |
-| `.claude/skills/<project>-bugfix` | shortest path from a symptom to a tested fix: `codegraph explore` → callers → impact → smallest fix → `codegraph affected` → the project's own test commands (sub-packages included) |
-| `.claude/skills/<project>-mod-*` | one per sizeable module: key files and symbols with `file:line`, routes, the modules it depends on / is used by, tests and how to run one |
+| `.claude/skills/<project>-map` | modules (dir, size, role; key symbols for modules without their own skill), entry points, routes, most-used symbols, commands |
+| `.claude/skills/<project>-bugfix` | shortest path from a symptom to a tested fix: explore → callers → impact → smallest fix → affected tests → the project's own test commands |
+| `.claude/skills/<project>-mod-*` | the 5 largest modules (by symbols): key files and symbols with `file:line`, routes, the modules it depends on / is used by, tests and how to run one |
 
 They are rewritten only when the project's structure changes, and only files UCCIF wrote and
 nobody edited (a sha marker tells); text inside the `<!-- uccif:notes -->` block survives every

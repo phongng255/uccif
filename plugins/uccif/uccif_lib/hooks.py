@@ -164,36 +164,38 @@ def on_session_start(data, project):
         parts.append("Project purpose, conventions, external services: .claude/uccif/summary.md.")
     lines = task.summary_lines(project)
     if lines:
-        parts.append("\n".join(lines) + "\nIf the user's request continues it, use the uccif:resume skill.")
+        parts.append("\n".join(lines) + " (continue it if the request is related: uccif:resume)")
     fields = {"rule": "context", "target": source}
     if n_user:
         fields["user_rules"] = n_user
     return _ctx("SessionStart", "\n\n".join(parts)), fields
 
 
+def _prompt_path(project):
+    return Path(project.data_dir) / "last_prompt.txt"
+
+
 def on_user_prompt_submit(data, project):
+    """Injects only news: an open task kept across turns, or stale docs. Nothing new -> nothing."""
     prompt = data.get("prompt") or ""
-    lang = options()["reply_language"]
-    quick = "#quick" in prompt
-    _set_quick(project, quick)
-    lines = [] if quick else task.summary_lines(project)
-    if not quick and not lines:
-        lines.append("No open UCCIF task. If this prompt changes code: load the matching uccif / project "
-                     "skill, then `uccif task start \"<title>\" --type <type>` before the first edit "
-                     "(a new change = a new task, even after the last one was closed). Ops work and "
-                     "`#quick` edits need no task.")
+    _set_quick(project, "#quick" in prompt)
+    try:  # the title of the implicit task the first edit opens
+        _prompt_path(project).parent.mkdir(parents=True, exist_ok=True)
+        _prompt_path(project).write_text(prompt[:400], encoding="utf-8")
+    except OSError:
+        pass
+    lines = task.summary_lines(project)
+    if lines:
+        lines[-1] += " (continue it if this prompt is related: uccif:resume)"
     stale = drift.pending(project)
     if stale:
-        lines.append("Project docs are stale (.claude/uccif/): " + "; ".join(stale) +
-                     ". Update only those sections when convenient, then run `uccif drift ack`.")
-    lines.append("Reply in %s. Do ops work yourself. To find code, query CodeGraph first "
-                 "(`codegraph_explore`, or `codegraph explore` in Bash); code changes follow the uccif task flow."
-                 % lang)
-    return _ctx("UserPromptSubmit", "\n".join(lines)), {"rule": "quick" if quick else "reminder",
-                                                       "drift": len(stale) or None}
+        lines.append("Project notes are stale: " + "; ".join(stale) +
+                     ". Update only those lines when convenient, then run `uccif drift ack`.")
+    if not lines:
+        return None, {"decision": "skip"}
+    return _ctx("UserPromptSubmit", "\n".join(lines)), {"rule": "news", "drift": len(stale) or None}
 
 
-EDIT_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
 NUDGE_EVERY = 600  # seconds between two search nudges
 
 
@@ -233,27 +235,14 @@ def _nudge_due(project, name):
 
 
 def _main_agent_nudge(data, project):
-    """Reminders (never a block) for the main agent: edit without a task, search without CodeGraph."""
+    """Reminder (never a block) for the main agent: search without CodeGraph."""
     tool = data.get("tool_name")
     ti = data.get("tool_input") or {}
-    if tool in EDIT_TOOLS:
-        path = ti.get("file_path") or ti.get("notebook_path") or ""
-        rel = _rel(project, path) if path else None
-        cur = task.load_current(project)
-        if (not rel or rel.startswith(".claude/") or _is_quick(project)
-                or (cur and cur.get("status") != "done")):
-            return None, {"decision": "skip"}
-        msg = ("UCCIF: you are about to edit %s with no open task. Start one first: load the matching "
-               "skill (the project's -mod-* / -bugfix skill, or uccif:task-context), then "
-               "`uccif task start \"<title>\" --type <type>`. If this is a tiny edit the user marked "
-               "#quick, ignore this." % rel)
-        return _ctx("PreToolUse", msg), {"rule": "edit-no-task", "target": rel}
     is_search = tool in ("Grep", "Glob") or (
         tool == "Bash" and SEARCH_CMD.search(" " + (ti.get("command") or "")))
     if is_search and _nudge_due(project, "search.nudge"):
-        msg = ("UCCIF: to find code, ask CodeGraph first (`codegraph_explore`, or `codegraph explore` "
-               "in Bash) and read the matching project -mod-* skill. If Grep/Glob is still needed "
-               "(a literal string), scope it to the module directory, not the whole repo.")
+        msg = ("UCCIF: code lookups go to CodeGraph first (core rule 2); Grep/Glob only for literals, "
+               "scoped to a module dir.")
         return _ctx("PreToolUse", msg), {"rule": "search-codegraph-first", "target": tool}
     return None, {"decision": "skip"}
 
@@ -276,8 +265,21 @@ def on_post_tool_use(data, project):
     rel = _rel(project, path) if path else None
     if not rel or rel.startswith(".claude/"):
         return None, {"decision": "skip", "target": path}
+    opened = None
+    if not _is_quick(project):
+        try:
+            prompt = _prompt_path(project).read_text(encoding="utf-8")
+        except OSError:
+            prompt = ""
+        try:
+            opened = task.start_auto(project, prompt)
+        except task.TaskError:
+            opened = None
     added = task.add_modified(project, rel)
-    return None, {"rule": "task-files" if added else "no-task", "target": rel}
+    fields = {"rule": "task-files" if added else "no-task", "target": rel}
+    if opened:
+        fields["opened"] = opened["id"]
+    return None, fields
 
 
 def on_post_tool_use_failure(data, project):
@@ -313,6 +315,10 @@ def on_stop(data, project):
         return None, {"decision": "skip", "rule": "rerun"}
     # structural changes made by Bash, by the user, or by git pull/checkout this turn
     spawn(["maintain"], project)
+    try:
+        task.auto_close(project)
+    except task.TaskError:
+        pass
     cfg = project_config(project)
     window = cfg["context_window"] if isinstance(cfg["context_window"], int) else "auto"
     s = usage.summarize(data.get("transcript_path"), window)

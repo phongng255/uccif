@@ -1,5 +1,43 @@
 # Changelog
 
+## 1.1.0 — understands the project by itself, smaller overhead
+
+**Understanding the source without commands**
+- No CodeGraph CLI: SessionStart makes Claude ask one yes/no question in its first reply; on yes it
+  installs, indexes (`codegraph init --yes`) and writes the project skills in the same session.
+  `uccif codegraph decline` stops the question for that project.
+- No more "project not surveyed, run init" message: the generated `<project>-map` skill is the code
+  map. `/uccif:init` is optional and small (≤ 10 tool calls, ≤ 8 files read).
+
+**One source of truth**
+- `architecture.md` is gone. `summary.md` (≤ 20 lines, written only by init) holds only what the
+  graph cannot know: purpose, conventions, external services.
+- `uccif claude-md write` composes the CLAUDE.md block itself from 1–3 description lines: commands
+  from the manifests and one pointer to the map skill, ≤ 15 lines, appended at the end; text outside
+  the block is never touched. A longer block is refused.
+- Drift no longer reports new/removed source dirs (the map skill refreshes itself); dependency and
+  build-config changes point to `summary.md` / the CLAUDE.md block. `project-analyst` now describes
+  only a module's purpose, conventions and external services.
+
+**CodeGraph routing** (defined once, in CORE RULE 2)
+- Flows and "where/how" → `codegraph_explore`; one symbol → `codegraph_node`, `codegraph_callers`,
+  `codegraph_impact` (now listed through `CODEGRAPH_MCP_TOOLS` in `.mcp.json`; Bash CLI forms work
+  the same); tests → `codegraph affected`. Hook lines, generated skills and agents point to it
+  instead of repeating it.
+
+**Fewer tokens and tool calls**
+- CORE RULES: 8 → 5 rules.
+- Tasks are automatic: the first edit opens one (title and type from the prompt), PostToolUse
+  records files, Stop closes it unless a decision/issue/next step was recorded. No `uccif task start`,
+  no "edit without task" nudge; `#quick` still skips the task but is no longer advertised.
+- UserPromptSubmit injects nothing unless there is news (a task kept open, stale notes).
+- PreToolUse runs only for Bash/Grep/Glob; the search reminder is one short line.
+- Generated skills: at most 5 `-mod-*` skills (largest by symbols); other modules are rows of the
+  map table with their key symbols. Every description ≤ 200 characters.
+- Plugin skills `smart-code-search`, `code-review`, `code-impact-analysis` and `task-context` are
+  removed (their roles live in CORE RULE 2 and the `change-reviewer` / `code-impact-analyzer` agents);
+  remaining descriptions shortened.
+
 ## 1.0.0 — first release
 
 A Claude Code plugin marketplace with one plugin, `uccif`. Install it once; in any repository it

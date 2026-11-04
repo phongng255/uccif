@@ -1,6 +1,6 @@
 ---
 name: codegraph
-description: Install and wire CodeGraph (@colbymchenry/codegraph) for this project - a tree-sitter code graph in .codegraph/ (SQLite) that Claude queries through the codegraph_explore MCP tool instead of grep/find. Use when a UCCIF hook says CodeGraph is missing or the project has no index, when the user asks to install, set up, re-index or fix CodeGraph, or before the first code search in a new repo.
+description: Install, index or repair CodeGraph for this project (CLI, .codegraph/ index, project skills). Use when the user agrees to install it, or asks to set up, re-index or fix it.
 argument-hint: "[reindex]"
 ---
 
@@ -50,11 +50,4 @@ npm package `codegraph` is an unrelated project with no CLI.
   `codegraph explore "<question>"` in Bash.
 - Undo: `codegraph uninit` (this project), `codegraph uninstall` (everything).
 
-## After setup: how to look up code
-
-1. `codegraph_explore` MCP tool (subagents and shell: `codegraph explore "<question>"`) for
-   "where is X", "how does X work", "what calls X", "what breaks if I change X".
-2. Trust its returned source as already read; read a file only for lines it did not return.
-3. Grep/Glob only for what a code graph cannot know: string literals, config, docs.
-4. Impact before editing: `codegraph impact <symbol>`; tests to run after:
-   `git diff --name-only | codegraph affected --stdin --quiet`.
+Afterwards lookups follow UCCIF core rule 2.

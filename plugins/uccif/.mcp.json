@@ -3,8 +3,15 @@
     "codegraph": {
       "type": "stdio",
       "command": "codegraph",
-      "args": ["serve", "--mcp"],
-      "alwaysLoad": true
+      "args": [
+        "serve",
+        "--mcp"
+      ],
+      "alwaysLoad": true,
+      "env": {
+        "CODEGRAPH_MCP_TOOLS": "explore,node,callers,impact",
+        "CODEGRAPH_TELEMETRY": "0"
+      }
     }
   }
 }

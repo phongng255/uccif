@@ -92,7 +92,7 @@ def test_generate_writes_map_bugfix_and_module_skills(project, app):
     assert "- `src/main.py`" in text  # entry point: nothing imports it
     assert "yaml" not in text.split("\n## Modules")[0]
     bug = (app / (".claude/skills/%s-bugfix/SKILL.md" % slug)).read_text(encoding="utf-8")
-    assert "codegraph explore" in bug and "codegraph affected --stdin" in bug
+    assert "core rule 2" in bug and "uccif task start" not in bug
     assert "python -m pytest -q {file}" in bug and "cd web && npx vitest run {file}" in bug
     api = (app / (".claude/skills/%s-mod-api/SKILL.md" % slug)).read_text(encoding="utf-8")
     assert "- `tests/test_routes.py`" in api and "run one: `python -m pytest -q tests/test_routes.py`" in api

@@ -205,6 +205,54 @@ def close(project, decisions=None, issues=None, no_findings=False):
     return task
 
 
+def guess_type(prompt):
+    import re
+    p = (prompt or "").lower()
+    for ttype, pat in (("bug", r"fix|bug|error|crash|broken|fail|lỗi|sửa"), ("refactor", r"refactor|rename|clean"),
+                       ("test", r"\btests?\b|kiểm thử"), ("ui", r"\bui\b|css|style|giao diện")):
+        if re.search(pat, p):
+            return ttype
+    return "feature"
+
+
+def auto_title(prompt):
+    line = " ".join((prompt or "").split())
+    return (line[:77] + "...") if len(line) > 80 else (line or "Code change")
+
+
+@_locked
+def start_auto(project, prompt):
+    """Open an implicit task at the first edit when none is open (PostToolUse). Never raises
+    for an open task: returns None instead."""
+    cur = load_current(project)
+    if cur and cur.get("status") != "done":
+        return None
+    p = _paths(project)
+    state = read_json(p["state"], {"next_id": 1})
+    tid = "T-%03d" % state["next_id"]
+    state["next_id"] += 1
+    write_json(p["state"], state)
+    task = {"id": tid, "title": auto_title(prompt), "type": guess_type(prompt), "status": "in_progress",
+            "goal": "", "modules": "", "next": "", "rewrite": False, "auto": True,
+            "files": [], "decisions": [], "tests": [], "issues": [], "started": now_iso()}
+    _save(project, task)
+    return task
+
+
+@_locked
+def auto_close(project):
+    """Stop hook: close an implicit task that recorded nothing worth keeping."""
+    task = load_current(project)
+    if (not task or task.get("status") == "done" or not task.get("auto")
+            or task.get("decisions") or task.get("issues") or task.get("next")):
+        return None
+    task["status"] = "done"
+    task["closed"] = now_iso()
+    _save(project, task)
+    snapshot(project, label=task["id"])
+    return task
+
+
 def snapshot(project, label=None):
     """Copy current-task.md into history/ and keep the newest HISTORY_KEEP files."""
     p = _paths(project)

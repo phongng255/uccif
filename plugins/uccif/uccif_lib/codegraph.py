@@ -87,22 +87,16 @@ def context_line(project):
     """One SessionStart line for Claude: how to look code up, or how to get CodeGraph."""
     st = state(project)
     if st["indexed"] and not st["cli"]:
-        return ("CodeGraph index exists (.codegraph/) but the `codegraph` CLI is not installed, so its MCP server "
-                "cannot start. Use bounded Grep/Glob, and offer the user once to run the uccif:codegraph skill "
-                "(installs the CLI; needs a Claude Code restart).")
+        return ("CodeGraph index exists but the `codegraph` CLI is not installed, so rule 2 cannot work: offer once "
+                "to reinstall it (uccif:codegraph skill); meanwhile bounded Grep/Glob.")
     if st["indexed"] and st["mcp"]:
-        return ("CodeGraph is active for this project (.codegraph/). To find or understand code, call the "
-                "`codegraph_explore` MCP tool FIRST (subagents / shell: `codegraph explore \"<question>\"`); "
-                "trust its source output instead of re-reading files, and use Grep/Glob only for what it cannot "
-                "answer (string literals, config, non-code files).")
+        return "CodeGraph is active (.codegraph/): follow core rule 2; trust its returned source as read."
     if st["indexed"]:
-        return ("CodeGraph index exists (.codegraph/) but its MCP server is not wired into Claude Code. Use "
-                "`codegraph explore \"<question>\"` in Bash before Grep/Read, and offer the user once to run the "
-                "uccif:codegraph skill (wires the MCP tool; needs a Claude Code restart).")
+        return ("CodeGraph index exists but its MCP server is not wired: use the Bash CLI forms of rule 2 "
+                "(`codegraph explore \"<question>\"`).")
     if st["cli"]:
-        return ("CodeGraph CLI is installed and this project is being indexed in the background "
-                "(`codegraph init --yes`); until `.codegraph/` exists use `codegraph explore` once it finishes, "
-                "or bounded Grep/Glob. If it never appears, run the uccif:codegraph skill.")
+        return ("CodeGraph is indexing this project in the background (`codegraph init --yes`); until "
+                "`.codegraph/` exists use bounded Grep/Glob.")
     if declined(project):
         return "CodeGraph is not installed (the user declined): use bounded Grep/Glob."
     return ("CodeGraph (pre-built code graph: finds and explains code for far fewer tokens than Grep/Read) is NOT "

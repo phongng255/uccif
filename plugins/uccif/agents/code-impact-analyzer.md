@@ -1,6 +1,6 @@
 ---
 name: code-impact-analyzer
-description: Read-only. Use before changing a shared interface, API, props, store, type or util, or for any refactor/rename touching more than one module. Input is file + symbol + kind of change; returns a ≤ 40-line impact table with file:line, risk and tests to run.
+description: Read-only. Use before a rename, refactor or change to a shared API/type/store reaching more than one module. Input: file + symbol + kind of change; returns an impact table with tests.
 tools: Read, Grep, Glob, Bash
 disallowedTools: Write, Edit, MultiEdit, NotebookEdit
 maxTurns: 40
