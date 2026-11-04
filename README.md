@@ -38,6 +38,29 @@ Bash, which Claude Code uses to run hooks) are all tested in CI; Windows has not
 tried in a real Claude Code session. Language servers and the CodeGraph CLI are never installed
 without your agreement; `uccif doctor` reports what is missing.
 
+## Antigravity
+
+Antigravity CLI (`agy`), from a terminal:
+
+```
+agy plugin install https://github.com/phongng255/uccif/tree/main/plugins/uccif-antigravity
+```
+
+Use that exact URL form. A bare repo URL, `#branch` or `--ref` installs the Claude plugin from the
+default branch instead, whose hooks Antigravity skips. Remove it with `agy plugin uninstall uccif`.
+
+Antigravity IDE, in a project (this writes `.agents/`, which the IDE reads per workspace):
+
+```
+<path to>/plugins/uccif/bin/uccif setup antigravity
+```
+
+`--remove` deletes only the files it wrote. The rule file holds this machine's path to `uccif`, so
+do not commit it. There are no hooks in this mode: rules, skills and CodeGraph only, no automatic
+task memory.
+
+Antigravity shows no token line and has no `#quick`: its hooks do not allow them.
+
 ## Update
 
 ```

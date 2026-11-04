@@ -38,3 +38,8 @@ jobs:
       - run: claude plugin validate . --strict
       - run: python3 plugins/uccif/scripts/build_gemini.py --check
       - run: npx -y @google/gemini-cli@0.66.0 extensions validate .
+      - run: python3 plugins/uccif/scripts/build_antigravity.py --check
+      - run: curl -fsSL https://antigravity.google/cli/install.sh | bash
+      - run: ~/.local/bin/agy plugin validate --strict plugins/uccif-antigravity
+      - run: ~/.local/bin/agy plugin install plugins/uccif-antigravity
+      - run: ~/.gemini/config/plugins/uccif/core/bin/uccif version

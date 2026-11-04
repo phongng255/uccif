@@ -1,5 +1,37 @@
 # Changelog
 
+## Unreleased — Antigravity plugin (stage 3)
+
+Gemini CLI stopped serving unpaid and Google One users on June 18, 2026 in favour of Antigravity CLI
+(`agy`), so Antigravity comes first. The Gemini extension stays for paid Gemini CLI users.
+
+- `plugins/uccif-antigravity/`: an Antigravity plugin, built by
+  `plugins/uccif/scripts/build_antigravity.py` from the core plugin; only `core`, a symlink to
+  `../uccif`, is not generated (`agy plugin install` copies its target, so no code is duplicated).
+  Install it with `agy plugin install https://github.com/phongng255/uccif/tree/<branch>/plugins/uccif-antigravity`.
+- It has its own directory because `hooks/hooks.json` at a plugin root makes
+  `agy plugin validate --strict` fail ("never loaded"), and the repo root needs that file for Gemini.
+- `--host antigravity` no longer assumes Claude's format, which was wrong. It now reads
+  `conversationId`, `workspacePaths` (hooks run with the plugin root as cwd), `transcriptPath`,
+  `toolCall{name, args}`, `error`, `fullyIdle`, and writes `injectSteps` and `decision`.
+- Hooks: SessionStart, PreInvocation (first call of a turn only), PostToolUse (edit tools), Stop.
+  No PreToolUse: its required `decision` can only allow, deny or ask, and "allow" skips the user's
+  permission prompt.
+- `uccif setup antigravity [--remove]`: `.agents/rules/uccif.md`, `.agents/skills/`,
+  `.agents/mcp_config.json` for the IDE. It records what it writes with a hash, never overwrites a
+  file it did not write, and `--remove` deletes only its own unedited files.
+- Skill and rule text moved to `uccif_lib/hostfiles.py`, shared by both hosts and by `setup`.
+
+Differences from the other hosts, because Antigravity's hooks offer no way to do them:
+no token line (no hook text reaches only the user without a model step, and the transcript format is
+not documented); no prompt text in hooks, so `#quick` does nothing and auto tasks are titled "Code
+change"; no search nudge (no PreToolUse); no compact or session-end event. Skill and `.claude/uccif/`
+behaviour is the same.
+
+`agy plugin import gemini` is not a working path: it copies Gemini's hooks file as is, and the loader
+skips the whole file ("cannot unmarshal", or "command hook must specify 'command'" without the
+`description` key). Skills and MCP arrive, hooks do not. Install the plugin instead.
+
 ## Unreleased — Gemini CLI extension (stage 2)
 
 - The repo root is also a Gemini CLI extension: `gemini-extension.json`, `hooks/hooks.json` and

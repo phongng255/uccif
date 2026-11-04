@@ -146,9 +146,12 @@ def on_session_start(data, project):
         with open(env_file, "a", encoding="utf-8") as f:
             f.write("export UCCIF_DATA_DIR=%s\n" % quoted)
 
+    host = data.get("_host") or "claude"
     parts, n_user = [], 0
     if source in ("startup", "clear", "compact"):
-        parts.append(core_rules(opts["reply_language"]))
+        # `uccif setup antigravity` puts the core rules in an always-on rule file: not twice
+        if not (host == "antigravity" and (Path(project.root) / ".agents" / "rules" / "uccif.md").exists()):
+            parts.append(core_rules(opts["reply_language"]))
         try:  # the user's own rules, right after the core (never fails the hook)
             extra = user_rules(project)
         except Exception:
@@ -157,7 +160,8 @@ def on_session_start(data, project):
             parts.append(extra)
             n_user = extra.count("USER RULES (")
     spawn(["maintain"], project)  # drift check, CodeGraph index + project skills in the background
-    parts.append(codegraph.context_line(project))
+    line = codegraph.context_line(project)
+    parts.append(line if host == "claude" else line.replace("one Claude Code restart", "one restart"))
     mine = skillgen.generated(project)
     maps = [n for n in mine if n.endswith("-map")]
     if maps:  # the map skill is the code map; init is optional
@@ -171,7 +175,6 @@ def on_session_start(data, project):
     lines = task.summary_lines(project)
     if lines:
         parts.append("\n".join(lines) + " (continue it if the request is related: uccif:resume)")
-    host = data.get("_host") or "claude"
     if host != "claude":
         parts.extend(_other_host_lines(project, host))
     fields = {"rule": "context", "target": source}
@@ -185,9 +188,12 @@ UCCIF_BIN = Path(__file__).resolve().parent.parent / "bin" / "uccif"
 
 def _other_host_lines(project, host):
     """What Claude Code gets from the plugin system and other hosts do not: the `uccif` command
-    on PATH, and the project's AGENTS.md (Gemini CLI reads only GEMINI.md by default). Only the
-    UCCIF block is injected, never the rest of a user's AGENTS.md."""
+    on PATH, and for Gemini CLI the project's AGENTS.md (it reads only GEMINI.md by default;
+    Antigravity reads AGENTS.md itself). Only the UCCIF block is injected, never the rest of a
+    user's AGENTS.md."""
     out = ['`uccif` is not on PATH here: run it as `"%s"` (same arguments).' % UCCIF_BIN.as_posix()]
+    if host != "gemini":
+        return out
     try:
         text = (Path(project.root) / "AGENTS.md").read_text(encoding="utf-8")
     except OSError:
@@ -206,8 +212,28 @@ def _edited_path(project):
     return Path(project.data_dir) / "prompt_edited.flag"
 
 
+def _same_turn(data, project):
+    """Antigravity's PreInvocation runs before every model call and has no prompt text. A turn is
+    one (conversationId, initialNumSteps): only its first call counts as the prompt."""
+    key = "%s:%s" % (data.get("conversationId"), data.get("initialNumSteps"))
+    f = Path(project.data_dir) / "last_turn.txt"
+    try:
+        if f.read_text(encoding="utf-8") == key:
+            return True
+    except OSError:
+        pass
+    try:
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(key, encoding="utf-8")
+    except OSError:
+        pass
+    return False
+
+
 def on_user_prompt_submit(data, project):
     """Injects only news: an open task kept across turns, or stale docs. Nothing new -> nothing."""
+    if data.get("_host") == "antigravity" and _same_turn(data, project):
+        return None, {"decision": "skip", "rule": "same-turn"}
     prompt = data.get("prompt") or ""
     _set_quick(project, "#quick" in prompt)
     try:  # the title of the implicit task the first edit opens
@@ -460,7 +486,8 @@ def run(event, stdin=None, stdout=None, host="claude"):
         fields["host"] = host
     if ms > SLOW_MS.get(event, 1000):
         fields["slow"] = True
-    quiet = event == "pre-tool-use" and fields.get("decision") == "skip" and not fields.get("slow")
+    quiet = ((event == "pre-tool-use" and fields.get("decision") == "skip") or
+             fields.get("rule") == "same-turn") and not fields.get("slow")
     try:
         if project is None:
             project = resolve_project()
@@ -468,7 +495,9 @@ def run(event, stdin=None, stdout=None, host="claude"):
             log.hook(project, **fields)
     except Exception:
         pass
-    if out:
+    if out is None and host in hosts.HOSTS:
+        out = hosts.default_output(host, event)
+    if out is not None:
         try:
             # ASCII-escaped JSON: valid for Claude Code whatever the stream encoding is
             stdout.write(json.dumps(out, ensure_ascii=True))

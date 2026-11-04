@@ -57,6 +57,10 @@ def build_parser():
 
     sub.add_parser("maintain", help="background upkeep: drift check")
 
+    su = sub.add_parser("setup", help="write this project's files for a host that has no plugin install")
+    su.add_argument("host", choices=("antigravity",), help="antigravity: .agents/ for the Antigravity IDE")
+    su.add_argument("--remove", action="store_true", help="delete only the files setup wrote")
+
     for name in ("agents-md", "claude-md"):  # claude-md: the 1.1 name, kept as an alias
         cm = sub.add_parser(name, help="AGENTS.md UCCIF block (CLAUDE.md imports it with @AGENTS.md)"
                             ).add_subparsers(dest="action")
@@ -390,6 +394,10 @@ def main(argv=None):
             return _drift_cmd(args)
         if args.cmd == "maintain":
             return maintain()
+        if args.cmd == "setup":
+            from uccif_lib import antigravity_setup as setup
+            print("\n".join((setup.remove if args.remove else setup.setup)(resolve_project())))
+            return 0
         if args.cmd == "verify-tests":
             from uccif_lib import verify
             r = verify.verify(resolve_project())

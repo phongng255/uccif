@@ -13,7 +13,14 @@ Gemini CLI facts (hooks reference at geminicli.com/docs/hooks/reference, tool na
 PreCompress, SessionEnd (+ model/notification events UCCIF does not use);
 hookSpecificOutput.additionalContext only on SessionStart, BeforeAgent and AfterTool; MCP tools
 are named mcp_<server>_<tool>; workspace skills are read from .gemini/skills/ or the
-.agents/skills/ alias. Antigravity is not verified yet: its I/O is treated as Claude-shaped.
+.agents/skills/ alias.
+
+Antigravity facts (antigravity.google/docs/hooks and the contract embedded in agy 1.4.12): events
+SessionStart, PreToolUse, PostToolUse, PreInvocation, PostInvocation, Stop; hooks run with the
+plugin root as cwd; stdin is camelCase (conversationId, workspacePaths, transcriptPath,
+toolCall{name, args}, error, fullyIdle) and has no prompt text; stdout must be a JSON object, with
+context in injectSteps and a required decision on Stop and PreToolUse. No event reaches the user
+with text unless it is a step the model also gets, and there is no compact or session-end event.
 """
 
 import re
@@ -47,6 +54,16 @@ GEMINI_TOOLS = {
     "replace": "Edit", "write_file": "Write", "glob": "Glob", "grep_search": "Grep",
     "search_file_content": "Grep", "list_directory": "LS",
 }
+ANTIGRAVITY_EVENTS = {
+    "SessionStart": "session-start", "PreInvocation": "user-prompt-submit",
+    "PreToolUse": "pre-tool-use", "PostToolUse": "post-tool-use", "Stop": "stop",
+}
+ANTIGRAVITY_TOOLS = {
+    "run_command": "Bash", "view_file": "Read", "read_file": "Read", "edit_file": "Edit",
+    "replace_file_content": "Edit", "multi_replace_file_content": "Edit", "write_to_file": "Write",
+    "write_file": "Write", "grep_search": "Grep", "find_by_name": "Glob", "list_dir": "LS",
+}
+ANTIGRAVITY_PATH_ARGS = ("TargetFile", "AbsolutePath", "FilePath", "file_path", "absolute_path")
 # internal event -> Gemini event that may carry additionalContext
 GEMINI_CONTEXT = {"session-start": "SessionStart", "user-prompt-submit": "BeforeAgent",
                   "post-tool-use": "AfterTool", "post-tool-use-failure": "AfterTool"}
@@ -64,17 +81,16 @@ def check(host):
 
 def event_name(host, event):
     """Internal kebab event name for what the host passed (native or already kebab)."""
-    table = GEMINI_EVENTS if host == "gemini" else CLAUDE_EVENTS
+    table = {"gemini": GEMINI_EVENTS, "antigravity": ANTIGRAVITY_EVENTS}.get(host, CLAUDE_EVENTS)
     return table.get(event, event)
 
 
 def tool_name(host, name):
     """Claude Code tool name for a host tool name; unknown names pass through."""
-    if host != "gemini" or not name:
+    table = {"gemini": GEMINI_TOOLS, "antigravity": ANTIGRAVITY_TOOLS}.get(host)
+    if not table or not name:
         return name
-    if name in GEMINI_TOOLS:
-        return GEMINI_TOOLS[name]
-    return name
+    return table.get(name, name)
 
 
 def _gemini_mcp(name, mcp_context):
@@ -94,9 +110,30 @@ def _error_text(resp):
     return str(err) if err else None
 
 
+def _normalize_antigravity(event, data):
+    paths = data.get("workspacePaths") or []
+    if not paths:  # cwd is the plugin root here, which is not the user's project
+        raise ValueError("no workspacePaths in the hook input")
+    out = dict(data, cwd=paths[0], session_id=data.get("conversationId"),
+               transcript_path=data.get("transcriptPath"))
+    call = data.get("toolCall") or {}
+    if call:
+        args = call.get("args") if isinstance(call.get("args"), dict) else {}
+        out["tool_name"] = tool_name("antigravity", call.get("name"))
+        out["tool_input"] = {"command": args.get("CommandLine"),
+                             "file_path": next((args[k] for k in ANTIGRAVITY_PATH_ARGS if args.get(k)), None)}
+    if event == "post-tool-use" and data.get("error"):
+        event = "post-tool-use-failure"
+    if event == "stop":  # background work still running: the turn is not over
+        out["stop_hook_active"] = not data.get("fullyIdle", True)
+    return event, out
+
+
 def normalize(host, event, data):
     """(internal_event, data) with Claude Code names. `data` is not modified in place."""
     event = event_name(host, event)
+    if host == "antigravity":
+        return _normalize_antigravity(event, data)
     if host != "gemini":
         return event, data
     data = dict(data)
@@ -114,15 +151,29 @@ def normalize(host, event, data):
 
 def format_output(host, event, out):
     """Turn a Claude-shaped hook result into what the host reads; None drops it."""
-    if not out or host != "gemini":
+    if not out or host == "claude":
         return out
+    ctx = (out.get("hookSpecificOutput") or {}).get("additionalContext")
+    if host == "antigravity":
+        if ctx and event == "session-start":  # systemMessage must be a nested object
+            return {"injectSteps": [{"systemMessage": {"systemMessage": ctx}}]}
+        if ctx and event == "user-prompt-submit":
+            return {"injectSteps": [{"ephemeralMessage": ctx}]}
+        return None
     res = {}
     if out.get("systemMessage"):
         res["systemMessage"] = out["systemMessage"]
-    ctx = (out.get("hookSpecificOutput") or {}).get("additionalContext")
     if ctx and event in GEMINI_CONTEXT:
         res["hookSpecificOutput"] = {"hookEventName": GEMINI_CONTEXT[event], "additionalContext": ctx}
     return res or None
+
+
+def default_output(host, event):
+    """What a host needs on stdout when a hook has nothing to say. Antigravity requires a JSON
+    object, and on Stop a decision; anything but "continue" lets the agent stop."""
+    if host != "antigravity":
+        return None
+    return {"decision": "allow"} if event == "stop" else {}
 
 
 # ---- which hosts a project uses ----------------------------------------------------
