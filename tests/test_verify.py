@@ -60,7 +60,7 @@ def test_claude_md_block_labels_only_test(project, repo, monkeypatch, cmd, deps,
     verify.verify(project, timeout=1)
     monkeypatch.setattr("sys.stdin", io.StringIO("A lib."))
     assert cli.main(["claude-md", "write"]) == 0
-    block = (repo / "CLAUDE.md").read_text(encoding="utf-8")
+    block = (repo / "AGENTS.md").read_text(encoding="utf-8")
     line = next(l for l in block.splitlines() if l.startswith("Commands: "))
     assert "test `npm test`%s" % label in line
     if not label:

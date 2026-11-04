@@ -1,5 +1,82 @@
 # Changelog
 
+## Unreleased — Antigravity plugin (stage 3)
+
+Gemini CLI stopped serving unpaid and Google One users on June 18, 2026 in favour of Antigravity CLI
+(`agy`), so Antigravity comes first. The Gemini extension stays for paid Gemini CLI users.
+
+- `plugins/uccif-antigravity/`: an Antigravity plugin, built by
+  `plugins/uccif/scripts/build_antigravity.py` from the core plugin; only `core`, a symlink to
+  `../uccif`, is not generated (`agy plugin install` copies its target, so no code is duplicated).
+  Install it with `agy plugin install https://github.com/phongng255/uccif/tree/<branch>/plugins/uccif-antigravity`.
+- It has its own directory because `hooks/hooks.json` at a plugin root makes
+  `agy plugin validate --strict` fail ("never loaded"), and the repo root needs that file for Gemini.
+- `--host antigravity` no longer assumes Claude's format, which was wrong. It now reads
+  `conversationId`, `workspacePaths` (hooks run with the plugin root as cwd), `transcriptPath`,
+  `toolCall{name, args}`, `error`, `fullyIdle`, and writes `injectSteps` and `decision`.
+- Hooks: SessionStart, PreInvocation (first call of a turn only), PostToolUse (edit tools), Stop.
+  No PreToolUse: its required `decision` can only allow, deny or ask, and "allow" skips the user's
+  permission prompt.
+- `uccif setup antigravity [--remove]`: `.agents/rules/uccif.md`, `.agents/skills/`,
+  `.agents/mcp_config.json` for the IDE. It records what it writes with a hash, never overwrites a
+  file it did not write, and `--remove` deletes only its own unedited files.
+- Skill and rule text moved to `uccif_lib/hostfiles.py`, shared by both hosts and by `setup`.
+
+Differences from the other hosts, because Antigravity's hooks offer no way to do them:
+no token line (no hook text reaches only the user without a model step, and the transcript format is
+not documented); no prompt text in hooks, so `#quick` does nothing and auto tasks are titled "Code
+change"; no search nudge (no PreToolUse); no compact or session-end event. Skill and `.claude/uccif/`
+behaviour is the same.
+
+`agy plugin import gemini` is not a working path: it copies Gemini's hooks file as is, and the loader
+skips the whole file ("cannot unmarshal", or "command hook must specify 'command'" without the
+`description` key). Skills and MCP arrive, hooks do not. Install the plugin instead.
+
+## Unreleased — Gemini CLI extension (stage 2)
+
+- The repo root is also a Gemini CLI extension: `gemini-extension.json`, `hooks/hooks.json` and
+  `skills/`. `gemini extensions install <github url>` reads the manifest only at the repo root
+  (tested with Gemini CLI 0.66.0: "Configuration file not found at
+  /tmp/gemini-extension…/gemini-extension.json" when it sits in a subdirectory), so it cannot live
+  under `plugins/`.
+  - The manifest declares the same CodeGraph MCP server as the Claude plugin
+    (`codegraph serve --mcp`, `CODEGRAPH_MCP_TOOLS=explore`), a 4-line context file and three
+    settings (`UCCIF_REPLY_LANGUAGE`, `UCCIF_TOKEN_REPORT`, `UCCIF_AUTO_SETUP`).
+  - Hooks call `"${extensionPath}${/}plugins${/}uccif${/}bin${/}uccif" hook --host gemini <Event>`
+    for SessionStart, BeforeAgent, BeforeTool, AfterTool, AfterAgent, PreCompress and SessionEnd.
+  - `skills/` is generated from `plugins/uccif/skills/` by `plugins/uccif/scripts/build_gemini.py`.
+    It is one source, and CI fails when the copies are stale.
+- Under Gemini, SessionStart also gives the full path of `uccif`, because it is not on PATH there,
+  and the UCCIF block of AGENTS.md. Gemini reads only GEMINI.md by default, and the rest of a
+  user's AGENTS.md is never injected.
+- The token line reads Gemini CLI transcripts: JSONL records with `tokens`, where an updated
+  message is appended again under the same id; older whole-JSON sessions are read too.
+- CI: `gemini extensions validate .` and a skills sync check.
+
+## Unreleased — one core for Claude Code, Gemini CLI and Antigravity (stage 1)
+
+- Host adapter (`uccif_lib/hosts.py`): `uccif hook --host claude|gemini|antigravity <event>`.
+  It translates event names (Gemini SessionStart, BeforeAgent, BeforeTool, AfterTool, AfterAgent,
+  PreCompress, SessionEnd), tool names (run_shell_command → Bash, read_file → Read,
+  replace / write_file → Edit / Write, grep_search → Grep, glob → Glob, mcp_<server>_<tool> →
+  mcp__<server>__<tool>) and the output: Gemini takes additionalContext only on SessionStart,
+  BeforeAgent and AfterTool. A failed Gemini tool (AfterTool with an error) runs the failure handler.
+  The hook logic stays in hooks.py. Without `--host`, everything works as in 1.1.
+- The UCCIF block now lives in AGENTS.md; CLAUDE.md imports it with one `@AGENTS.md` line.
+  `uccif agents-md write` (`claude-md write` is still an alias): it creates AGENTS.md or appends
+  the block to it, creates CLAUDE.md as `@AGENTS.md` or appends that line once, moves a 1.1 block
+  out of CLAUDE.md, and leaves a CLAUDE.md symlink in place. The user's own text is never changed.
+  Exception: when the user already has an AGENTS.md that CLAUDE.md does not import, no import is
+  added, because it would load the whole file into every Claude session. The same block, built
+  from one source with the same markers, goes into both files instead, and `--replace` updates both.
+- Generated project skills go to the skill dir of each host the project uses: `.claude/skills/`
+  (Claude Code), `.agents/skills/` (Gemini CLI workspace alias, Antigravity). A project counts as
+  using a host after that host ran a session there (`.claude/uccif/.local/hosts.json`), or for
+  Antigravity once `.agents/rules/uccif.md` exists. A project with nothing recorded counts as
+  Claude Code only, as in 1.1.
+- Project data (task memory, summary, drift, logs) is where 1.1 kept it, so no migration is needed.
+- `tests/measure_context.py`: the context UCCIF injects into Claude, in exact characters.
+
 ## 1.1.0 — understands the project by itself, smaller overhead
 
 **Understanding the source without commands**

@@ -1,0 +1,37 @@
+{
+  "uccif": {
+    "SessionStart": [
+      {
+        "type": "command",
+        "command": "./core/bin/uccif hook --host antigravity SessionStart",
+        "timeout": 10
+      }
+    ],
+    "PreInvocation": [
+      {
+        "type": "command",
+        "command": "./core/bin/uccif hook --host antigravity PreInvocation",
+        "timeout": 5
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "edit_file|write_file|write_to_file|replace_file_content|multi_replace_file_content",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "./core/bin/uccif hook --host antigravity PostToolUse",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "type": "command",
+        "command": "./core/bin/uccif hook --host antigravity Stop",
+        "timeout": 10
+      }
+    ]
+  }
+}

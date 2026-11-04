@@ -1,6 +1,6 @@
 ---
 name: init
-description: Optional. Writes what the code graph cannot know (purpose, conventions, external services) to .claude/uccif/summary.md and a small CLAUDE.md block. Use when the user asks to set up or refresh UCCIF notes.
+description: Optional. Writes what the code graph cannot know (purpose, conventions, external services) to .claude/uccif/summary.md and a small AGENTS.md block. Use when the user asks to set up or refresh UCCIF notes.
 argument-hint: "[refresh]"
 ---
 
@@ -25,9 +25,9 @@ do not re-derive them. Budget: ≤ 10 tool calls (normally 7). Run every command
    --collect-only, go test -list, cargo test -- --list) or runs them only when the runner has no
    list mode, with a 60 s timeout, installing nothing. Whatever it prints, do not retry, do not
    try another command, do not install anything: an unverified command is marked as such.
-6. Pipe 2–3 description lines into `uccif claude-md write` (heredoc). It composes the ≤ 15-line
+6. Pipe 2–3 description lines into `uccif agents-md write` (heredoc). It composes the ≤ 15-line
    block (commands from the manifests, `(unverified)` next to those not verified, a pointer to the
-   map skill) and appends it at the end of CLAUDE.md. Exit 3 = a block exists: show the change,
+   map skill) and writes it to AGENTS.md (CLAUDE.md imports it, or gets a copy). Exit 3 = a block exists: show the change,
    ask, rerun with `--replace`.
 7. UCCIF v2 (`detect.uccif_v2` non-empty): list the hook lines calling `uccif.py` in
    `.claude/settings*.json` for the user to remove. Delete nothing yourself.

@@ -4,8 +4,9 @@ import argparse
 import json
 import os
 import sys
+from pathlib import Path
 
-from uccif_lib import SCHEMA_VERSION, __version__, codegraph, detect, drift, hooks, log, task, usage
+from uccif_lib import SCHEMA_VERSION, __version__, codegraph, detect, drift, hooks, hosts, log, task, usage
 from uccif_lib.paths import data_root_source, resolve_project
 
 
@@ -45,6 +46,8 @@ def build_parser():
     sg = sk.add_parser("generate", help="write/refresh .claude/skills/<project>-map, -bugfix, -mod-*")
     sg.add_argument("--force", action="store_true", help="also overwrite generated files you edited")
     sg.add_argument("--dry-run", action="store_true", help="show what would change, write nothing")
+    sg.add_argument("--host", action="append", choices=hosts.HOSTS,
+                    help="write for this host only (repeatable); default: the hosts this project uses")
     sk.add_parser("list", help="generated skills present in .claude/skills/")
 
     dr = sub.add_parser("drift", help="structural changes that make docs stale").add_subparsers(dest="action")
@@ -54,13 +57,20 @@ def build_parser():
 
     sub.add_parser("maintain", help="background upkeep: drift check")
 
-    cm = sub.add_parser("claude-md", help="CLAUDE.md UCCIF block").add_subparsers(dest="action")
-    cw = cm.add_parser("write", help="read the block from stdin: create CLAUDE.md, or append the block "
-                                     "when it has none; replace an existing block only with --replace")
-    cw.add_argument("--replace", action="store_true", help="overwrite the existing UCCIF block")
-    cw.add_argument("--verified", default="", metavar="PURPOSES",
-                    help="comma list of commands you ran successfully (e.g. test,build); the others "
-                         "are marked (unverified)")
+    su = sub.add_parser("setup", help="write this project's files for a host that has no plugin install")
+    su.add_argument("host", choices=("antigravity",), help="antigravity: .agents/ for the Antigravity IDE")
+    su.add_argument("--remove", action="store_true", help="delete only the files setup wrote")
+
+    for name in ("agents-md", "claude-md"):  # claude-md: the 1.1 name, kept as an alias
+        cm = sub.add_parser(name, help="AGENTS.md UCCIF block (CLAUDE.md imports it with @AGENTS.md)"
+                            ).add_subparsers(dest="action")
+        cw = cm.add_parser("write", help="read the block from stdin: create AGENTS.md, or append the block "
+                                         "when it has none; replace an existing block only with --replace. "
+                                         "CLAUDE.md gets an @AGENTS.md line; its own text is never touched")
+        cw.add_argument("--replace", action="store_true", help="overwrite the existing UCCIF block")
+        cw.add_argument("--verified", default="", metavar="PURPOSES",
+                        help="comma list of commands you ran successfully (e.g. test,build); the others "
+                             "are marked (unverified)")
 
     sub.add_parser("verify-tests", help="check once (list mode, 60 s timeout, nothing installed) that "
                                         "the test runner works; claude-md write marks the result")
@@ -69,7 +79,9 @@ def build_parser():
     sw.add_argument("--replace", action="store_true", help="overwrite an existing summary.md")
 
     h = sub.add_parser("hook", help="run a hook handler (reads hook JSON on stdin)")
-    h.add_argument("event")
+    h.add_argument("--host", default="claude", choices=hosts.HOSTS,
+                   help="which tool runs the hook (event/tool names and output are translated)")
+    h.add_argument("event", help="the host's event name (BeforeTool) or the internal one (pre-tool-use)")
 
     u = sub.add_parser("usage", help="real token usage from a transcript")
     u.add_argument("scope", choices=("turn", "session"))
@@ -168,26 +180,79 @@ def _claude_md_cmd(args):
         print("uccif: block has %d lines, max %d. Shorten it." % (len(body.splitlines()), MAX_BLOCK_LINES),
               file=sys.stderr)
         return 1
-    path = Path(proj.root) / "CLAUDE.md"
-    if path.is_symlink():  # e.g. CLAUDE.md -> AGENTS.md: edit the target, keep the link
-        path = Path(os.path.realpath(str(path)))
-    try:
-        old = path.read_text(encoding="utf-8")
-    except OSError:
-        old = None
-    if old is None:
-        new, what = body + "\n", "created"
-    elif BEGIN in old and END in old:
-        if not args.replace:
-            print("CLAUDE.md already has a UCCIF block: show the diff, ask, then rerun with --replace.")
-            return 3
-        i, j = old.index(BEGIN), old.index(END) + len(END)
-        new, what = old[:i] + body + old[j:], "block replaced in"
-    else:  # appended at the end: the user's own text above is never touched
-        new, what = old.rstrip("\n") + ("\n\n" if old.strip() else "") + body + "\n", "block appended to"
-    write_text_atomic(path, new)
-    print("%s %s" % (what, path))
+    root = Path(proj.root)
+    agents, claude = root / "AGENTS.md", root / "CLAUDE.md"
+    a_real = Path(os.path.realpath(str(agents)))  # a symlinked file: edit the target, keep the link
+    c_real = Path(os.path.realpath(str(claude)))
+    same = c_real == a_real  # CLAUDE.md -> AGENTS.md: one file, no import line needed
+    a_old = _read(a_real)
+    c_old = None if same else _read(c_real)
+    # The user's own AGENTS.md that CLAUDE.md does not import: importing it would load the whole
+    # file into every Claude session. The same block goes into both files instead.
+    dual = not same and a_old is not None and not _imports(c_old)
+    targets = [(a_real, agents.name, a_old)] + ([(c_real, claude.name, c_old)] if dual else [])
+    blocked = [name for _, name, old in targets if old and BEGIN in old and END in old]
+    if blocked and not args.replace:
+        print("%s already has a UCCIF block: show the diff, ask, then rerun with --replace."
+              % " and ".join(blocked))
+        return 3
+    moved = None
+    if not same and not dual and c_old and BEGIN in c_old and END in c_old:
+        moved = c_old  # 1.1 kept the block in CLAUDE.md: it moves to AGENTS.md
+    for path, name, old in targets:
+        new, what = _with_block(old, body)
+        write_text_atomic(path, new)
+        print("%s %s" % (what, root / name))
+    if not same and not dual:
+        note = _claude_pointer(c_real, moved)
+        if note:
+            print(note)
     return 0
+
+
+def _with_block(old, body):
+    """(new text, verb): the block replaces the old one, or is appended after the user's text."""
+    if old is None:
+        return body + "\n", "created"
+    if BEGIN in old and END in old:
+        i, j = old.index(BEGIN), old.index(END) + len(END)
+        return old[:i] + body + old[j:], "block replaced in"
+    return old.rstrip("\n") + ("\n\n" if old.strip() else "") + body + "\n", "block appended to"
+
+
+def _imports(text):
+    return bool(text) and any(l.strip() == IMPORT_LINE for l in text.splitlines())
+
+
+IMPORT_LINE = "@AGENTS.md"
+
+
+def _read(path):
+    try:
+        return Path(path).read_text(encoding="utf-8")
+    except OSError:
+        return None
+
+
+def _claude_pointer(path, moved=None):
+    """Make CLAUDE.md import AGENTS.md. A missing file is created with the import line only; an
+    existing one keeps every line of its own text and gets the line appended. `moved`: the 1.1
+    UCCIF block found in it, now in AGENTS.md, is replaced by the import line."""
+    from uccif_lib.paths import write_text_atomic
+    old = _read(path)
+    if old is None:
+        write_text_atomic(path, IMPORT_LINE + "\n")
+        return "created %s (%s)" % (path.name, IMPORT_LINE)
+    has = any(l.strip() == IMPORT_LINE for l in old.splitlines())
+    if moved is not None:
+        i, j = old.index(BEGIN), old.index(END) + len(END)
+        new = old[:i] + ("" if has else IMPORT_LINE) + old[j:]
+        write_text_atomic(path, new if new.strip() else IMPORT_LINE + "\n")
+        return "moved the UCCIF block from %s to AGENTS.md" % path.name
+    if has:
+        return None
+    write_text_atomic(path, old.rstrip("\n") + ("\n\n" if old.strip() else "") + IMPORT_LINE + "\n")
+    return "added %s to %s" % (IMPORT_LINE, path.name)
 
 
 MAX_SUMMARY_LINES = 20
@@ -239,7 +304,7 @@ def _skills_cmd(args):
         print("\n".join(names) if names else "No generated project skills yet (`uccif skills generate`).")
         return 0
     try:
-        res = skillgen.generate(proj, force=args.force, dry_run=args.dry_run)
+        res = skillgen.generate(proj, force=args.force, dry_run=args.dry_run, hosts_=args.host)
     except skillgen.NoIndex as e:
         print("Cannot generate skills: %s. Run the uccif:codegraph skill first." % e)
         return 1
@@ -278,7 +343,7 @@ def main(argv=None):
     parser = build_parser()
     args = parser.parse_args(argv)
     if args.cmd == "hook":
-        return hooks.run(args.event)  # never raises, always 0
+        return hooks.run(args.event, host=args.host)  # never raises, always 0
     try:
         if args.cmd == "version":
             print("uccif %s (schema %d)" % (__version__, SCHEMA_VERSION))
@@ -329,6 +394,10 @@ def main(argv=None):
             return _drift_cmd(args)
         if args.cmd == "maintain":
             return maintain()
+        if args.cmd == "setup":
+            from uccif_lib import antigravity_setup as setup
+            print("\n".join((setup.remove if args.remove else setup.setup)(resolve_project())))
+            return 0
         if args.cmd == "verify-tests":
             from uccif_lib import verify
             r = verify.verify(resolve_project())
@@ -338,7 +407,7 @@ def main(argv=None):
             return 0  # never a reason to retry: the block shows (unverified)
         if args.cmd == "summary" and args.action:
             return _summary_cmd(args)
-        if args.cmd == "claude-md" and args.action:
+        if args.cmd in ("agents-md", "claude-md") and args.action:
             return _claude_md_cmd(args)
     except task.TaskError as e:
         print("uccif: %s" % e, file=sys.stderr)

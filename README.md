@@ -22,6 +22,10 @@ A Claude Code plugin marketplace. Install the core plugin `uccif` once; from the
 
 The plugin **never blocks** a tool call or a stop: every hook exits 0.
 
+> 📖 **User Guides / Hướng dẫn sử dụng:**
+> - [Hướng dẫn chi tiết từng bước cho người mới (Tiếng Việt)](docs/HUONG-DAN.md)
+> - [Complete step-by-step beginner guide (English)](docs/GUIDE.md)
+
 ## Install
 
 ```
@@ -37,6 +41,29 @@ Requirements: Python 3.8+ (`python3`, `python` or `py -3`), git. macOS, Linux an
 Bash, which Claude Code uses to run hooks) are all tested in CI; Windows has not yet been
 tried in a real Claude Code session. Language servers and the CodeGraph CLI are never installed
 without your agreement; `uccif doctor` reports what is missing.
+
+## Antigravity
+
+Antigravity CLI (`agy`), from a terminal:
+
+```
+agy plugin install https://github.com/phongng255/uccif/tree/main/plugins/uccif-antigravity
+```
+
+Use that exact URL form. A bare repo URL, `#branch` or `--ref` installs the Claude plugin from the
+default branch instead, whose hooks Antigravity skips. Remove it with `agy plugin uninstall uccif`.
+
+Antigravity IDE, in a project (this writes `.agents/`, which the IDE reads per workspace):
+
+```
+<path to>/plugins/uccif/bin/uccif setup antigravity
+```
+
+`--remove` deletes only the files it wrote. The rule file holds this machine's path to `uccif`, so
+do not commit it. There are no hooks in this mode: rules, skills and CodeGraph only, no automatic
+task memory.
+
+Antigravity shows no token line and has no `#quick`: its hooks do not allow them.
 
 ## Update
 

@@ -8,6 +8,12 @@ Facts the parser relies on (checked against Claude Code 2.1.309):
 - a user entry whose content holds a tool_result is not a new prompt;
 - isSidechain entries belong to subagents and are excluded.
 Anything unreadable yields None, and the token line prints "Token: n/a".
+
+Gemini CLI transcripts (checked against @google/gemini-cli 0.66.0, ChatRecordingService) are
+JSONL too: one record per message, {"id", "type": "user"|"gemini"|..., "model", "tokens":
+{"input", "output", "cached", "thoughts", "tool", "total"}}; an updated message is appended
+again with the same id (last wins), plus metadata / {"$set": ...} records. Older sessions are
+one JSON object with "messages". Gemini's "input" includes the cached part.
 """
 
 import json
@@ -25,19 +31,57 @@ def _is_prompt(entry):
     return isinstance(content, str)
 
 
+def _gemini_usage(tokens):
+    inp, cached = int(tokens.get("input") or 0), int(tokens.get("cached") or 0)
+    return {"input_tokens": max(inp - cached, 0), "cache_read_input_tokens": cached,
+            "cache_creation_input_tokens": 0,
+            "output_tokens": int(tokens.get("output") or 0) + int(tokens.get("thoughts") or 0)}
+
+
+def _entries(f):
+    text = f.read()
+    if text.lstrip().startswith("{") and "\n{" not in text.strip():
+        try:  # a whole-file JSON session (older Gemini CLI)
+            whole = json.loads(text)
+            if isinstance(whole, dict) and isinstance(whole.get("messages"), list):
+                return whole["messages"]
+        except ValueError:
+            pass
+    out = []
+    for line in text.splitlines():
+        try:
+            out.append(json.loads(line))
+        except ValueError:
+            continue
+    return out
+
+
 def read_messages(transcript_path):
     """Return ordered list of (turn_index, model, usage) per unique assistant message."""
-    order, by_id = [], {}
+    order, by_id, seen_prompts = [], {}, set()
     turn = 0
     try:
         f = open(str(transcript_path), encoding="utf-8")
     except (OSError, TypeError):
         return None
     with f:
-        for line in f:
-            try:
-                entry = json.loads(line)
-            except ValueError:
+        for entry in _entries(f):
+            if not isinstance(entry, dict):
+                continue
+            if "message" not in entry and entry.get("type") in ("user", "gemini"):  # Gemini CLI
+                mid = entry.get("id")
+                if entry["type"] == "user":
+                    if mid not in seen_prompts:
+                        seen_prompts.add(mid)
+                        turn += 1
+                    continue
+                if not isinstance(entry.get("tokens"), dict):
+                    continue
+                if mid not in by_id:
+                    order.append(mid)
+                    by_id[mid] = (turn, entry.get("model"), _gemini_usage(entry["tokens"]))
+                else:  # re-appended update: keep the turn it started in
+                    by_id[mid] = (by_id[mid][0], entry.get("model"), _gemini_usage(entry["tokens"]))
                 continue
             if _is_prompt(entry):
                 turn += 1
