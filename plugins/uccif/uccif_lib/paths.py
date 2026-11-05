@@ -25,10 +25,24 @@ DOCS_SUBDIR = Path(".claude") / "uccif"
 CORE_DATA_NAME = "uccif-uccif"
 CORE_MARKER = "options.json"
 LOCAL_SUBDIR = ".local"
+REPLACE_RETRY_SECONDS = 2.0
 
 
 def now_iso():
     return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def _replace(src, dst):
+    # Windows denies a rename onto a file another writer is replacing at that moment
+    deadline = time.monotonic() + REPLACE_RETRY_SECONDS
+    while True:
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.01)
 
 
 def write_text_atomic(path, text):
@@ -38,7 +52,7 @@ def write_text_atomic(path, text):
     tmp = path.with_name("%s.%s.tmp" % (path.name, uuid.uuid4().hex))
     try:
         tmp.write_text(text, encoding="utf-8")
-        os.replace(str(tmp), str(path))
+        _replace(str(tmp), str(path))
     except OSError:
         try:
             tmp.unlink()

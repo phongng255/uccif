@@ -2,6 +2,8 @@ import os
 import shutil
 import threading
 
+import pytest
+
 from conftest import git
 from uccif_lib import paths
 
@@ -115,3 +117,29 @@ def test_write_text_atomic_survives_concurrent_writers(tmp_path):
     assert not errors
     assert target.read_text(encoding="utf-8").startswith("writer ")
     assert [p.name for p in state.iterdir()] == ["hosts.json"]
+
+
+def test_write_text_atomic_retries_a_denied_replace(tmp_path, monkeypatch):
+    target = tmp_path / "hosts.json"
+    real, denied = os.replace, [PermissionError(13, "Access is denied")] * 2
+
+    def flaky(src, dst):
+        if denied:
+            raise denied.pop()
+        real(src, dst)
+
+    monkeypatch.setattr(paths.os, "replace", flaky)
+    paths.write_text_atomic(target, "ok\n")
+    assert not denied
+    assert target.read_text(encoding="utf-8") == "ok\n"
+
+
+def test_write_text_atomic_gives_up_on_a_lasting_denial(tmp_path, monkeypatch):
+    def denied(src, dst):
+        raise PermissionError(13, "Access is denied")
+
+    monkeypatch.setattr(paths.os, "replace", denied)
+    monkeypatch.setattr(paths, "REPLACE_RETRY_SECONDS", 0.02)
+    with pytest.raises(PermissionError):
+        paths.write_text_atomic(tmp_path / "state" / "hosts.json", "x")
+    assert list((tmp_path / "state").iterdir()) == []
