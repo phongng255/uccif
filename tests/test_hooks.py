@@ -417,3 +417,57 @@ def test_lsp_offer_once_per_binary(base, project, monkeypatch):
     assert "pyright-langserver" in ctx(out) and "npm install -g pyright" in ctx(out)
     _, out = run_hook("session-start", dict(base, source="startup"))
     assert "pyright-langserver" not in ctx(out)  # asked once only
+
+
+REMINDER = "<system-reminder>\nforked from another session\n</system-reminder>"
+SHELL = "<bash-input>npm test</bash-input><bash-stdout>#quick ok</bash-stdout><bash-stderr></bash-stderr>"
+
+
+def _edit_file(base, path):
+    run_hook("post-tool-use", dict(base, tool_name="Edit", tool_input={"file_path": path}))
+
+
+@pytest.mark.parametrize("text,clean", [
+    (REMINDER + "\nFix the login page", "Fix the login page"),
+    ("<system-reminder>cut off by truncation", ""),
+    (SHELL, ""),
+    ("Explain <div> and <bash-output> tags", "Explain <div> and <bash-output> tags"),
+])
+def test_title_text_removes_only_host_wrappers(text, clean):
+    assert hooks._title_text(text) == clean
+
+
+def test_task_title_comes_from_user_text(base, project):
+    run_hook("user-prompt-submit", dict(base, prompt=REMINDER + "\nFix the login page"))
+    _edit_file(dict(base), str(project.root / "src" / "a.ts"))
+    assert task.load_current(project)["title"] == "Fix the login page"
+
+
+def test_long_wrapper_does_not_use_up_the_stored_prompt(base, project):
+    long = "<system-reminder>" + "x" * 1000 + "</system-reminder>Fix the login page"
+    run_hook("user-prompt-submit", dict(base, prompt=long))
+    _edit_file(dict(base), str(project.root / "src" / "a.ts"))
+    assert task.load_current(project)["title"] == "Fix the login page"
+
+
+def test_shell_only_prompt_is_not_a_request(base, project):
+    path = str(project.root / "src" / "a.ts")
+    run_hook("user-prompt-submit", dict(base, prompt="Fix the login page"))
+    _edit_file(dict(base), path)
+    opened = task.load_current(project)
+    run_hook("user-prompt-submit", dict(base, prompt=SHELL))
+    _edit_file(dict(base), str(project.root / "src" / "b.ts"))
+    cur = task.load_current(project)
+    assert cur["id"] == opened["id"] and cur["title"] == "Fix the login page"
+    assert "src/b.ts" in cur["files"]
+
+
+def test_shell_only_prompt_does_not_title_a_task(base, project):
+    run_hook("user-prompt-submit", dict(base, prompt=SHELL))
+    _edit_file(dict(base), str(project.root / "src" / "a.ts"))
+    assert "bash-input" not in task.load_current(project)["title"]
+
+
+def test_quick_inside_command_output_does_not_count(base, project):
+    run_hook("user-prompt-submit", dict(base, prompt=SHELL))
+    assert not hooks._is_quick(project)

@@ -23,6 +23,7 @@ context in injectSteps and a required decision on Stop and PreToolUse. No event 
 with text unless it is a step the model also gets, and there is no compact or session-end event.
 """
 
+import json
 import re
 from pathlib import Path
 
@@ -63,7 +64,7 @@ ANTIGRAVITY_TOOLS = {
     "replace_file_content": "Edit", "multi_replace_file_content": "Edit", "write_to_file": "Write",
     "write_file": "Write", "grep_search": "Grep", "find_by_name": "Glob", "list_dir": "LS",
 }
-ANTIGRAVITY_PATH_ARGS = ("TargetFile", "AbsolutePath", "FilePath", "file_path", "absolute_path")
+ANTIGRAVITY_PATH_ARGS = ("TargetFile", "Path", "AbsolutePath", "FilePath", "file_path", "absolute_path")
 # internal event -> Gemini event that may carry additionalContext
 GEMINI_CONTEXT = {"session-start": "SessionStart", "user-prompt-submit": "BeforeAgent",
                   "post-tool-use": "AfterTool", "post-tool-use-failure": "AfterTool"}
@@ -110,6 +111,28 @@ def _error_text(resp):
     return str(err) if err else None
 
 
+def _antigravity_args(args):
+    if isinstance(args, str):
+        try:
+            args = json.loads(args)
+        except ValueError:
+            return {}
+    return args if isinstance(args, dict) else {}
+
+
+def _antigravity_path(path, workspace):
+    """Absolute path, or None. Transcripts store it JSON-quoted; hooks run in the plugin root, so a
+    relative path has to be resolved against the workspace here."""
+    if not isinstance(path, str):
+        return None
+    if path.startswith('"'):
+        try:
+            path = json.loads(path)
+        except ValueError:
+            return None
+    return str(Path(workspace) / path) if isinstance(path, str) else None
+
+
 def _normalize_antigravity(event, data):
     paths = data.get("workspacePaths") or []
     if not paths:  # cwd is the plugin root here, which is not the user's project
@@ -118,10 +141,11 @@ def _normalize_antigravity(event, data):
                transcript_path=data.get("transcriptPath"))
     call = data.get("toolCall") or {}
     if call:
-        args = call.get("args") if isinstance(call.get("args"), dict) else {}
+        args = _antigravity_args(call.get("args"))
         out["tool_name"] = tool_name("antigravity", call.get("name"))
+        path = next((args[k] for k in ANTIGRAVITY_PATH_ARGS if args.get(k)), None)
         out["tool_input"] = {"command": args.get("CommandLine"),
-                             "file_path": next((args[k] for k in ANTIGRAVITY_PATH_ARGS if args.get(k)), None)}
+                             "file_path": _antigravity_path(path, paths[0])}
     if event == "post-tool-use" and data.get("error"):
         event = "post-tool-use-failure"
     if event == "stop":  # background work still running: the turn is not over

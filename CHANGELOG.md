@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### Fixes
+
+- Antigravity: edits made with `edit_file` and `write_file` were never tracked, because these tools
+  pass the file as `Path`. It is now read, JSON-quoted or plain, and a relative path is resolved
+  against the workspace.
+- Task titles and new-topic detection no longer read blocks the host adds (`system-reminder`,
+  `bash-input`, `bash-stdout`, `bash-stderr`). A prompt holding only those, such as a shell command
+  typed by the user, no longer counts as a new request.
+
 ## 1.2.0 — Claude Code, Gemini CLI and Antigravity
 
 ### Fixes
