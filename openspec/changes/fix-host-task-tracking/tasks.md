@@ -16,6 +16,6 @@
 
 - [x] 3.1 Run `python3 -m pytest -q`
 - [x] 3.2 Run both build scripts, then both with `--check`
-- [ ] 3.3 Install the build in `agy`, edit a file in a test project, and confirm `uccif task show` lists it
+- [x] 3.3 Install the build in `agy`, edit a file in a test project, and confirm `uccif task show` lists it
 - [ ] 3.4 In Claude Code, run a `!` shell command, then edit a file, and confirm the title is clean
 - [x] 3.5 Update the changelog
