@@ -137,6 +137,20 @@ is bumped (`plugins/uccif/.claude-plugin/plugin.json` and `uccif_lib/__init__.py
 a test checks it). While developing, load the working tree with `claude --plugin-dir` instead
 of reinstalling.
 
+**Layout.** One core serves three hosts, and each host fixes where it reads its files:
+
+| Path | Host | Edit it? |
+| --- | --- | --- |
+| `plugins/uccif/` | Claude Code; also the core all hosts run | Yes: the source, skills included |
+| `.claude-plugin/marketplace.json` | Claude Code | Yes |
+| `gemini-extension.json`, `hooks/hooks.json` | Gemini CLI | Yes |
+| `skills/` | Gemini CLI | No: run `build_gemini.py` |
+| `plugins/uccif-antigravity/` | Antigravity | No: run `build_antigravity.py` (`core` is a symlink to `../uccif`) |
+
+Gemini CLI needs its manifest and hooks at the repo root, so `skills/` and `hooks/` there belong
+to Gemini. The Claude Code plugin cannot move to the root too: Claude Code always loads a plugin's
+`hooks/hooks.json`, even when `plugin.json` sets `hooks`, so it would run Gemini's hook commands.
+
 ## CodeGraph
 
 UCCIF has no code index of its own: [CodeGraph](https://github.com/colbymchenry/codegraph)
