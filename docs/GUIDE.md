@@ -160,17 +160,20 @@ Talk normally. You do not need to remember any `uccif` command:
 ### Reading the token line
 
 ```text
-🔢 Turn: in 2.4k (cache 2.1k) · out 320 · Session 48k · Ctx 35k (18%)
+🔢 Tokens
+   This turn: 2.4k input (2.1k from cache), 320 output
+   Session total: 48k
+   Context now: 35k (18%)
 ```
 
 | Part | Meaning |
 |---|---|
-| `Turn: in ... (cache ...)` | Input tokens this turn, and how many of them were read from cache |
-| `out` | Tokens the AI produced this turn |
-| `Session` | Total tokens for the whole session |
-| `Ctx` | Context in use, and its share of the limit when known |
+| `This turn: ... input (... from cache)` | Input tokens this turn, and how many of them were read from cache |
+| `output` | Tokens the AI produced this turn |
+| `Session total` | Total tokens for the whole session |
+| `Context now` | Context in use, and its share of the limit when known |
 
-A hint is sometimes added at the end:
+A hint is sometimes added on a last line:
 
 | Hint | When | What to do |
 |---|---|---|

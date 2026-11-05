@@ -150,10 +150,10 @@ def token_line(summary):
     if not summary:
         return "Token: n/a"
     t, s = summary["turn"], summary["session"]
-    ctx = "Ctx %s" % fmt(summary["ctx"])
+    ctx = fmt(summary["ctx"])
     if summary["window"]:
         ctx += " (%d%%)" % round(100.0 * summary["ctx"] / summary["window"])
-    return "Turn: in %s (cache %s) · out %s · Session %s · %s" % (
+    return "Tokens\n   This turn: %s input (%s from cache), %s output\n   Session total: %s\n   Context now: %s" % (
         fmt(t["in"]), fmt(t["cache_read_input_tokens"]), fmt(t["output_tokens"]),
         fmt(s["in"] + s["output_tokens"]), ctx,
     )

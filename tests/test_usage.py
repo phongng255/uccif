@@ -15,7 +15,7 @@ def test_dedupes_by_message_id_and_splits_turns(tmp_path):
     assert s["session"]["in"] == 1010 + 2105 + 3001
     assert s["ctx"] == 3001
     assert s["window"] is None
-    assert "(" not in usage.token_line(s).split("Ctx")[1]  # no % when window unknown
+    assert "(" not in usage.token_line(s).split("Context now:")[1]  # no % when window unknown
 
 
 def test_window_inferred_after_200k(tmp_path):
@@ -23,12 +23,12 @@ def test_window_inferred_after_200k(tmp_path):
         prompt(), assistant("a", 0, 250000, 0, 1), assistant("b", 0, 128000, 0, 1)])
     s = usage.summarize(t)
     assert s["window"] == 1000000
-    assert usage.token_line(s).endswith("Ctx 128.0k (13%)")
+    assert usage.token_line(s).endswith("Context now: 128.0k (13%)")
 
 
 def test_configured_window(tmp_path):
     t = write_transcript(tmp_path / "t.jsonl", [prompt(), assistant("a", 0, 128000, 0, 1)])
-    assert usage.token_line(usage.summarize(t, 200000)).endswith("Ctx 128.0k (64%)")
+    assert usage.token_line(usage.summarize(t, 200000)).endswith("Context now: 128.0k (64%)")
 
 
 def test_unreadable_transcript_is_na(tmp_path):
