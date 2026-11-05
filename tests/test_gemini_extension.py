@@ -105,7 +105,7 @@ def test_every_hook_runs_through_the_shell(project, tmp_path):
     assert "is not on PATH here" in ss["additionalContext"]
     assert outs["BeforeTool"] is None  # BeforeTool takes no additionalContext
     assert outs["AfterTool"] is None
-    assert outs["AfterAgent"]["systemMessage"].startswith("\U0001f522 Turn: in 12.0k (cache 8.0k) · out 350")
+    assert outs["AfterAgent"]["systemMessage"].startswith("\U0001f522 Tokens\n   This turn: 12.0k input (8.0k from cache), 350 output")
     assert set(outs["AfterAgent"]) == {"systemMessage"}
     log = [e for e in hook_log(project)]
     assert [e["event"] for e in log] == ["session-start", "user-prompt-submit", "pre-tool-use",

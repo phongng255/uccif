@@ -160,17 +160,20 @@ Cứ nói chuyện bình thường, bạn không cần nhớ lệnh `uccif` nào
 ### Đọc dòng token
 
 ```text
-🔢 Turn: in 2.4k (cache 2.1k) · out 320 · Session 48k · Ctx 35k (18%)
+🔢 Tokens
+   This turn: 2.4k input (2.1k from cache), 320 output
+   Session total: 48k
+   Context now: 35k (18%)
 ```
 
 | Phần | Ý nghĩa |
 |---|---|
-| `Turn: in ... (cache ...)` | Token đầu vào của lượt này, và phần trong đó đọc từ cache |
-| `out` | Token AI trả ra trong lượt này |
-| `Session` | Tổng token của cả session |
-| `Ctx` | Lượng context đang dùng, và tỷ lệ so với giới hạn nếu biết |
+| `This turn: ... input (... from cache)` | Token đầu vào của lượt này, và phần trong đó đọc từ cache |
+| `output` | Token AI trả ra trong lượt này |
+| `Session total` | Tổng token của cả session |
+| `Context now` | Lượng context đang dùng, và tỷ lệ so với giới hạn nếu biết |
 
-Đôi khi cuối dòng có thêm gợi ý:
+Đôi khi có thêm một dòng gợi ý ở cuối:
 
 | Gợi ý | Khi nào | Nên làm |
 |---|---|---|

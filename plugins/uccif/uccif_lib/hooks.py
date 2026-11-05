@@ -404,11 +404,11 @@ def on_stop(data, project):
     if s:
         total = s["session"]["in"] + s["session"]["output_tokens"]
         if not open_task and cur and s["ctx"] >= cfg["clear_hint_tokens"]:
-            line += " · 💡 /clear recommended (task saved)"
+            line += "\n   💡 /clear recommended (task saved)"
         elif open_task and s["ctx"] >= cfg["checkpoint_tokens"]:
-            line += " · 💡 checkpoint, then /clear"
+            line += "\n   💡 checkpoint, then /clear"
         elif total >= cfg["long_session_tokens"]:
-            line += " · 💡 long session"
+            line += "\n   💡 long session"
     return {"systemMessage": line}, {"rule": "token-line"}
 
 

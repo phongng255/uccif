@@ -264,7 +264,7 @@ def test_subagent_stop_logs_tokens_and_partial(base, project, tmp_path):
 def test_stop_token_line_and_usage_log(base, project, monkeypatch):
     from uccif_lib import log
     _, out = run_hook("stop", dict(base, stop_hook_active=False))
-    assert out == {"systemMessage": "🔢 Turn: in 42.0k (cache 40.0k) · out 300 · Session 42.3k · Ctx 42.0k"}
+    assert out == {"systemMessage": "🔢 Tokens\n   This turn: 42.0k input (40.0k from cache), 300 output\n   Session total: 42.3k\n   Context now: 42.0k"}
     assert len(log.read(project, "usage.jsonl")) == 1
     assert run_hook("stop", dict(base, stop_hook_active=True)) == (0, None)
     monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_TOKEN_REPORT", "false")

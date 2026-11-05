@@ -48,7 +48,7 @@ check("PreToolUse fires inside subagent (agent_id present)", bool(sub_pre),
 check("SessionStart context reached Claude", "UCCIF CORE RULES" in raw)
 stop = [h for h in hooks if h.get("event") == "stop"]
 check("Stop produced token line", any(h.get("rule") == "token-line" for h in stop))
-info("token line visible in stream-json", "yes" if "Turn: in" in raw else "no (systemMessage not in SDK stream)")
+info("token line visible in stream-json", "yes" if "This turn:" in raw else "no (systemMessage not in SDK stream)")
 info("session-end ran in -p", "yes" if "session-end" in events else "no")
 slow = [h for h in hooks if h.get("slow")]
 ms = sorted(h.get("ms", 0) for h in hooks)
