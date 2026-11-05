@@ -14,7 +14,7 @@ import pytest
 
 from conftest import PLUGIN, REPO, hook_log
 from uccif_lib import antigravity_setup as setup_mod
-from uccif_lib import hooks, hostfiles, hosts
+from uccif_lib import hooks, hostfiles, hosts, task
 
 DIR = PLUGIN.parent / "uccif-antigravity"
 HOOKS = json.loads((DIR / "hooks.json").read_text(encoding="utf-8"))["uccif"]
@@ -345,3 +345,28 @@ def test_cli_setup_and_remove(project, repo, monkeypatch):
     assert (repo / ".agents" / "rules" / "uccif.md").exists()
     assert cli.main(["setup", "antigravity", "--remove"]) == 0
     assert not (repo / ".agents").exists()
+
+
+# Argument shapes from real agy transcripts: edit_file and write_file use Path, stored JSON-quoted.
+@pytest.mark.parametrize("tool", ["edit_file", "write_file"])
+@pytest.mark.parametrize("shape", ["plain", "quoted", "relative"])
+def test_path_argument_is_tracked(project, tool, shape):
+    src = project.root / "src" / "a.py"
+    value = {"plain": str(src), "quoted": json.dumps(str(src)), "relative": "src/a.py"}[shape]
+    call("PostToolUse", common(project, stepIdx=3, toolCall={"name": tool, "args": {"Path": value}}))
+    assert hook_log(project)[-1]["target"] == "src/a.py"
+    assert "src/a.py" in task.load_current(project)["files"]
+
+
+def test_args_sent_as_a_json_string_are_read(project):
+    src = project.root / "src" / "a.py"
+    args = json.dumps({"Path": str(src)})
+    call("PostToolUse", common(project, stepIdx=3, toolCall={"name": "edit_file", "args": args}))
+    assert hook_log(project)[-1]["target"] == "src/a.py"
+
+
+def test_target_file_keeps_working(project):
+    src = project.root / "src" / "a.py"
+    call("PostToolUse", common(project, stepIdx=3,
+                               toolCall={"name": "replace_file_content", "args": {"TargetFile": str(src)}}))
+    assert "src/a.py" in task.load_current(project)["files"]

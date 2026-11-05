@@ -27,6 +27,7 @@ SLOW_MS = {"session-start": 3000, "user-prompt-submit": 300, "pre-tool-use": 300
            "post-tool-use": 500, "stop": 1000}
 EDIT_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
 SEARCH_CMD = re.compile(r"(^|[\s|;&(])(grep|rg|ag|find|fd|ack)\s")
+_WRAPPER = re.compile(r"<(system-reminder|bash-input|bash-stdout|bash-stderr)>.*?(</\1>|\Z)", re.S)
 # Bash commands each UCCIF agent may run; anything else is logged as would_block.
 AGENT_BASH = {
     "project-analyst": (r"^uccif\s", r"^codegraph\s"),
@@ -212,6 +213,11 @@ def _edited_path(project):
     return Path(project.data_dir) / "prompt_edited.flag"
 
 
+def _title_text(prompt):
+    """The user's own words: without the blocks the host adds, closed or cut off."""
+    return _WRAPPER.sub("", prompt).strip()
+
+
 def _same_turn(data, project):
     """Antigravity's PreInvocation runs before every model call and has no prompt text. A turn is
     one (conversationId, initialNumSteps): only its first call counts as the prompt."""
@@ -234,7 +240,10 @@ def on_user_prompt_submit(data, project):
     """Injects only news: an open task kept across turns, or stale docs. Nothing new -> nothing."""
     if data.get("_host") == "antigravity" and _same_turn(data, project):
         return None, {"decision": "skip", "rule": "same-turn"}
-    prompt = data.get("prompt") or ""
+    raw_prompt = data.get("prompt") or ""
+    prompt = _title_text(raw_prompt)
+    if raw_prompt and not prompt:  # a shell command the user typed: not a new request
+        return None, {"decision": "skip", "rule": "shell-only"}
     _set_quick(project, "#quick" in prompt)
     try:  # the title of the implicit task the first edit opens
         _prompt_path(project).parent.mkdir(parents=True, exist_ok=True)
