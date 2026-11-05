@@ -126,6 +126,12 @@ gemini extensions install https://github.com/phongng255/uccif.git
 gemini extensions list
 ```
 
+To update to the latest version (use `--all` instead of the name to update every extension), then reopen Gemini CLI:
+
+```bash
+gemini extensions update uccif
+```
+
 ### 3.5. First time in a project
 
 1. Open your AI tool in the project folder and ask anything.

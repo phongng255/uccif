@@ -126,6 +126,12 @@ gemini extensions install https://github.com/phongng255/uccif.git
 gemini extensions list
 ```
 
+Để cập nhật lên bản mới nhất (thêm `--all` thay cho tên nếu muốn cập nhật mọi extension), rồi mở lại Gemini CLI:
+
+```bash
+gemini extensions update uccif
+```
+
 ### 3.5. Lần đầu mở một dự án
 
 1. Mở công cụ AI trong thư mục dự án và hỏi một câu bất kỳ.
