@@ -53,9 +53,12 @@ def plugin_mcp():
     return _mcp_in(PLUGIN_ROOT / ".mcp.json")
 
 
-def mcp_via(project):
+def mcp_via(project, host="claude"):
     """Where the CodeGraph MCP server comes from: "plugin", "config" (the user's ~/.claude.json or the
     project's .mcp.json, e.g. from `codegraph install`) or None."""
+    if host == "codex":
+        from uccif_lib.codex_setup import mcp_status
+        return mcp_status(project)["mcp_via"]
     if plugin_mcp():
         return "plugin"
     home = Path(os.path.expanduser("~"))
@@ -68,9 +71,14 @@ def mcp_wired(project):
     return mcp_via(project) is not None
 
 
-def state(project):
-    via = mcp_via(project)
-    return {"cli": cli(), "indexed": indexed(project), "mcp": via is not None, "mcp_via": via}
+def state(project, host="claude"):
+    via = mcp_via(project, host=host)
+    result = {"cli": cli(), "indexed": indexed(project), "mcp": via is not None, "mcp_via": via}
+    if host == "codex":
+        from uccif_lib.codex_setup import mcp_status
+        status = mcp_status(project)
+        result.update(mcp_verified=False, mcp_unknown=status["unknown"])
+    return result
 
 
 INSTALLER_MARK = "<!-- CODEGRAPH_START -->"

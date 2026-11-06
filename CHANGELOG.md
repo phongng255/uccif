@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Codex repository workflow preview
+
+- Add safe project-scoped Codex setup, dry-run and removal, preserving user edits and shared task history.
+- Add a UCCIF chat router plus init/resume/CodeGraph workflows for repository skill discovery.
+- Add opt-in MCP configuration and host-specific diagnostics; configured does not mean connected.
+- Generate a portable Codex workflow plugin and separate marketplace. Real Codex 0.167.0 passes local install, namespaced skill discovery, installed-core/task CLI and uninstall checks.
+- Add credential-free app-server runtime checks and pinned CI coverage. Model turns, native hook execution and desktop/IDE UI remain unverified; no automatic tracking or token footer.
+
 ### Fixes
 
 - Antigravity: edits made with `edit_file` and `write_file` were never tracked, because these tools

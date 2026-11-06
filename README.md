@@ -119,6 +119,48 @@ the project's). Each file contributes at most 15 non-empty lines (`<!-- -->` com
 a longer file is cut with a pointer to the rest. A missing or unreadable file is skipped.
 `uccif doctor` lists which rule files are loaded. UCCIF never writes these files.
 
+## Codex (development preview)
+
+The workflow plugin has been installed, discovered and uninstalled using real Codex CLI /
+app-server **0.167.0 on Linux** without an API key. Native status/init/resume and repository resume
+also completed in real model turns using Codex Desktop's bundled CLI **0.166.0-alpha.6 on macOS**.
+Desktop/VS Code graphical UI behavior and lifecycle hook execution remain unverified. This
+development package is not publicly released.
+
+From a checkout containing these changes, add its local marketplace and install:
+
+```bash
+codex plugin marketplace add /path/to/uccif
+codex plugin add uccif@uccif-codex-local
+```
+
+Codex discovers the qualified workflow names `$uccif:init`, `$uccif:resume`, `$uccif:codegraph`
+and the menu `$uccif:uccif`. For example, select the init skill in chat to write project notes.
+These are skill mentions, not terminal commands or Claude slash commands. The installed package
+contains its own generated Python core; it does not depend on paths back into this checkout.
+
+For repository-scoped workflows instead, run this checkout's launcher from the target project:
+
+```bash
+/path/to/uccif/plugins/uccif/bin/uccif setup codex --dry-run
+/path/to/uccif/plugins/uccif/bin/uccif setup codex
+```
+
+Repository setup creates a bounded AGENTS.md block and dedicated `.agents/skills/` workflows.
+Its menu is `uccif`; the dedicated names start with `uccif-codex-`. The plugin's qualified names
+remain distinct. Remove unchanged setup content with `uccif setup codex --remove`.
+
+Both preview routes install **no hooks** and do not automatically track edits or show token
+footers. Task memory remains shared at `.claude/uccif/`; workflow checkpoints save progress.
+CodeGraph is optional and is not auto-started by the workflow plugin. Preview project MCP changes
+with `uccif setup codex --with-codegraph --dry-run` before applying without `--dry-run`.
+Existing servers/uncertain plugin config are preserved. `uccif doctor --host codex` distinguishes
+configuration from a verified connection. No dependency installation or trust changes are automatic.
+Existing TOML is left alone without `tomllib` or optional `tomli`.
+
+Repository setup files contain this machine's core path; keep them local. The native package is
+portable. For verification details and known limits see the [Vietnamese runtime report](docs/CODEX-RUNTIME-VI.md).
+
 ## Develop
 
 ```

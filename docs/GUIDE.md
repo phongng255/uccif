@@ -34,6 +34,41 @@ It is normal for `.agents/` to hold fewer files than `.claude/`. Both tools shar
 
 ## 3. Install
 
+### Codex workflow preview
+
+Real Codex CLI/app-server 0.167.0 on Linux passed local plugin installation, qualified skill
+recognition, installed-core/task CLI and uninstall checks. Native status/init/resume and repository
+resume also passed real model turns with Codex Desktop's bundled CLI 0.166.0-alpha.6 on macOS.
+Hook execution and the desktop/VS Code graphical UI remain unverified. The package is a
+development preview, not a public release.
+
+From a checkout containing these changes:
+
+```bash
+codex plugin marketplace add /path/to/uccif
+codex plugin add uccif@uccif-codex-local
+```
+
+Select `uccif:init`, `uccif:resume` or `uccif:codegraph` in Codex chat. The router is
+`uccif:uccif`; Codex skill mentions use a dollar prefix, such as `$uccif:init`.
+The package includes its own generated core and loads from the installed cache.
+Remove it with `codex plugin remove uccif@uccif-codex-local`.
+
+Alternatively, use `uccif setup codex --dry-run`, then `uccif setup codex` in a target project,
+using this checkout's `plugins/uccif/bin/uccif` launcher. This adds AGENTS.md instructions and
+repository skills named `uccif` and `uccif-codex-*`. Their names differ from the plugin's qualified
+names. Generated setup files use a machine-local Python/core path; keep them local.
+`uccif setup codex --remove --dry-run` previews removal; apply without `--dry-run` to remove only
+unchanged owned content. User edits, shared maps and task history survive.
+
+Neither route installs lifecycle hooks. Task tracking is manual through workflow checkpoints;
+token footers and LSP integration remain deferred. CodeGraph is optional and not auto-started
+by the plugin. `uccif codegraph --host codex` inspects configuration. Preview opt-in MCP changes
+with `uccif setup codex --with-codegraph --dry-run`, then apply without `--dry-run` if appropriate.
+Conflicts, existing servers and unknown plugin wiring are preserved instead of duplicated.
+Existing TOML is preserved when no compatible TOML parser is available. Setup never installs
+packages or changes trust/global configuration. `uccif doctor --host codex` reports known state.
+
 You need:
 
 | Tool | Required? | Check with | Used for |

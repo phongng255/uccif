@@ -40,7 +40,21 @@ jobs:
       - run: python3 plugins/uccif/scripts/build_gemini.py --check
       - run: npx -y @google/gemini-cli@0.66.0 extensions validate .
       - run: python3 plugins/uccif/scripts/build_antigravity.py --check
+      - run: python3 plugins/uccif/scripts/build_codex.py --check
       - run: curl -fsSL https://antigravity.google/cli/install.sh | bash
       - run: ~/.local/bin/agy plugin validate --strict plugins/uccif-antigravity
       - run: ~/.local/bin/agy plugin install plugins/uccif-antigravity
       - run: ~/.gemini/config/plugins/uccif/core/bin/uccif version
+
+  codex-runtime:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm install --prefix "$RUNNER_TEMP/uccif-codex-runtime" --no-audit --no-fund @openai/codex@0.167.0
+      - run: python tests/codex_runtime_check.py --codex-bin "$RUNNER_TEMP/uccif-codex-runtime/node_modules/.bin/codex"

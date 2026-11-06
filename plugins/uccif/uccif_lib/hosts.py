@@ -27,7 +27,7 @@ import json
 import re
 from pathlib import Path
 
-HOSTS = ("claude", "gemini", "antigravity")
+HOSTS = ("claude", "gemini", "antigravity", "codex")
 
 # skill dir per host, relative to the project root. Gemini CLI and Antigravity both read
 # .agents/skills/, so one copy serves both.
@@ -35,6 +35,7 @@ SKILL_DIRS = {
     "claude": Path(".claude") / "skills",
     "gemini": Path(".agents") / "skills",
     "antigravity": Path(".agents") / "skills",
+    "codex": Path(".agents") / "skills",
 }
 
 CLAUDE_EVENTS = {
@@ -224,6 +225,8 @@ def enabled(project):
     seen = set(read_json(_state_path(project), {}) or {})
     if (Path(project.root) / ".agents" / "rules" / "uccif.md").exists():
         seen.add("antigravity")
+    if (Path(project.root) / ".codex" / ".uccif-setup.json").is_file():
+        seen.add("codex")
     if not seen:
         seen.add("claude")
     return [h for h in HOSTS if h in seen]

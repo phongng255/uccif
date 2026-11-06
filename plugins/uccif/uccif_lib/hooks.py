@@ -464,6 +464,10 @@ HANDLERS = {
 def run(event, stdin=None, stdout=None, host="claude"):
     """Entry for `uccif hook [--host H] <event>`. Always returns 0. `event` is the host's own
     name (BeforeTool) or the internal one (pre-tool-use); hosts.py translates both ways."""
+    if host == "codex":
+        # Repository workflows only until the native client contract has been verified.
+        # Never accidentally feed Codex events into the Claude adapter.
+        return 0
     stdin = stdin or sys.stdin
     stdout = stdout or sys.stdout
     t0 = time.time()

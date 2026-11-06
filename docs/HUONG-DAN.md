@@ -34,7 +34,54 @@ Thư mục `.agents/` ít file hơn `.claude/` là bình thường. Hai bên dù
 
 ## 3. Cài đặt
 
-Cần có:
+### Codex: plugin workflow và setup theo repo (bản thử nghiệm)
+
+Đã kiểm chứng bằng **Codex CLI/app-server 0.167.0 trên Linux**: cài/gỡ plugin local, nhận đúng
+skills, chạy core từ bản cài và lưu/đọc task. Trên macOS, model turn thật bằng bundled CLI
+0.166.0-alpha.6 đã chạy đúng native status/init/resume và repository resume. Chưa thử thực thi
+hooks hoặc UI đồ họa desktop/VS Code. Đây là package đang phát triển, chưa phát hành công khai.
+
+Với checkout chứa thay đổi này, cài qua CLI:
+
+```bash
+codex plugin marketplace add /duong/dan/uccif
+codex plugin add uccif@uccif-codex-local
+```
+
+Trong chat Codex, chọn skill hoặc nhắc `$uccif:init`, `$uccif:resume`, `$uccif:codegraph`.
+Menu chung là `$uccif:uccif`. Tên này đã được app-server thực tế nhận từ plugin; không phải
+lệnh terminal hoặc cú pháp slash của Claude. Package chứa core riêng được sinh từ nguồn chung,
+chạy từ thư mục cache sau khi cài. Gỡ bằng `codex plugin remove uccif@uccif-codex-local`.
+
+Nếu muốn setup riêng theo từng repo, tại dự án đích chạy launcher từ checkout UCCIF:
+
+```bash
+/duong/dan/uccif/plugins/uccif/bin/uccif setup codex --dry-run
+/duong/dan/uccif/plugins/uccif/bin/uccif setup codex
+```
+
+Cách này thêm khối riêng trong AGENTS.md và skills `uccif`, `uccif-codex-*` vào `.agents/skills/`.
+Tên repo skill khác tên có namespace của plugin. File setup chứa đường dẫn Python/core của
+máy hiện tại, cần giữ cục bộ và setup lại khi di chuyển checkout. Xem trước khi gỡ bằng
+`uccif setup codex --remove --dry-run`, sau đó `uccif setup codex --remove`.
+Nội dung người dùng đã sửa, skills bản đồ dùng chung và lịch sử task được giữ lại.
+
+Cả hai cách **chưa cài hooks**, chưa theo dõi task tự động, chưa có dòng token hay tích hợp LSP.
+Workflow dùng checkpoint để lưu file thực tế đã sửa, kết quả test và bước tiếp theo. Dữ liệu
+vẫn ở `.claude/uccif/`, dùng chung với các host hiện tại.
+
+CodeGraph là tùy chọn và plugin workflow chưa tự khởi động MCP. Xem `uccif codegraph --host codex`;
+muốn thêm cấu hình MCP trong repo, xem trước `uccif setup codex --with-codegraph --dry-run` rồi
+chạy lại bỏ `--dry-run` nếu phù hợp. Setup giữ server có sẵn và báo cấu hình plugin chưa rõ,
+không tự thêm trùng. Không có `tomllib` hoặc `tomli` tùy chọn thì giữ nguyên TOML có sẵn.
+Setup không cài package hoặc đổi trust/cấu hình toàn máy. `uccif doctor --host codex` phân biệt
+đã cấu hình với đã chạy kiểm chứng. Dự án chưa trust có thể không tải cấu hình/hook cục bộ,
+trong khi skills vẫn được runtime 0.167.0 nhận trong bài kiểm tra.
+
+Xem [báo cáo kiểm chứng trên cloud](CODEX-RUNTIME-VI.md). Bài kiểm chứng runtime có thể
+chạy hoàn toàn trên cloud bằng script trong repo và job CI riêng.
+
+Các công cụ cần có:
 
 | Công cụ | Bắt buộc? | Kiểm tra bằng | Dùng để |
 |---|---|---|---|

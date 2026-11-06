@@ -100,6 +100,18 @@ def test_generate_writes_map_bugfix_and_module_skills(project, app):
     assert skillgen.generate(project)["written"] == []  # second run: nothing changes
 
 
+def test_codex_project_skills_use_shared_agents_directory(project, app):
+    from uccif_lib import codex_setup
+    codex_setup.run(project)
+    result = skillgen.generate(project, hosts_=["codex"])
+    assert result["dirs"] == [".agents/skills"]
+    name = "%s-map" % skillgen.slugify(app.name, 30)
+    assert (app / ".agents/skills" / name / "SKILL.md").is_file()
+    codex_setup.run(project, remove_=True)
+    # Generated code maps are shared data, not owned setup workflow files.
+    assert (app / ".agents/skills" / name / "SKILL.md").is_file()
+
+
 def test_regeneration_keeps_notes_and_respects_user_files(project, app):
     slug = skillgen.slugify(app.name, 30)
     skillgen.generate(project)

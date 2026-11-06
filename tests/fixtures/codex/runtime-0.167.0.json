@@ -1,0 +1,20 @@
+{
+  "codex_version": "codex-cli 0.167.0",
+  "platform": "linux",
+  "plugin_install": "passed",
+  "plugin_skill_discovery": [
+    "uccif:codegraph",
+    "uccif:init",
+    "uccif:resume",
+    "uccif:uccif"
+  ],
+  "installed_core_and_task_cli": "passed",
+  "plugin_uninstall": "passed",
+  "plugin_repository_coexistence": "passed; distinct qualified names",
+  "repository_skill_discovery_and_remove": "passed",
+  "untrusted_hook_discovery": "passed; not trusted or executed",
+  "model_turn": "not run",
+  "hook_execution": "not verified",
+  "desktop_vscode_ui": "not tested",
+  "credentials_used": false
+}

@@ -16,7 +16,8 @@ def build_parser():
     sub.add_parser("version", help="print framework and schema version")
     sub.add_parser("where", help="print project root, data dir and docs dir")
     sub.add_parser("detect", help="mechanical project survey as JSON (read-only)")
-    sub.add_parser("doctor", help="check the UCCIF install for this project")
+    doctor = sub.add_parser("doctor", help="check the UCCIF install for this project")
+    doctor.add_argument("--host", choices=("claude", "codex"), default="claude")
 
     t = sub.add_parser("task", help="current-task memory").add_subparsers(dest="action")
     s = t.add_parser("start")
@@ -42,6 +43,7 @@ def build_parser():
     cgp = sub.add_parser("codegraph", help="CodeGraph state for this project as JSON (cli, indexed, mcp)")
     cgp.add_argument("action", nargs="?", choices=("decline",),
                      help="decline: the user does not want CodeGraph; stop offering it")
+    cgp.add_argument("--host", choices=hosts.HOSTS, default="claude")
     sk = sub.add_parser("skills", help="project skills generated from the CodeGraph index").add_subparsers(dest="action")
     sg = sk.add_parser("generate", help="write/refresh .claude/skills/<project>-map, -bugfix, -mod-*")
     sg.add_argument("--force", action="store_true", help="also overwrite generated files you edited")
@@ -58,8 +60,10 @@ def build_parser():
     sub.add_parser("maintain", help="background upkeep: drift check")
 
     su = sub.add_parser("setup", help="write this project's files for a host that has no plugin install")
-    su.add_argument("host", choices=("antigravity",), help="antigravity: .agents/ for the Antigravity IDE")
+    su.add_argument("host", choices=("antigravity", "codex"), help="project-scoped host setup")
     su.add_argument("--remove", action="store_true", help="delete only the files setup wrote")
+    su.add_argument("--dry-run", action="store_true", help="Codex: preview without writing files")
+    su.add_argument("--with-codegraph", action="store_true", help="Codex: opt in to project MCP configuration")
 
     for name in ("agents-md", "claude-md"):  # claude-md: the 1.1 name, kept as an alias
         cm = sub.add_parser(name, help="AGENTS.md UCCIF block (CLAUDE.md imports it with @AGENTS.md)"
@@ -363,7 +367,11 @@ def main(argv=None):
             print(json.dumps(detect.detect(resolve_project()), ensure_ascii=False, indent=1))
             return 0
         if args.cmd == "doctor":
-            ok, lines = detect.doctor(resolve_project())
+            if args.host == "codex":
+                from uccif_lib import codex_setup
+                ok, lines = codex_setup.doctor(resolve_project(create=False))
+            else:
+                ok, lines = detect.doctor(resolve_project())
             print("\n".join(lines))
             return 0 if ok else 1
         if args.cmd == "task" and args.action:
@@ -387,7 +395,7 @@ def main(argv=None):
                 codegraph.decline(proj)
                 print("CodeGraph offer declined for this project.")
                 return 0
-            st = dict(codegraph.state(proj), gitignored=codegraph.gitignored(proj), package=codegraph.PACKAGE)
+            st = dict(codegraph.state(proj, host=args.host), gitignored=codegraph.gitignored(proj), package=codegraph.PACKAGE)
             print(json.dumps(st, indent=1))
             return 0
         if args.cmd == "drift" and args.action:
@@ -395,6 +403,21 @@ def main(argv=None):
         if args.cmd == "maintain":
             return maintain()
         if args.cmd == "setup":
+            if args.host == "codex":
+                from uccif_lib import codex_setup
+                from uccif_lib.paths import LockTimeout
+                if args.remove and args.with_codegraph:
+                    parser.error("--remove cannot be combined with --with-codegraph")
+                try:
+                    lines = codex_setup.run(resolve_project(create=False), remove_=args.remove,
+                                            dry_run=args.dry_run, with_codegraph=args.with_codegraph)
+                except (OSError, ValueError, LockTimeout) as e:
+                    print("uccif: Codex setup failed: %s" % e, file=sys.stderr)
+                    return 1
+                print("\n".join(lines))
+                return 0
+            if args.dry_run or args.with_codegraph:
+                parser.error("--dry-run and --with-codegraph require setup codex")
             from uccif_lib import antigravity_setup as setup
             print("\n".join((setup.remove if args.remove else setup.setup)(resolve_project())))
             return 0
