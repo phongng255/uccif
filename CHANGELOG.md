@@ -10,7 +10,10 @@
   about). Rule 2, the PreToolUse reminder and the generated `<project>-map` skill now go smallest
   first: `codegraph node <symbol>` or `node -f <file> --symbols-only`, `callers`/`impact`, and
   `codegraph_explore` only for a flow with no symbol to name (`--max-files 3` in Bash), once per
-  question, never for code already in context. Existing `-map` skills are rewritten at the next session start (the version is part of their fingerprint).
+  question. Existing `-map` skills are rewritten at the next session start (the version is part of their fingerprint).
+- Rule 2 also says: never re-read a file, log, command output or message already in context
+  unless it changed, never re-run a command only to see its output again, and read only the
+  lines needed (`offset`/`limit`, `tail`). Still five rules.
 
 ## 1.3.0 — Claude actually uses CodeGraph
 
