@@ -1,6 +1,6 @@
 ---
-name: init
-description: Write the project notes the code graph cannot know (what the project is for, conventions a newcomer would get wrong, external services) to .claude/uccif/summary.md and a short UCCIF block in AGENTS.md, with test commands verified. Use this when the user runs /init, asks to set up, initialise or refresh UCCIF for a project ("init uccif", "ghi summary", "cập nhật ghi chú dự án"), or a hook says the project notes are stale. Not for code changes.
+name: uccif-init
+description: Write the project notes the code graph cannot know (what the project is for, conventions a newcomer would get wrong, external services) to .claude/uccif/summary.md and a short UCCIF block in AGENTS.md, with test commands verified. Use this when the user runs /uccif-init, asks to set up, initialise or refresh UCCIF for a project ("init uccif", "ghi summary", "cập nhật ghi chú dự án"), or a hook says the project notes are stale. Not for code changes.
 ---
 <!-- generated from plugins/uccif/skills by plugins/uccif/scripts/build_antigravity.py; edit the source -->
 
@@ -13,7 +13,7 @@ derive, so re-deriving the layout here would just duplicate the map and drift fr
 Budget: about 7 tool calls, at most 10. Run each command on its own (no `;`, `&&`, `echo`):
 compound commands need the user's approval, and this skill should run without prompts.
 
-1. `uccif detect`. If `codegraph.indexed` is false, run the `codegraph` skill first: the
+1. `uccif detect`. If `codegraph.indexed` is false, run the `uccif-codegraph` skill first: the
    notes point to the map skill, which needs the index.
 2. Load the `<project>-map` skill, so you know the layout without reading files for it.
 3. Read at most 4 files, in one parallel batch, with offset/limit: README, the main manifest, and

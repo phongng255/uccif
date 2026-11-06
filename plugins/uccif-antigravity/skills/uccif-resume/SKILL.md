@@ -1,5 +1,5 @@
 ---
-name: resume
+name: uccif-resume
 description: Pick up earlier work from UCCIF task memory: show the open task, check what changed since its last checkpoint, re-verify what may be stale, and continue from its next step. Use this whenever the user wants to continue ("tiếp tục", "làm tiếp", "continue", "where were we", "what was I doing", "việc hôm qua"), or a hook reports an open UCCIF task the request relates to, even if they do not mention a task.
 ---
 <!-- generated from plugins/uccif/skills by plugins/uccif/scripts/build_antigravity.py; edit the source -->

@@ -10,6 +10,7 @@ Usage: python plugins/uccif/scripts/build_antigravity.py [--check]
 """
 
 import json
+import shutil
 import sys
 from pathlib import Path
 
@@ -74,6 +75,11 @@ def build(check=False):
     stale = hostfiles.write_tree(want, DST, check)
     extra = [p.relative_to(DST).as_posix() for p in (DST / "skills").glob("*/SKILL.md")
              if p.relative_to(DST).as_posix() not in want]
+    if not check and extra:
+        for p in (DST / "skills").glob("*/SKILL.md"):
+            if p.relative_to(DST).as_posix() in extra:
+                shutil.rmtree(p.parent)
+        extra = []
     return stale, extra
 
 

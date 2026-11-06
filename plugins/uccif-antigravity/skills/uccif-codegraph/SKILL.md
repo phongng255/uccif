@@ -1,5 +1,5 @@
 ---
-name: codegraph
+name: uccif-codegraph
 description: Install, index, re-index or repair CodeGraph (the code graph UCCIF uses instead of Grep/Read) for this project, then write the project skills from it. Use this whenever the user says yes to installing CodeGraph, asks to set it up, re-index or refresh it ("reindex", "index cũ rồi", "cài codegraph"), or when `codegraph_explore` / `codegraph` fails, returns nothing for code that exists, or a hook says the CLI or the index is missing — even if the user does not name the skill.
 ---
 <!-- generated from plugins/uccif/skills by plugins/uccif/scripts/build_antigravity.py; edit the source -->
@@ -10,7 +10,7 @@ UCCIF has no code index of its own: CodeGraph is the index, and every later look
 depends on it. Run every step yourself; the only thing the user does is restart Antigravity at the
 end, because only a restart loads a newly installed MCP server.
 
-**Package name:** always `@colbymchenry/codegraph`. Never `npx codegraph`: the unscoped npm
+**Package name:** always `@colbymchenry/uccif-codegraph`. Never `npx codegraph`: the unscoped npm
 package `codegraph` is an unrelated project with no CLI, so it fails in confusing ways.
 
 ## Steps
@@ -19,15 +19,15 @@ package `codegraph` is an unrelated project with no CLI, so it fails in confusin
    every step that is already done, so a repair never reinstalls what works.
    The user asked to re-index → go to step 4 with `codegraph index --force`.
 2. **CLI** (only if `cli` is null). The user asked for this skill or agreed to it, so install:
-   - Node available (`node -v`): `npm install -g @colbymchenry/codegraph`.
+   - Node available (`node -v`): `npm install -g @colbymchenry/uccif-codegraph`.
    - The global install fails (EACCES, read-only prefix, sandbox): do not retry with `sudo` or
      change npm's prefix, both touch the user's machine beyond this project. Use
-     `npx -y @colbymchenry/codegraph <command>` in place of `codegraph <command>` for the rest of
+     `npx -y @colbymchenry/uccif-codegraph <command>` in place of `codegraph <command>` for the rest of
      this skill, and tell the user the CLI is not on PATH yet.
    - No Node: show the user the official installer and ask before running it, since it installs
      outside the project:
-     `curl -fsSL https://raw.githubusercontent.com/colbymchenry/codegraph/main/install.sh | sh`
-     (Windows PowerShell: `irm https://raw.githubusercontent.com/colbymchenry/codegraph/main/install.ps1 | iex`).
+     `curl -fsSL https://raw.githubusercontent.com/colbymchenry/uccif-codegraph/main/install.sh | sh`
+     (Windows PowerShell: `irm https://raw.githubusercontent.com/colbymchenry/uccif-codegraph/main/install.ps1 | iex`).
 3. **MCP tool.** Nothing to run: the plugin declares the server itself
    (`mcp_config.json`: `codegraph serve --mcp`). It starts once the CLI is on PATH, after
    a restart of Antigravity. Do **not** run `codegraph install`: it would register a second

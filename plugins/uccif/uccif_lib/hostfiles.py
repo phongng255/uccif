@@ -60,6 +60,10 @@ def render_skill(name, text, host):
     if host == "antigravity":
         for old, new in ANTIGRAVITY:
             text = text.replace(old, new)
+        text = re.sub(r"^name:\s*%s\b" % name, "name: uccif-%s" % name, text, count=1, flags=re.M)
+        text = re.sub(r"/(codegraph|resume|init)\b", r"/uccif-\1", text)
+        text = re.sub(r"`(codegraph|resume|init)` skill", r"`uccif-\1` skill", text)
+        text = re.sub(r"\b(codegraph|resume|init) skill\b", r"uccif-\1 skill", text)
     head, sep, body = text.partition("\n---\n")
     return head + sep + HEADER % BUILD_SCRIPT[host] + body
 
@@ -70,8 +74,12 @@ def skill_sources():
 
 def skills(host):
     """{skill name: SKILL.md text} for `host`."""
-    return {p.parent.name: render_skill(p.parent.name, p.read_text(encoding="utf-8"), host)
-            for p in skill_sources()}
+    out = {}
+    for p in skill_sources():
+        src_name = p.parent.name
+        name = ("uccif-%s" % src_name) if host == "antigravity" else src_name
+        out[name] = render_skill(src_name, p.read_text(encoding="utf-8"), host)
+    return out
 
 
 def context_text(host):

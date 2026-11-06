@@ -50,7 +50,7 @@ def test_manifest_follows_the_claude_plugin():
 
 def test_skills_have_no_other_host_names():
     assert {p.parent.name for p in (DIR / "skills").glob("*/SKILL.md")} == {
-        p.parent.name for p in hostfiles.skill_sources()}
+        "uccif-%s" % p.parent.name for p in hostfiles.skill_sources()}
     for p in (DIR / "skills").glob("*/SKILL.md"):
         text = p.read_text(encoding="utf-8")
         head = text.split("\n---\n")[0]
@@ -266,13 +266,13 @@ def test_setup_writes_the_workspace_files(project):
     setup_mod.setup(project)
     root = agents(project)
     assert set(tree(root)) == {".uccif-setup.json", "rules/uccif.md", "mcp_config.json",
-                               "skills/init/SKILL.md", "skills/codegraph/SKILL.md", "skills/resume/SKILL.md"}
+                               "skills/uccif-init/SKILL.md", "skills/uccif-codegraph/SKILL.md", "skills/uccif-resume/SKILL.md"}
     rule = (root / "rules" / "uccif.md").read_text(encoding="utf-8")
     assert rule.startswith("---\ntrigger: always_on\n") and "UCCIF CORE RULES" in rule
     assert hooks.UCCIF_BIN.as_posix() in rule
     cfg = json.loads((root / "mcp_config.json").read_text(encoding="utf-8"))
     assert cfg["mcpServers"]["codegraph"]["command"] == "codegraph"
-    assert (root / "skills" / "init" / "SKILL.md").read_text(encoding="utf-8") == hostfiles.skills("antigravity")["init"]
+    assert (root / "skills" / "uccif-init" / "SKILL.md").read_text(encoding="utf-8") == hostfiles.skills("antigravity")["uccif-init"]
     assert hosts.enabled(project) == ["antigravity"]
 
 
@@ -305,7 +305,7 @@ def test_user_files_survive_setup_and_remove(project):
 
 
 def test_existing_skill_with_the_same_name_is_not_overwritten(project):
-    p = agents(project) / "skills" / "init" / "SKILL.md"
+    p = agents(project) / "skills" / "uccif-init" / "SKILL.md"
     p.parent.mkdir(parents=True)
     p.write_text("mine")
     setup_mod.setup(project)
