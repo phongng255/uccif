@@ -69,7 +69,12 @@ python3 tests/codex_runtime_check.py --codex-bin /duong/dan/codex
 Script dùng stdlib Python, tự tạo cấu hình/dự án tạm, cài plugin từ marketplace của checkout,
 kiểm tra bằng giao thức app-server, rồi gỡ và kiểm tra lại. Không cần đăng nhập.
 Job `codex-runtime` trong CI cài đúng phiên bản 0.167.0 và chạy cùng bài thử. Việc thêm job
-không có nghĩa GitHub Actions đã chạy: thay đổi hiện vẫn ở nhánh làm việc chưa push.
+đã đạt cùng toàn bộ matrix Python 3.9/3.12 trên Ubuntu, macOS và Windows trong GitHub Actions
+run `42189541400` của nhánh `codex/codex-preview`.
+
+Matrix Windows ban đầu phát hiện hai lỗi portability: text mode tạo `CRCRLF` khi ghi nội dung đã
+có CRLF, và generator so sánh byte LF/CRLF như thay đổi nội dung. Bản sửa ghi UTF-8 bytes, chuẩn
+hóa newline khi kiểm tra ownership/generated output và có regression test riêng; lần CI cuối đạt.
 
 Package được sinh bằng `plugins/uccif/scripts/build_codex.py`; CI và pytest kiểm tra package
 không lệch nguồn. Không sửa trực tiếp file trong `plugins/uccif-codex/`.

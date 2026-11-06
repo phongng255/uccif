@@ -30,7 +30,7 @@ Bạn đã duyệt đề xuất ngày 06/11/2026. Đã có code setup/workflow t
 - [x] 1.3 Làm setup/dry-run/remove, mã băm quyền quản lý và khối có ranh giới trong AGENTS.md.
 - [x] 1.4 Ghép cấu hình MCP trong repo, phát hiện xung đột và tránh trùng với server từ plugin.
 - [x] 1.5 Điều chỉnh doctor/CodeGraph theo host; phân biệt chưa rõ/đã cấu hình/đã kiểm chứng.
-- [ ] 1.6 Test cài/gỡ lặp lại, file đã sửa/không thuộc UCCIF, chú thích TOML, đường dẫn có khoảng trắng,
+- [x] 1.6 Test cài/gỡ lặp lại, file đã sửa/không thuộc UCCIF, chú thích TOML, đường dẫn có khoảng trắng,
   cấu hình chỉ đọc, thiếu CodeGraph/git, file dùng chung giữa host và tương thích Python.
 
 ## 2. Tự động hóa bằng hooks (phụ thuộc mốc B)
@@ -70,18 +70,20 @@ Các host cũ phải tiếp tục vượt qua kiểm tra. Token, LSP và chế �
 - Đã test cài/gỡ lặp lại, nội dung người dùng, TOML, MCP ở các lớp cấu hình đã đọc,
   symlink, đường dẫn có khoảng trắng, lỗi ghi, hai lần setup đồng thời và dữ liệu task dùng chung.
 - Đã kiểm tra skills bản đồ dự án Codex nằm trong `.agents/skills/` và vẫn còn sau khi gỡ workflow.
-- Chưa đánh dấu hoàn tất 1.6 vì chưa chạy thực tế trên mọi phiên bản Python/nền tảng CI.
+- Mục 1.6 đã đạt trên matrix Python 3.9/3.12 của Ubuntu, macOS và Windows; Windows CI cũng kiểm tra
+  bảo toàn CRLF, ownership và generator trên checkout có line-ending khác.
 - Đã viết hướng dẫn Việt/Anh và changelog Unreleased; chưa tăng version phát hành.
 - Đã có package native workflow và marketplace local; chưa có bộ chuyển đổi hooks hoặc số liệu token Codex.
-- Người dùng không thao tác máy được; chuyển sang tự kiểm chứng bằng CLI/app-server trên cloud.
-  Không coi nhận skill thành công là bằng chứng model đã chạy workflow hoặc hooks đã hoạt động.
+- Đã kiểm chứng discovery không credential trên cloud và model turn thật trên máy người dùng.
+  Model workflow đạt không được diễn giải thành hooks đã hoạt động.
 
 ### Kết quả kiểm tra kỹ thuật gần nhất
 
-- Toàn bộ pytest: **362 đạt, 1 bỏ qua** trên Python 3.12 trong môi trường cloud này.
-- Kiểm tra sinh file Gemini: đạt; Antigravity: đạt.
+- Toàn bộ pytest local gần nhất: **333 đạt** trên macOS/Python 3.9.6.
+- Kiểm tra sinh file Codex, Gemini và Antigravity: đạt.
 - `git diff --check`: đạt.
-- Chưa chạy OpenSpec CLI vì chưa cài; chưa chạy Codex app/VS Code hoặc hooks thật.
+- GitHub Actions: đạt trên Ubuntu/macOS/Windows với Python 3.9/3.12; chưa chạy OpenSpec CLI vì
+  chưa cài và chưa chạy UI đồ họa Codex/VS Code hoặc hooks thật.
 
 ### Tiến độ kiểm chứng runtime thật
 
@@ -90,24 +92,26 @@ Các host cũ phải tiếp tục vượt qua kiểm tra. Token, LSP và chế �
 - Core version/doctor và task CLI trong package: đạt.
 - Coexistence và gỡ từng chế độ: đạt; dữ liệu task được giữ.
 - Hook thử riêng được runtime đánh dấu `untrusted`; không trust hoặc thực thi.
-- Đã thêm script không cần credential và job CI pin 0.167.0; GitHub Actions chưa chạy vì chưa push.
+- Script không cần credential và job CI pin 0.167.0 đã đạt trên GitHub Actions.
 - Mốc B/2.1–2.4 về sự kiện trong lượt model và hooks vẫn chưa đủ bằng chứng; không bật tự động hóa.
 - Chi tiết và cách tái hiện: `docs/CODEX-RUNTIME-VI.md`.
 
 ### Kiểm chứng bổ sung trên máy người dùng
 
-- Pytest trên macOS/Python 3.9.6: **332 đạt**; ba generator `--check` và `git diff --check`: đạt.
+- Pytest trên macOS/Python 3.9.6: **333 đạt**; ba generator `--check` và `git diff --check`: đạt.
 - Sửa test harness để tắt Python bytecode cache trong subprocess; nếu không, macOS ghi `.pyc`
   vào HOME fixture và làm kiểm tra dry-run báo sai dù UCCIF không tạo metadata.
 - Model turn native plugin: status, init và resume đạt; model turn repo setup resume đạt.
 - Gỡ setup/plugin giữ nguyên summary và task checkpoint. Plugin/marketplace thử nghiệm đã được gỡ
   khỏi cấu hình người dùng sau khi kiểm tra.
+- Hai vòng CI Windows đã phát hiện và giúp sửa newline translation cùng ownership hash; regression
+  mới kiểm tra LF/CRLF và lần matrix cuối đạt toàn bộ.
 - Chưa thu payload hook hoặc kiểm tra success/failure/interrupt/compact; các mục 0.3 và 2.1–2.4
   vẫn chưa hoàn tất.
 
 ### Kết quả cuối của giai đoạn workflow
 
-- Pytest: **367 đạt, 1 bỏ qua** trên Python 3.12/Linux.
+- Pytest local: **333 đạt** trên Python 3.9/macOS; matrix Python 3.9/3.12 trên ba hệ điều hành đạt.
 - Cả ba trình sinh Codex/Gemini/Antigravity: `--check` đạt.
 - Bài kiểm chứng runtime Codex 0.167.0 không credential: đạt các hạng mục ghi trong
   `tests/fixtures/codex/runtime-0.167.0.json`.
