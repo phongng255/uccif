@@ -1,0 +1,7 @@
+schema_version: "1.1"
+name: no-open-task
+expected_outcome: |
+  Says there is no open task and asks what to continue, without inventing work or editing code.
+  Environment: No UCCIF task recorded.
+context:
+  scaffold_script: place-files.sh

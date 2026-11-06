@@ -1,0 +1,8 @@
+schema_version: "1.1"
+name: rename-entry-kind
+expected_outcome: |
+  Checks the impact of the change through CodeGraph or the code-impact-analyzer agent before
+  editing, then renames every use, so no "Chuyển" literal is left in src/ or tests/. Environment:
+  Indexed project with generated project skills.
+context:
+  scaffold_script: place-files.sh
