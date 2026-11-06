@@ -115,7 +115,9 @@ def test_gemini_edit_records_task_files_in_old_location(base, project):
     assert (project.root / ".claude" / "uccif" / ".local" / "tasks" / "current.json").exists()
 
 
-def test_gemini_search_nudge_is_logged_not_printed(base, project):
+def test_gemini_search_nudge_is_logged_not_printed(base, project, monkeypatch):
+    from uccif_lib import codegraph
+    monkeypatch.setattr(codegraph, "usable", lambda project: True)
     code, out = gem("BeforeTool", dict(base, tool_name="grep_search", tool_input={"pattern": "foo"}))
     assert code == 0 and out is None  # BeforeTool cannot carry context to the model
     assert hook_log(project)[-1]["rule"] == "search-codegraph-first"

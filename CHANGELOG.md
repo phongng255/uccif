@@ -1,8 +1,26 @@
 # Changelog
 
-## Unreleased
+## 1.3.0 — Claude actually uses CodeGraph
 
 ### Fixes
+
+- CodeGraph installed or indexed mid-session (the usual case during `/uccif:init`) was never
+  announced: Claude kept the SessionStart note ("use Grep until `.codegraph/` exists") for the rest
+  of the session. SessionStart now remembers what it told each session, and the next prompt says
+  when the CodeGraph level or the project map skill changed.
+- The CodeGraph-first reminder missed most code reads: `Read` was not matched, nor `cat`, `sed`,
+  `head`, `tail` on source files. It now covers them, names the call to make (`codegraph_explore`,
+  or the Bash form without MCP, and the `-mod-*` skill), is skipped after a CodeGraph lookup in the
+  same turn, and is not shown when there is no index to use.
+- Files edited by Bash (a Python script, `sed -i`, a generator) never reached task memory, which
+  only saw Edit/Write. UserPromptSubmit now records the dirty files and HEAD; Stop adds every file
+  changed in between, committed or not, and opens a task as a first edit would.
+
+### New option
+
+- `strict_codegraph` (off by default, Claude Code only): with CodeGraph usable, the first Read/Grep
+  of source code in a turn without a lookup is refused once with the lookup to make; a retry is
+  allowed. This is the only case where a UCCIF hook refuses a call.
 
 - Antigravity: edits made with `edit_file` and `write_file` were never tracked, because these tools
   pass the file as `Path`. It is now read, JSON-quoted or plain, and a relative path is resolved
