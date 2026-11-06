@@ -130,6 +130,15 @@ def test_user_text_added_around_block_survives_removal(project):
     assert p.read_text() == "Before\nAfter\n"
 
 
+def test_line_ending_normalization_does_not_make_owned_block_unremovable(project):
+    setup.run(project)
+    p = project.root / "AGENTS.md"
+    normalized = p.read_bytes().decode("utf-8").replace("\n", "\r\n")
+    p.write_bytes(("Before\r\n" + normalized + "After\r\n").encode("utf-8"))
+    setup.run(project, remove_=True)
+    assert p.read_bytes() == b"Before\r\nAfter\r\n"
+
+
 def test_task_history_is_never_removed(project):
     tk = task.start(project, "shared task", "bug")
     setup.run(project)

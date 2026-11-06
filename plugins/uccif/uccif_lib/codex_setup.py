@@ -25,7 +25,11 @@ BLOCKS = {"AGENTS.md": (AGENTS_BEGIN, AGENTS_END),
 
 
 def _hash(text):
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+    # A text editor or Python's text mode may normalize line endings without
+    # changing the owned content. Treat LF/CRLF/CR as equivalent while still
+    # preserving the user's original bytes outside owned blocks.
+    canonical = text.replace("\r\n", "\n").replace("\r", "\n")
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def _read(path):
