@@ -5,8 +5,9 @@ __pycache__/
 .DS_Store
 # smoke-test scratch output
 tests/.smoke/
-# per-machine UCCIF and Claude Code files, regenerated on demand
+# per-machine UCCIF, Claude Code and Antigravity files, regenerated on demand
 .claude/
+.agents/skills/
 # local CodeGraph index and per-project UCCIF notes
 .codegraph/
 CLAUDE.md
