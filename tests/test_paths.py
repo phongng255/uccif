@@ -131,7 +131,7 @@ def test_write_text_atomic_retries_a_denied_replace(tmp_path, monkeypatch):
     monkeypatch.setattr(paths.os, "replace", flaky)
     paths.write_text_atomic(target, "ok\n")
     assert not denied
-    assert target.read_text(encoding="utf-8") == "ok\n"
+    assert target.read_bytes() == b"ok\n"
 
 
 def test_write_text_atomic_gives_up_on_a_lasting_denial(tmp_path, monkeypatch):

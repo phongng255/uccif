@@ -52,7 +52,9 @@ def build(check=False):
     expected[MARKETPLACE] = marketplace()
     stale = []
     for path, text in expected.items():
-        old = path.read_bytes().decode("utf-8") if path.exists() else None
+        # read_text normalizes a CRLF checkout on Windows. Generated content is
+        # logically current when only the worktree's line-ending policy differs.
+        old = path.read_text(encoding="utf-8") if path.exists() else None
         if old != text:
             stale.append(path.relative_to(REPO).as_posix())
             if not check:

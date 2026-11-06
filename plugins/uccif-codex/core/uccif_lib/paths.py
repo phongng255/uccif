@@ -51,7 +51,10 @@ def write_text_atomic(path, text):
     # a name per writer: two sessions starting together write the same file
     tmp = path.with_name("%s.%s.tmp" % (path.name, uuid.uuid4().hex))
     try:
-        tmp.write_text(text, encoding="utf-8")
+        # Write bytes so Windows does not translate LF to CRLF. Callers that
+        # preserve existing user bytes may intentionally pass mixed/newline
+        # styles, and a second translation would turn CRLF into CRCRLF.
+        tmp.write_bytes(text.encode("utf-8"))
         _replace(str(tmp), str(path))
     except OSError:
         try:
