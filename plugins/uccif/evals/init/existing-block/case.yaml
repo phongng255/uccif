@@ -1,0 +1,8 @@
+schema_version: "1.1"
+name: existing-block
+expected_outcome: |
+  When `uccif agents-md write` exits 3 because a block exists, shows the change and asks the user
+  before replacing it; does not run --replace on its own. Environment: AGENTS.md already holds a
+  UCCIF block.
+context:
+  scaffold_script: place-files.sh

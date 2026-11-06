@@ -131,7 +131,8 @@ def test_edit_with_task_quick_or_framework_file_is_not_nudged(base, project):
     assert out is None
 
 
-def test_search_nudge_once_per_window(base, project):
+def test_search_nudge_once_per_window(base, project, monkeypatch):
+    _cg_env(monkeypatch, project, cli=True, indexed=True, plugin=True)
     data = dict(base, tool_name="Grep", tool_input={"pattern": "x"})
     _, out = run_hook("pre-tool-use", data)
     assert "CodeGraph" in ctx(out)
@@ -471,3 +472,170 @@ def test_shell_only_prompt_does_not_title_a_task(base, project):
 def test_quick_inside_command_output_does_not_count(base, project):
     run_hook("user-prompt-submit", dict(base, prompt=SHELL))
     assert not hooks._is_quick(project)
+
+
+# ---- CodeGraph news mid-session (state changes after SessionStart) -----------------------
+
+def test_codegraph_ready_mid_session_is_announced_once(base, project, monkeypatch):
+    _cg_env(monkeypatch, project)  # nothing installed at session start
+    _, out = run_hook("session-start", dict(base, source="startup"))
+    assert "NOT installed" in ctx(out)
+    _, out = run_hook("user-prompt-submit", dict(base, prompt="ok"))
+    assert out is None  # nothing changed yet
+    _cg_env(monkeypatch, project, cli=True, indexed=True, plugin=True)  # installed + indexed meanwhile
+    _, out = run_hook("user-prompt-submit", dict(base, prompt="now fix the ledger"))
+    text = ctx(out)
+    assert "replaces the earlier note" in text and "CodeGraph is active" in text
+    assert hook_log(project)[-1]["codegraph"] == 1
+    _, out = run_hook("user-prompt-submit", dict(base, prompt="and the totals"))
+    assert out is None  # said once
+
+
+def test_new_map_skill_mid_session_is_announced(base, project, monkeypatch):
+    _cg_env(monkeypatch, project, cli=True, indexed=True, plugin=True)
+    run_hook("session-start", dict(base, source="startup"))
+    monkeypatch.setattr(hooks, "_map_skill", lambda project: "trip-map")
+    _, out = run_hook("user-prompt-submit", dict(base, prompt="fix it"))
+    text = ctx(out)
+    assert "New project skills" in text and "`trip-map`" in text and "`trip-mod-*`" in text
+    assert "CodeGraph changed" not in text
+
+
+def test_news_is_per_session(base, project, monkeypatch):
+    _cg_env(monkeypatch, project)
+    run_hook("session-start", dict(base, source="startup"))
+    _cg_env(monkeypatch, project, cli=True, indexed=True, plugin=True)
+    run_hook("session-start", dict(base, session_id="S2", source="startup"))  # told "active" already
+    _, out = run_hook("user-prompt-submit", dict(base, session_id="S2", prompt="x"))
+    assert out is None
+    _, out = run_hook("user-prompt-submit", dict(base, prompt="x"))  # S1 was told "missing"
+    assert "CodeGraph is active" in ctx(out)
+
+
+# ---- what counts as reading code without CodeGraph -------------------------------------
+
+@pytest.mark.parametrize("tool,ti,kind", [
+    ("Read", {"file_path": "src/a.ts"}, "read"),
+    ("Read", {"file_path": "README.md"}, None),
+    ("Bash", {"command": "sed -n 1,80p src/stores/ledger.ts"}, "read"),
+    ("Bash", {"command": "cat package.json"}, None),
+    ("Bash", {"command": "grep -rn computeLedger src"}, "search"),
+    ("Grep", {"pattern": "x"}, "search"),
+    ("Bash", {"command": "codegraph explore \"computeLedger\""}, "lookup"),
+    ("Bash", {"command": "npx -y @colbymchenry/codegraph callers computeLedger"}, "lookup"),
+    ("mcp__plugin_uccif_codegraph__codegraph_explore", {"query": "x"}, "lookup"),
+    ("Bash", {"command": "npm test"}, None),
+])
+def test_classify(tool, ti, kind):
+    assert hooks._classify(tool, ti) == kind
+
+
+def test_read_of_source_is_nudged_with_a_concrete_call(base, project, monkeypatch):
+    _cg_env(monkeypatch, project, cli=True, indexed=True, plugin=True)
+    monkeypatch.setattr(hooks, "_map_skill", lambda project: "trip-map")
+    _, out = run_hook("pre-tool-use", dict(base, tool_name="Read", tool_input={"file_path": "src/a.ts"}))
+    text = ctx(out)
+    assert "reads source code" in text and "`codegraph_explore`" in text and "`trip-mod-*`" in text
+
+
+def test_no_nudge_after_a_lookup_this_turn_and_reset_next_prompt(base, project, monkeypatch):
+    _cg_env(monkeypatch, project, cli=True, indexed=True, plugin=True)
+    run_hook("user-prompt-submit", dict(base, prompt="fix"))
+    run_hook("pre-tool-use", dict(base, tool_name="mcp__plugin_uccif_codegraph__codegraph_explore",
+                                  tool_input={"query": "ledger"}))
+    assert hook_log(project)[-1]["rule"] == "codegraph-lookup"
+    _, out = run_hook("pre-tool-use", dict(base, tool_name="Grep", tool_input={"pattern": "x"}))
+    assert out is None
+    run_hook("user-prompt-submit", dict(base, prompt="next thing"))
+    _, out = run_hook("pre-tool-use", dict(base, tool_name="Grep", tool_input={"pattern": "x"}))
+    assert "CodeGraph" in ctx(out)
+
+
+def test_no_codegraph_nudge_without_an_index(base, project, monkeypatch):
+    _cg_env(monkeypatch, project)
+    _, out = run_hook("pre-tool-use", dict(base, tool_name="Read", tool_input={"file_path": "src/a.ts"}))
+    assert out is None
+
+
+def _decision(out):
+    return ((out or {}).get("hookSpecificOutput") or {}).get("permissionDecision")
+
+
+def test_strict_refuses_first_code_read_of_a_turn_then_allows(base, project, monkeypatch):
+    _cg_env(monkeypatch, project, cli=True, indexed=True, plugin=True)
+    monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_STRICT_CODEGRAPH", "true")
+    run_hook("user-prompt-submit", dict(base, prompt="fix"))
+    read = dict(base, tool_name="Read", tool_input={"file_path": "src/a.ts"})
+    _, out = run_hook("pre-tool-use", read)
+    assert _decision(out) == "deny"
+    assert "retry the same call" in out["hookSpecificOutput"]["permissionDecisionReason"]
+    assert hook_log(project)[-1]["rule"] == "strict-codegraph"
+    _, out = run_hook("pre-tool-use", read)
+    assert _decision(out) is None  # a retry goes through
+    run_hook("user-prompt-submit", dict(base, prompt="next"))
+    run_hook("pre-tool-use", dict(base, tool_name="Bash", tool_input={"command": "codegraph explore x"}))
+    _, out = run_hook("pre-tool-use", read)
+    assert _decision(out) is None  # looked up first: nothing to refuse
+
+
+def test_strict_is_off_by_default_and_needs_codegraph(base, project, monkeypatch):
+    _cg_env(monkeypatch, project, cli=True, indexed=True, plugin=True)
+    read = dict(base, tool_name="Read", tool_input={"file_path": "src/a.ts"})
+    _, out = run_hook("pre-tool-use", read)
+    assert _decision(out) is None
+    monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_STRICT_CODEGRAPH", "true")
+    _cg_env(monkeypatch, project)
+    (project.root / ".codegraph").rmdir()
+    _, out = run_hook("pre-tool-use", read)
+    assert _decision(out) is None  # nothing to look up with
+
+
+def test_strict_never_refuses_glob_or_subagents(base, project, monkeypatch):
+    _cg_env(monkeypatch, project, cli=True, indexed=True, plugin=True)
+    monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_STRICT_CODEGRAPH", "true")
+    _, out = run_hook("pre-tool-use", dict(base, tool_name="Glob", tool_input={"pattern": "**/*.ts"}))
+    assert _decision(out) is None
+    _, out = run_hook("pre-tool-use", dict(base, tool_name="Read", agent_id="a1", agent_type="Explore",
+                                           tool_input={"file_path": "src/a.ts"}))
+    assert _decision(out) is None
+
+
+# ---- files changed by Bash / scripts reach the task -----------------------------------
+
+def test_bash_edits_are_recorded_at_stop(base, project):
+    from conftest import git
+    _src(project, "src/old.ts", "export const o = 1\n")  # dirty before the prompt, left alone
+    run_hook("user-prompt-submit", dict(base, prompt="sửa tổng chi trong ledger"))
+    _src(project, "src/ledger.ts", "export const l = 1\n")  # e.g. a Python script wrote it
+    _src(project, ".claude/uccif/summary.md", "x\n")
+    run_hook("stop", dict(base))
+    cur = task.load_current(project)
+    assert cur and cur["title"].startswith("sửa tổng chi") and cur["files"] == ["src/ledger.ts"]
+    assert hook_log(project)[-1]["git_files"] == 1
+    run_hook("user-prompt-submit", dict(base, prompt="tiếp tục sửa ledger"))
+    _src(project, "src/ledger.ts", "export const l = 2\n")
+    git(project.root, "add", "src/ledger.ts")
+    git(project.root, "commit", "-q", "-m", "x")  # committed during the turn: still seen
+    _src(project, "src/view.ts", "export const v = 1\n")
+    git(project.root, "add", "src/view.ts")
+    git(project.root, "commit", "-q", "-m", "y")
+    run_hook("stop", dict(base))
+    assert task.load_current(project)["files"] == ["src/ledger.ts", "src/view.ts"]
+
+
+def test_no_git_tracking_on_quick_or_without_changes(base, project):
+    run_hook("user-prompt-submit", dict(base, prompt="what does this do"))
+    run_hook("stop", dict(base))
+    assert task.load_current(project) is None
+    run_hook("user-prompt-submit", dict(base, prompt="fix typo #quick"))
+    _src(project, "src/a.ts", "x\n")
+    run_hook("stop", dict(base))
+    assert task.load_current(project) is None
+
+
+def test_git_tracking_outside_git_is_skipped(base, project, monkeypatch):
+    monkeypatch.setattr(hooks, "_git_state", lambda root: None)
+    run_hook("user-prompt-submit", dict(base, prompt="fix"))
+    _src(project, "src/a.ts", "x\n")
+    _, out = run_hook("stop", dict(base))
+    assert task.load_current(project) is None and hook_log(project)[-1]["decision"] != "error"

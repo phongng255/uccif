@@ -27,6 +27,9 @@ SLOW_MS = {"session-start": 3000, "user-prompt-submit": 300, "pre-tool-use": 300
            "post-tool-use": 500, "stop": 1000}
 EDIT_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
 SEARCH_CMD = re.compile(r"(^|[\s|;&(])(grep|rg|ag|find|fd|ack)\s")
+READ_CMD = re.compile(r"(^|[\s|;&(])(cat|sed|head|tail|less|more|bat|nl|awk)\s")
+CODEGRAPH_CMD = re.compile(r"(^|[\s|;&(])(codegraph|npx\s+-y\s+@colbymchenry/codegraph)\s")
+FRAMEWORK_DIRS = (".claude/", ".agents/", ".gemini/", ".codegraph/")
 _WRAPPER = re.compile(r"<(system-reminder|bash-input|bash-stdout|bash-stderr)>.*?(</\1>|\Z)", re.S)
 # Bash commands each UCCIF agent may run; anything else is logged as would_block.
 AGENT_BASH = {
@@ -54,7 +57,8 @@ def options():
     lang = env("REPLY_LANGUAGE") or cached.get("reply_language") or "vi"  # UCCIF_*: Gemini extension settings
     report = _bool(env("TOKEN_REPORT"), cached.get("token_report", True))
     setup = _bool(env("AUTO_SETUP"), cached.get("auto_setup", True))
-    return {"reply_language": lang, "token_report": report, "auto_setup": setup}
+    strict = _bool(env("STRICT_CODEGRAPH"), cached.get("strict_codegraph", False))
+    return {"reply_language": lang, "token_report": report, "auto_setup": setup, "strict_codegraph": strict}
 
 
 def project_config(project):
@@ -161,13 +165,11 @@ def on_session_start(data, project):
             parts.append(extra)
             n_user = extra.count("USER RULES (")
     spawn(["maintain"], project)  # drift check, CodeGraph index + project skills in the background
-    line = codegraph.context_line(project)
-    parts.append(line if host == "claude" else line.replace("one Claude Code restart", "one restart"))
-    mine = skillgen.generated(project)
-    maps = [n for n in mine if n.endswith("-map")]
-    if maps:  # the map skill is the code map; init is optional
-        parts.append("Code map: skill `%s` (modules, entry points, commands). Module skills: `%s-mod-*`; "
-                     "bug reports: `%s-bugfix`." % (maps[0], maps[0][:-4], maps[0][:-4]))
+    parts.append(_codegraph_line(project, host))
+    map_skill = _map_skill(project)
+    if map_skill:  # the map skill is the code map; init is optional
+        parts.append(_map_line(map_skill))
+    _announce(project, sid, codegraph.level(project), map_skill)
     offer = lsp_offer(project)
     if offer:
         parts.append(offer)
@@ -182,6 +184,66 @@ def on_session_start(data, project):
     if n_user:
         fields["user_rules"] = n_user
     return _ctx("SessionStart", "\n\n".join(parts)), fields
+
+
+def _codegraph_line(project, host):
+    line = codegraph.context_line(project)
+    return line if host == "claude" else line.replace("one Claude Code restart", "one restart")
+
+
+def _map_skill(project):
+    maps = [n for n in skillgen.generated(project) if n.endswith("-map")]
+    return maps[0] if maps else None
+
+
+def _map_line(map_skill):
+    base = map_skill[:-4]
+    return ("Code map: skill `%s` (modules, entry points, commands). Module skills: `%s-mod-*`; "
+            "bug reports: `%s-bugfix`." % (map_skill, base, base))
+
+
+# ---- what this session was told about CodeGraph -----------------------------------------
+# SessionStart computes the CodeGraph line once. When the user installs and indexes CodeGraph in
+# that same session, Claude would keep following the old line ("use Grep until .codegraph/
+# exists"). So SessionStart remembers what it said, per session, and UserPromptSubmit tells Claude
+# as soon as the level or the code map changes.
+
+ANNOUNCED_KEEP = 20  # sessions remembered per project
+
+
+def _announced_path(project):
+    return Path(project.data_dir) / "announced.json"
+
+
+def _announce(project, sid, level, map_skill):
+    seen = read_json(_announced_path(project), {}) or {}
+    seen.pop(str(sid), None)
+    seen[str(sid)] = {"level": level, "map": map_skill or "", "ts": time.time()}
+    keep = sorted(seen.items(), key=lambda kv: kv[1].get("ts", 0))[-ANNOUNCED_KEEP:]
+    try:
+        write_json(_announced_path(project), dict(keep))
+    except OSError:
+        pass
+
+
+def _codegraph_news(data, project):
+    """Lines for UserPromptSubmit when CodeGraph or the code map changed since Claude was told."""
+    sid = str(data.get("session_id"))
+    seen = (read_json(_announced_path(project), {}) or {}).get(sid)
+    level, map_skill = codegraph.level(project), _map_skill(project)
+    if seen is None:  # no SessionStart for this session (plugin enabled mid-session): just remember
+        _announce(project, sid, level, map_skill)
+        return []
+    lines = []
+    if level != seen.get("level"):
+        lines.append("CodeGraph changed since this session started; this replaces the earlier note: " +
+                     _codegraph_line(project, data.get("_host") or "claude"))
+    if map_skill and map_skill != seen.get("map"):
+        lines.append("New project skills: " + _map_line(map_skill) +
+                     " Load the matching skill before reading code in a module.")
+    if lines:
+        _announce(project, sid, level, map_skill)
+    return lines
 
 
 UCCIF_BIN = Path(__file__).resolve().parent.parent / "bin" / "uccif"
@@ -250,18 +312,22 @@ def on_user_prompt_submit(data, project):
         _prompt_path(project).write_text(prompt[:400], encoding="utf-8")
     except OSError:
         pass
-    try:  # the next edit is the first one of this prompt
-        _edited_path(project).unlink()
-    except OSError:
-        pass
-    lines = []  # the open task is in SessionStart's context already
+    for f in (_edited_path(project), _looked_up_path(project), _denied_path(project)):
+        try:  # a new prompt: no edit, no CodeGraph lookup, no strict refusal yet
+            f.unlink()
+        except OSError:
+            pass
+    _snapshot_git(project)
+    news = _codegraph_news(data, project)
+    lines = list(news)  # the open task is in SessionStart's context already
     stale = drift.pending(project)
     if stale:
         lines.append("Project notes are stale: " + "; ".join(stale) +
                      ". Update only those lines when convenient, then run `uccif drift ack`.")
     if not lines:
         return None, {"decision": "skip"}
-    return _ctx("UserPromptSubmit", "\n".join(lines)), {"rule": "news", "drift": len(stale) or None}
+    return _ctx("UserPromptSubmit", "\n".join(lines)), {"rule": "news", "drift": len(stale) or None,
+                                                       "codegraph": len(news) or None}
 
 
 NUDGE_EVERY = 600  # seconds between two search nudges
@@ -302,16 +368,79 @@ def _nudge_due(project, name):
     return True
 
 
+def _looked_up_path(project):
+    return Path(project.data_dir) / "turn_lookup.flag"
+
+
+def _denied_path(project):
+    return Path(project.data_dir) / "turn_denied.flag"
+
+
+def _touch(path):
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("1", encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _is_source(path):
+    return Path(str(path)).suffix.lower() in detect.LANG_EXT
+
+
+def _classify(tool, ti):
+    """What a main-agent tool call does to find code: "lookup" (CodeGraph), "read" (source file),
+    "search" (Grep/Glob or a search command), or None."""
+    cmd = ti.get("command") or ""
+    if (tool or "").startswith("mcp__") and "codegraph" in tool.lower():
+        return "lookup"
+    if tool == "Bash" and CODEGRAPH_CMD.search(" " + cmd):
+        return "lookup"
+    if tool == "Read":
+        return "read" if _is_source(ti.get("file_path") or "") else None
+    if tool in ("Grep", "Glob"):
+        return "search"
+    if tool == "Bash":
+        if SEARCH_CMD.search(" " + cmd):
+            return "search"
+        if READ_CMD.search(" " + cmd) and any(_is_source(w.strip("'\"")) for w in cmd.split()):
+            return "read"
+    return None
+
+
+def _lookup_hint(project):
+    how = ("MCP `codegraph_explore` with the symbol or question" if codegraph.level(project) == "active"
+           else "Bash `codegraph explore \"<symbol or question>\"`")
+    map_skill = _map_skill(project)
+    skill = (", or load skill `%s-mod-*` for that module" % map_skill[:-4]) if map_skill else ""
+    return how + skill
+
+
 def _main_agent_nudge(data, project):
-    """Reminder (never a block) for the main agent: search without CodeGraph."""
+    """Main agent: record CodeGraph lookups; before reading or searching code without one, remind
+    (default) or, with the opt-in `strict_codegraph` option, refuse the first such call of the turn."""
     tool = data.get("tool_name")
-    ti = data.get("tool_input") or {}
-    is_search = tool in ("Grep", "Glob") or (
-        tool == "Bash" and SEARCH_CMD.search(" " + (ti.get("command") or "")))
-    if is_search and _nudge_due(project, "search.nudge"):
-        msg = ("UCCIF: code lookups go to CodeGraph first (core rule 2); Grep/Glob only for literals, "
-               "scoped to a module dir.")
-        return _ctx("PreToolUse", msg), {"rule": "search-codegraph-first", "target": tool}
+    kind = _classify(tool, data.get("tool_input") or {})
+    if kind == "lookup":
+        _touch(_looked_up_path(project))
+        return None, {"decision": "allow", "rule": "codegraph-lookup", "target": tool}
+    if kind is None or not codegraph.usable(project) or _looked_up_path(project).exists():
+        return None, {"decision": "skip"}
+    strict = (options()["strict_codegraph"] and (data.get("_host") or "claude") == "claude"
+              and kind in ("read", "search") and tool != "Glob")
+    if strict and not _denied_path(project).exists():
+        _touch(_denied_path(project))  # once per turn: a retry goes through
+        reason = ("UCCIF strict mode: look this up with CodeGraph first (%s). It returns the source, so "
+                  "you may not need this call at all. For a literal or config value, retry the same call: "
+                  "it is allowed." % _lookup_hint(project))
+        return ({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
+                                        "permissionDecisionReason": reason}},
+                {"decision": "deny", "rule": "strict-codegraph", "target": tool})
+    if _nudge_due(project, "search.nudge"):
+        msg = ("UCCIF: this %s source code without a CodeGraph lookup this turn. Look it up first (%s); "
+               "Read/Grep only what it did not return, or literals and config, scoped to a module dir."
+               % ("reads" if kind == "read" else "searches", _lookup_hint(project)))
+        return _ctx("PreToolUse", msg), {"rule": "search-codegraph-first", "target": tool, "kind": kind}
     return None, {"decision": "skip"}
 
 
@@ -382,9 +511,101 @@ def on_subagent_stop(data, project):
     }
 
 
+# ---- files changed outside Edit/Write --------------------------------------------------
+# PostToolUse only sees Edit/Write. Claude also edits with Bash (sed -i, a Python script, a code
+# generator), so UserPromptSubmit records the dirty files (path -> mtime) and HEAD, and Stop adds
+# every file that changed in between to the task, opening one as a first edit would.
+
+GIT_TIMEOUT = 2
+GIT_MAX_FILES = 5000
+
+
+def _git_state(root):
+    """({path: mtime_ns or -1}, head) of the work tree, or None outside git or on any error."""
+    try:
+        st = subprocess.run(["git", "-C", str(root), "status", "--porcelain=v1", "-z", "--untracked-files=all"],
+                            capture_output=True, timeout=GIT_TIMEOUT)
+        head = subprocess.run(["git", "-C", str(root), "rev-parse", "-q", "--verify", "HEAD"],
+                              capture_output=True, timeout=GIT_TIMEOUT)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if st.returncode:
+        return None
+    toks = st.stdout.decode("utf-8", "replace").split("\0")
+    files, i = {}, 0
+    while i < len(toks) and len(files) < GIT_MAX_FILES:
+        tok = toks[i]
+        i += 1
+        if len(tok) < 4:
+            continue
+        if tok[0] in "RC":  # a rename or copy: the original path follows
+            i += 1
+        path = tok[3:]
+        try:
+            files[path] = os.stat(os.path.join(str(root), path)).st_mtime_ns
+        except OSError:
+            files[path] = -1
+    return files, head.stdout.decode().strip() if head.returncode == 0 else ""
+
+
+def _git_snapshot_path(project):
+    return Path(project.data_dir) / "turn_git.json"
+
+
+def _snapshot_git(project):
+    state = _git_state(project.root)
+    try:
+        if state is None:
+            _git_snapshot_path(project).unlink()
+        else:
+            write_json(_git_snapshot_path(project), {"files": state[0], "head": state[1]})
+    except OSError:
+        pass
+
+
+def _git_committed(root, old, new):
+    try:
+        r = subprocess.run(["git", "-C", str(root), "diff", "--name-only", old, new],
+                           capture_output=True, timeout=GIT_TIMEOUT)
+    except (OSError, subprocess.SubprocessError):
+        return []
+    return r.stdout.decode("utf-8", "replace").splitlines() if r.returncode == 0 else []
+
+
+def _track_git_changes(project):
+    """Files changed this turn by any means; adds them to the task. Returns how many were added."""
+    snap = read_json(_git_snapshot_path(project), None)
+    if not isinstance(snap, dict) or _is_quick(project):
+        return 0
+    state = _git_state(project.root)
+    if state is None:
+        return 0
+    files, head = state
+    before = snap.get("files") or {}
+    changed = {p for p, m in files.items() if before.get(p) != m}
+    if snap.get("head") and head and snap["head"] != head:  # Claude committed during the turn
+        changed.update(_git_committed(project.root, snap["head"], head))
+    changed = sorted(p for p in changed if p and not p.startswith(FRAMEWORK_DIRS))
+    write_json(_git_snapshot_path(project), {"files": files, "head": head})
+    if not changed:
+        return 0
+    if not _edited_path(project).exists():
+        try:
+            prompt = _prompt_path(project).read_text(encoding="utf-8")
+        except OSError:
+            prompt = ""
+        try:
+            task.on_first_edit(project, prompt)
+            _touch(_edited_path(project))
+        except task.TaskError:
+            return 0
+    return sum(1 for p in changed if task.add_modified(project, p))
+
+
 def on_stop(data, project):
     if data.get("stop_hook_active"):
         return None, {"decision": "skip", "rule": "rerun"}
+    git_files = _track_git_changes(project)
     # structural changes made by Bash, by the user, or by git pull/checkout this turn
     spawn(["maintain"], project)
     cfg = project_config(project)
@@ -409,7 +630,7 @@ def on_stop(data, project):
             line += "\n   💡 checkpoint, then /clear"
         elif total >= cfg["long_session_tokens"]:
             line += "\n   💡 long session"
-    return {"systemMessage": line}, {"rule": "token-line"}
+    return {"systemMessage": line}, {"rule": "token-line", "git_files": git_files or None}
 
 
 def on_pre_compact(data, project):

@@ -1,0 +1,8 @@
+schema_version: "1.1"
+name: stale-next-step
+expected_outcome: |
+  Notices from git that the next step is already done, says so, and updates the task's next step
+  with `uccif task checkpoint --next` instead of redoing it. Environment: An open task whose next
+  step was already done in a later commit.
+context:
+  scaffold_script: place-files.sh

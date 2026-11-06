@@ -1,0 +1,8 @@
+schema_version: "1.1"
+name: fresh-project
+expected_outcome: |
+  Writes a short .claude/uccif/summary.md through `uccif summary write`, runs `uccif verify-tests`
+  once and writes the AGENTS.md block, within about 10 tool calls. Environment: Indexed project
+  with generated project skills, no UCCIF notes yet.
+context:
+  scaffold_script: place-files.sh

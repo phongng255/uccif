@@ -1,0 +1,8 @@
+schema_version: "1.1"
+name: npm-global-denied
+expected_outcome: |
+  After the global install fails, falls back to `npx -y @colbymchenry/codegraph` for the remaining
+  steps instead of sudo or changing npm's prefix. Environment: The CodeGraph CLI is not on PATH
+  and `npm install -g` fails with EACCES.
+context:
+  scaffold_script: place-files.sh
