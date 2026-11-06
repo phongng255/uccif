@@ -34,8 +34,8 @@ def hooks_config():
     "allow" skips the user's permission prompt. UCCIF must never change what a tool may do."""
     return {"uccif": {
         "SessionStart": [_handler("SessionStart", 10)],
-        "PreInvocation": [_handler("PreInvocation", 5)],
-        "PostToolUse": [{"matcher": EDIT_MATCHER, "hooks": [_handler("PostToolUse", 5)]}],
+        "PreInvocation": [_handler("PreInvocation", 10)],
+        "PostToolUse": [{"matcher": EDIT_MATCHER, "hooks": [_handler("PostToolUse", 10)]}],
         "Stop": [_handler("Stop", 10)],
     }}
 
