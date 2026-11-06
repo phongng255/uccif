@@ -409,8 +409,11 @@ def _classify(tool, ti):
 
 
 def _lookup_hint(project):
-    how = ("MCP `codegraph_explore` with the symbol or question" if codegraph.level(project) == "active"
-           else "Bash `codegraph explore \"<symbol or question>\"`")
+    # smallest first: `explore` returns source from many files and costs far more than one `node`
+    flow = ("MCP `codegraph_explore`" if codegraph.level(project) == "active"
+            else "Bash `codegraph explore --max-files 3 \"<question>\"`")
+    how = ("Bash `codegraph node <symbol>` (a file: `codegraph node -f <path> --symbols-only`); "
+           "%s only for a flow with no symbol to name" % flow)
     map_skill = _map_skill(project)
     skill = (", or load skill `%s-mod-*` for that module" % map_skill[:-4]) if map_skill else ""
     return how + skill

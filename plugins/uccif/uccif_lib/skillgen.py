@@ -306,8 +306,9 @@ def render_map(name, proj, a, cmds, mod_skills):
         out += ["", "## Commands", ""] + ["- %s: `%s`" % pc for pc in cmds[:12]]
     out += ["", "## How to use this map", "",
             "1. Find the module in the table, then load its skill: it lists key files, symbols, neighbours and tests.",
-            "2. Look the code up with CodeGraph (`codegraph_explore`, or `codegraph explore` in Bash): it returns",
-            "   the source, so most questions need no Read at all.",
+            "2. Look the code up with CodeGraph, smallest first: `codegraph node <symbol>` (or `node -f <file>",
+            "   --symbols-only`) returns that source, so most questions need no Read. `codegraph_explore` pulls",
+            "   source from many files: keep it for a flow you cannot name a symbol for.",
             "3. Grep only for literals the graph cannot see (error text, config keys), with `path` set to a",
             "   directory from the table, so the search stays small.",
             "", NOTES % ""]

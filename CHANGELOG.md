@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.3.1 — Smaller CodeGraph lookups
+
+### Fixes
+
+- Token use rose after 1.3.0: the core rule sent every "where is X / how does X work" question to
+  `codegraph_explore`, which returns source from many files (on the trip-budget fixture one call
+  returned 57% of the project's source, about 4x a `codegraph node` lookup of the function asked
+  about). Rule 2, the PreToolUse reminder and the generated `<project>-map` skill now go smallest
+  first: `codegraph node <symbol>` or `node -f <file> --symbols-only`, `callers`/`impact`, and
+  `codegraph_explore` only for a flow with no symbol to name (`--max-files 3` in Bash), once per
+  question, never for code already in context. Existing `-map` skills are rewritten at the next session start (the version is part of their fingerprint).
+
 ## 1.3.0 — Claude actually uses CodeGraph
 
 ### Fixes
