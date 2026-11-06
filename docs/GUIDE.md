@@ -11,10 +11,10 @@ UCCIF is a plugin for AI coding tools. It does not change your code on its own. 
 | **Core rules** | Tell the AI to run commands itself, check evidence before concluding, ask before installing packages, deploying or pushing, and reply in your language | Loaded at the start of each session |
 | **Code index (CodeGraph)** | The AI looks up functions, call paths and impact in an index instead of searching and reading file by file | `.codegraph/` |
 | **Project skills** | A module map, a short bug-fix path, and up to 5 skills for the largest modules, generated from the index | `.claude/skills/` or `.agents/skills/` |
-| **Task memory** | The first file edit opens a task. It survives turns and `/clear`, so the AI knows what is in progress | `.claude/uccif/.local/` |
+| **Task memory** | The first file edit opens a task (an edit made by a Bash command or script counts too, from `git status` at the end of the turn). It survives turns and `/clear`, so the AI knows what is in progress | `.claude/uccif/.local/` |
 | **Token line** | Real token counts read from the transcript, never estimated | Shown after each reply |
 
-UCCIF never blocks the AI's commands: it reminds, it does not forbid. An open task closes by itself when you move to new work or after 24 hours idle.
+UCCIF does not block the AI's commands: it reminds, it does not forbid. The only exception is the `strict_codegraph` option, off by default (section 5). If you install CodeGraph in the middle of a session, the AI is told on your next message, so it switches to the index right away. An open task closes by itself when you move to new work or after 24 hours idle.
 
 ## 2. What each tool supports
 
@@ -227,6 +227,7 @@ Change options in Claude Code's `/config`. For Gemini CLI, use the extension's s
 | `reply_language` | `vi` | The language the AI replies in |
 | `token_report` | on | Shows the token line |
 | `auto_setup` | on | Indexes and generates skills automatically when CodeGraph is present |
+| `strict_codegraph` | off | Claude Code only. When CodeGraph is indexed, the AI's first file read or search of source code in a turn is refused once until it has looked the code up in CodeGraph. Trying again is allowed, so literal or config searches still work. Off: a reminder only |
 
 To add your own rules, create these files. UCCIF only reads them. At most 15 non-empty lines of each file are loaded.
 

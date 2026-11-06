@@ -1,0 +1,8 @@
+schema_version: "1.1"
+name: bugfix-transfer-total
+expected_outcome: |
+  Uses the bugfix / module skills and CodeGraph to find computeLedger and every copy of the `kind
+  !== "Thu"` rule, fixes them all so only Chi counts as spending, and adds a test. Environment:
+  Indexed project with generated project skills; no node_modules (tests cannot run offline).
+context:
+  scaffold_script: place-files.sh

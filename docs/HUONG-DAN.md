@@ -11,10 +11,10 @@ UCCIF là plugin cho các công cụ AI viết code. Nó không tự sửa code 
 | **Quy tắc cốt lõi** | Nhắc AI tự chạy lệnh, phải có bằng chứng trước khi kết luận, hỏi trước khi cài package, deploy hay push, và trả lời bằng ngôn ngữ bạn chọn | Nạp đầu mỗi session |
 | **Chỉ mục code (CodeGraph)** | AI tra hàm, luồng gọi và phạm vi ảnh hưởng từ chỉ mục, thay vì dò và đọc từng file | `.codegraph/` |
 | **Skill của dự án** | Bản đồ module, cách sửa lỗi nhanh, và tối đa 5 skill cho các module lớn nhất, sinh từ chỉ mục | `.claude/skills/` hoặc `.agents/skills/` |
-| **Ghi nhớ công việc** | Lần sửa file đầu tiên sẽ mở một task. Task được giữ qua các lượt chat và sau `/clear`, nên AI biết việc đang làm dở | `.claude/uccif/.local/` |
+| **Ghi nhớ công việc** | Lần sửa file đầu tiên sẽ mở một task (sửa bằng lệnh Bash hay script cũng tính, nhờ so `git status` cuối mỗi lượt). Task được giữ qua các lượt chat và sau `/clear`, nên AI biết việc đang làm dở | `.claude/uccif/.local/` |
 | **Dòng token** | Số token thật, đọc từ transcript, không ước lượng | Hiện sau mỗi câu trả lời |
 
-UCCIF không bao giờ chặn lệnh của AI: nó chỉ nhắc, không cấm. Task mở sẽ tự đóng khi bạn chuyển sang việc mới hoặc sau 24 giờ không hoạt động.
+UCCIF không chặn lệnh của AI: nó chỉ nhắc, không cấm. Ngoại lệ duy nhất là tuỳ chọn `strict_codegraph`, mặc định tắt (mục 5). Nếu bạn cài CodeGraph giữa session, AI được báo ngay ở tin nhắn kế tiếp, nên chuyển sang dùng chỉ mục luôn. Task mở sẽ tự đóng khi bạn chuyển sang việc mới hoặc sau 24 giờ không hoạt động.
 
 ## 2. Mỗi công cụ hỗ trợ đến đâu
 
@@ -239,6 +239,7 @@ Sau `/clear`, AI lấy lại được những gì đã lưu trong task: tiêu đ
 | `reply_language` | `vi` | Ngôn ngữ AI trả lời bạn |
 | `token_report` | bật | Hiện dòng token |
 | `auto_setup` | bật | Tự index và sinh skill khi đã có CodeGraph |
+| `strict_codegraph` | tắt | Chỉ Claude Code. Khi đã có chỉ mục CodeGraph, lần đọc hoặc tìm trong file code đầu tiên của mỗi lượt bị từ chối một lần, cho tới khi AI tra CodeGraph. Thử lại thì được, nên vẫn tìm được chuỗi cố định hay giá trị config. Tắt: chỉ nhắc |
 
 Muốn thêm luật riêng, hãy tạo các file sau. UCCIF chỉ đọc, không ghi vào chúng. Mỗi file được nạp tối đa 15 dòng không trống.
 

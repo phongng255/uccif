@@ -39,7 +39,8 @@ def test_settings_env_reach_options(monkeypatch):
     monkeypatch.setenv("UCCIF_REPLY_LANGUAGE", "en")
     monkeypatch.setenv("UCCIF_TOKEN_REPORT", "false")
     monkeypatch.setenv("UCCIF_AUTO_SETUP", "false")
-    assert hooks.options() == {"reply_language": "en", "token_report": False, "auto_setup": False}
+    assert hooks.options() == {"reply_language": "en", "token_report": False, "auto_setup": False,
+                               "strict_codegraph": False}
 
 
 def test_hooks_json_shape():
@@ -70,7 +71,13 @@ def run_shell(event, payload, env):
 
 @pytest.mark.skipif(os.name == "nt", reason="bin/uccif is a sh script; Gemini CLI on Windows not verified")
 def test_every_hook_runs_through_the_shell(project, tmp_path):
-    env = dict(os.environ, GEMINI_PROJECT_DIR=str(project.root), CLAUDE_PROJECT_DIR=str(project.root))
+    fake = tmp_path / "fakebin"  # CodeGraph usable, so the search nudge applies
+    fake.mkdir()
+    (fake / "codegraph").write_text("#!/bin/sh\nexit 0\n")
+    (fake / "codegraph").chmod(0o755)
+    (project.root / ".codegraph").mkdir()
+    env = dict(os.environ, GEMINI_PROJECT_DIR=str(project.root), CLAUDE_PROJECT_DIR=str(project.root),
+               PATH=str(fake) + os.pathsep + os.environ["PATH"])
     common = {"session_id": "g1", "transcript_path": str(tmp_path / "t.jsonl"), "cwd": str(project.root),
               "timestamp": "2026-11-04T00:00:00Z"}
     src = project.root / "src" / "a.py"

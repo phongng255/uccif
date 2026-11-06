@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.3.1 — Smaller CodeGraph lookups
 
 ### Codex repository workflow preview
 
@@ -11,6 +11,39 @@
 - Add credential-free app-server runtime checks and pinned CI coverage. Model turns, native hook execution and desktop/IDE UI remain unverified; no automatic tracking or token footer.
 
 ### Fixes
+
+- Token use rose after 1.3.0: the core rule sent every "where is X / how does X work" question to
+  `codegraph_explore`, which returns source from many files (on the trip-budget fixture one call
+  returned 57% of the project's source, about 4x a `codegraph node` lookup of the function asked
+  about). Rule 2, the PreToolUse reminder and the generated `<project>-map` skill now go smallest
+  first: `codegraph node <symbol>` or `node -f <file> --symbols-only`, `callers`/`impact`, and
+  `codegraph_explore` only for a flow with no symbol to name (`--max-files 3` in Bash), once per
+  question. Existing `-map` skills are rewritten at the next session start (the version is part of their fingerprint).
+- Rule 2 also says: never re-read a file, log, command output or message already in context
+  unless it changed, never re-run a command only to see its output again, and read only the
+  lines needed (`offset`/`limit`, `tail`). Still five rules.
+
+## 1.3.0 — Claude actually uses CodeGraph
+
+### Fixes
+
+- CodeGraph installed or indexed mid-session (the usual case during `/uccif:init`) was never
+  announced: Claude kept the SessionStart note ("use Grep until `.codegraph/` exists") for the rest
+  of the session. SessionStart now remembers what it told each session, and the next prompt says
+  when the CodeGraph level or the project map skill changed.
+- The CodeGraph-first reminder missed most code reads: `Read` was not matched, nor `cat`, `sed`,
+  `head`, `tail` on source files. It now covers them, names the call to make (`codegraph_explore`,
+  or the Bash form without MCP, and the `-mod-*` skill), is skipped after a CodeGraph lookup in the
+  same turn, and is not shown when there is no index to use.
+- Files edited by Bash (a Python script, `sed -i`, a generator) never reached task memory, which
+  only saw Edit/Write. UserPromptSubmit now records the dirty files and HEAD; Stop adds every file
+  changed in between, committed or not, and opens a task as a first edit would.
+
+### New option
+
+- `strict_codegraph` (off by default, Claude Code only): with CodeGraph usable, the first Read/Grep
+  of source code in a turn without a lookup is refused once with the lookup to make; a retry is
+  allowed. This is the only case where a UCCIF hook refuses a call.
 
 - Antigravity: edits made with `edit_file` and `write_file` were never tracked, because these tools
   pass the file as `Path`. It is now read, JSON-quoted or plain, and a relative path is resolved

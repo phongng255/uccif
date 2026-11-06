@@ -1,0 +1,7 @@
+schema_version: "1.1"
+name: reindex
+expected_outcome: |
+  Rebuilds the existing index with `codegraph index --force` without reinstalling anything.
+  Environment: CodeGraph CLI installed and the project already indexed.
+context:
+  scaffold_script: place-files.sh

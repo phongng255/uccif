@@ -119,6 +119,25 @@ def gitignored(project):
     return any(l.strip().strip("/") == INDEX_DIR for l in text.splitlines())
 
 
+def level(project):
+    """A short name for what Claude can use right now: active, no-mcp, no-cli, indexing, declined,
+    missing. SessionStart remembers the level it announced; UserPromptSubmit compares it with this
+    to tell Claude when CodeGraph became usable mid-session."""
+    st = state(project)
+    if st["indexed"] and not st["cli"]:
+        return "no-cli"
+    if st["indexed"]:
+        return "active" if st["mcp"] else "no-mcp"
+    if st["cli"]:
+        return "indexing"
+    return "declined" if declined(project) else "missing"
+
+
+def usable(project):
+    """True when lookups can go to CodeGraph (MCP tool or Bash CLI)."""
+    return level(project) in ("active", "no-mcp")
+
+
 def context_line(project):
     """One SessionStart line for Claude: how to look code up, or how to get CodeGraph."""
     st = state(project)

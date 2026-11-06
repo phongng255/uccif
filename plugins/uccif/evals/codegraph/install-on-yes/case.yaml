@@ -1,0 +1,8 @@
+schema_version: "1.1"
+name: install-on-yes
+expected_outcome: |
+  Installs the CLI from the scoped npm package, indexes the project, writes the project skills,
+  checks the index with a real lookup and tells the user to restart Claude Code. Environment: The
+  CodeGraph CLI is not on PATH (it gets installed during the run).
+context:
+  scaffold_script: place-files.sh

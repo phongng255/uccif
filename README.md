@@ -8,11 +8,14 @@ repository, with nothing to run by hand:
 - **CodeGraph** ([@colbymchenry/codegraph](https://github.com/colbymchenry/codegraph)) as the
   code index: the `uccif:codegraph` skill installs the CLI and indexes the project
   (`.codegraph/`, SQLite, tree-sitter), the plugin declares its MCP server, and hooks tell Claude
-  to query `codegraph_explore` before any Grep/Read;
+  to query `codegraph_explore` before any Grep/Read of source code (also `cat`/`sed`/`head` on
+  it). When CodeGraph or the project skills become ready mid-session, the next prompt tells Claude,
+  so it stops following the earlier "use Grep" note;
 - **LSP** for TypeScript/JavaScript and Python (Claude offers to install a missing server once);
 - **CORE RULES** and a token-saving workflow injected by hooks at every session and prompt;
 - **automatic task memory**: the first edit opens a task (title from your prompt), edited files are
-  recorded, the task survives turns and `/clear`, and closes on new work, after 24 h idle, or when
+  recorded (also files changed by Bash or a script: at the end of each turn the hook compares
+  `git status` with the start of the turn), the task survives turns and `/clear`, and closes on new work, after 24 h idle, or when
   Claude records a decision or issue;
 - **project skills** generated from the graph (`<project>-map`, `-bugfix`, up to 5 `-mod-*`): the
   code map, one source of truth. `/uccif:init` is optional: it only adds what the graph cannot
@@ -22,7 +25,10 @@ repository, with nothing to run by hand:
 - read-only **agents** for impact analysis, change review and module purpose;
 - **logs** of every hook run and session (`uccif log hooks|sessions`).
 
-The plugin **never blocks** a tool call or a stop: every hook exits 0.
+The plugin **never blocks** a tool call or a stop by default: every hook exits 0. The one opt-in
+exception is `strict_codegraph` (off by default): with CodeGraph indexed, the first Read/Grep of
+source code in a turn without a CodeGraph lookup is refused once, with the lookup to make instead;
+a retry goes through. Claude Code only.
 
 > 📖 **User guides:** [Tiếng Việt](docs/HUONG-DAN.md) · [English](docs/GUIDE.md). They cover install,
 > daily use, the token line, what to commit, updating, uninstalling and troubleshooting.
@@ -36,7 +42,8 @@ The plugin **never blocks** a tool call or a stop: every hook exits 0.
 
 Then open a project and ask for anything. Without CodeGraph, Claude asks once whether to install it
 and, on yes, installs, indexes and writes the project skills in the same session.
-Options (`/config`): `reply_language` (default `vi`), `token_report` (default on).
+Options (`/config`): `reply_language` (default `vi`), `token_report` (default on), `auto_setup`
+(default on), `strict_codegraph` (default off).
 
 Requirements: Python 3.8+ (`python3`, `python` or `py -3`), git. macOS, Linux and Windows (Git
 Bash, which Claude Code uses to run hooks) are all tested in CI; Windows has not yet been
