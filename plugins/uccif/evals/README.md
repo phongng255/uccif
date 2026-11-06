@@ -23,11 +23,16 @@ Requirements: Claude Code 2.1.269 or later, git, python3, and the CodeGraph CLI
 (`npm install -g @colbymchenry/codegraph`).
 
 ```
-claude plugin eval plugins/uccif --scaffold --allow-tools Bash,Write,Edit -j 4
-claude plugin eval plugins/uccif --scaffold --allow-tools Bash,Write,Edit --case install-on-yes
+claude plugin eval plugins/uccif --scaffold --allow-real-servers --allow-tools Bash,Write,Edit -j 4
+claude plugin eval plugins/uccif --scaffold --allow-real-servers --allow-tools Bash,Write,Edit --case bugfix-transfer-total
 ```
 
-These are real, billed model runs (about 24 runs with the no-plugin baseline).
+`--allow-real-servers` starts the plugin's real CodeGraph MCP server (there are no recorded mocks),
+which the `project-skills/` cases need. These are real, billed model runs (about 24 runs with the
+no-plugin baseline).
+
+The 1.3.0 results (new plugin vs 1.2.0, one run each): every case passes with both versions except
+`project-skills/bugfix-transfer-total`, where 1.2.0 fixed the faulty rule in one file of four.
 
 Two `codegraph/` cases need a machine state that a scaffold script cannot set:
 `install-on-yes` expects no `codegraph` on PATH, and `npm-global-denied` expects `npm install -g`
