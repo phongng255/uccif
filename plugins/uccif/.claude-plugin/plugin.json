@@ -33,8 +33,8 @@
     "auto_setup": {
       "type": "boolean",
       "title": "Automatic project setup",
-      "description": "When the CodeGraph CLI is installed: index each project in the background (codegraph init) and write project skills (.claude/skills/<project>-map, -bugfix, -mod-*) from the index, refreshed when the structure changes.",
-      "default": true
+      "description": "When the CodeGraph CLI is installed: index each project in the background (codegraph init) and write project skills (.claude/skills/<project>-map, -bugfix, -mod-*) from the index, refreshed when the structure changes. Off by default: nothing is set up until you run `uccif init` in a project.",
+      "default": false
     },
     "strict_codegraph": {
       "type": "boolean",

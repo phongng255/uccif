@@ -226,7 +226,7 @@ Change options in Claude Code's `/config`. For Gemini CLI, use the extension's s
 |---|---|---|
 | `reply_language` | `vi` | The language the AI replies in |
 | `token_report` | on | Shows the token line |
-| `auto_setup` | on | Indexes and generates skills automatically when CodeGraph is present |
+| `auto_setup` | off | Off by default. When on, indexes and generates skills automatically when CodeGraph is present |
 | `strict_codegraph` | off | Claude Code only. When CodeGraph is indexed, the AI's first file read or search of source code in a turn is refused once until it has looked the code up in CodeGraph. Trying again is allowed, so literal or config searches still work. Off: a reminder only |
 
 To add your own rules, create these files. UCCIF only reads them. At most 15 non-empty lines of each file are loaded.

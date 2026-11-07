@@ -43,7 +43,7 @@ a retry goes through. Claude Code only.
 Then open a project and ask for anything. Without CodeGraph, Claude asks once whether to install it
 and, on yes, installs, indexes and writes the project skills in the same session.
 Options (`/config`): `reply_language` (default `vi`), `token_report` (default on), `auto_setup`
-(default on), `strict_codegraph` (default off).
+(default off), `strict_codegraph` (default off).
 
 Requirements: Python 3.8+ (`python3`, `python` or `py -3`), git. macOS, Linux and Windows (Git
 Bash, which Claude Code uses to run hooks) are all tested in CI; Windows has not yet been
@@ -226,7 +226,7 @@ allow the tool. `uccif codegraph` prints the current state (`mcp_via` says where
 from). Do not also run `codegraph install --target=claude`: that registers a second server with
 the same tools (if you did, remove yours with `codegraph uninstall --target=claude`).
 
-**Automatic from then on** (option `auto_setup`, default on): when the `codegraph` CLI is on the
+**Automatic from then on** (option `auto_setup`, default off): when the `codegraph` CLI is on the
 machine, opening any project indexes it in the background (`codegraph init --yes`, project-local;
 `.codegraph/` goes into `.git/info/exclude`, your `.gitignore` is not touched) and writes
 **project skills** from the graph:

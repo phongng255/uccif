@@ -56,7 +56,7 @@ def options():
     env = lambda key: os.environ.get("CLAUDE_PLUGIN_OPTION_" + key) or os.environ.get("UCCIF_" + key)
     lang = env("REPLY_LANGUAGE") or cached.get("reply_language") or "vi"  # UCCIF_*: Gemini extension settings
     report = _bool(env("TOKEN_REPORT"), cached.get("token_report", True))
-    setup = _bool(env("AUTO_SETUP"), cached.get("auto_setup", True))
+    setup = _bool(env("AUTO_SETUP"), cached.get("auto_setup", False))
     strict = _bool(env("STRICT_CODEGRAPH"), cached.get("strict_codegraph", False))
     return {"reply_language": lang, "token_report": report, "auto_setup": setup, "strict_codegraph": strict}
 
