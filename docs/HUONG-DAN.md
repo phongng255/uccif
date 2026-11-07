@@ -238,7 +238,7 @@ Sau `/clear`, AI lấy lại được những gì đã lưu trong task: tiêu đ
 |---|---|---|
 | `reply_language` | `vi` | Ngôn ngữ AI trả lời bạn |
 | `token_report` | bật | Hiện dòng token |
-| `auto_setup` | bật | Tự index và sinh skill khi đã có CodeGraph |
+| `auto_setup` | tắt | Mặc định tắt. Khi bật, tự index và sinh skill khi đã có CodeGraph |
 | `strict_codegraph` | tắt | Chỉ Claude Code. Khi đã có chỉ mục CodeGraph, lần đọc hoặc tìm trong file code đầu tiên của mỗi lượt bị từ chối một lần, cho tới khi AI tra CodeGraph. Thử lại thì được, nên vẫn tìm được chuỗi cố định hay giá trị config. Tắt: chỉ nhắc |
 
 Muốn thêm luật riêng, hãy tạo các file sau. UCCIF chỉ đọc, không ghi vào chúng. Mỗi file được nạp tối đa 15 dòng không trống.
