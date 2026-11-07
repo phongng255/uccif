@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.3.2 — No folder until init
+
+### Fixes
+
+- Opening a session no longer creates `.claude/uccif/` in projects that have not run a uccif skill. The 1.3.1 installed copy still did; reinstall or update the plugin after this release.
+
 ## 1.3.1 — Smaller CodeGraph lookups
 
 ### Codex repository workflow preview
