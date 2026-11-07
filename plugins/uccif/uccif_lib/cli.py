@@ -161,7 +161,7 @@ def build_block(project, desc, verified=()):
     maps = [n for n in skillgen.generated(project) if n.endswith("-map")]
     ptr = "Code map: skill `%s` (modules, entry points, how to look code up)." % maps[0] if maps else ""
     if (project.docs_dir / "summary.md").exists():
-        ptr += " Purpose, conventions, external services: `.claude/uccif/summary.md`."
+        ptr += " Purpose, conventions, external services: `%s/summary.md`." % project.docs_subdir.as_posix()
     if ptr.strip():
         out.append(ptr.strip())
     return "\n".join(out + [END])
@@ -348,7 +348,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if args.cmd == "hook":
         return hooks.run(args.event, host=args.host)  # never raises, always 0
-    if args.cmd not in ("version", "where"):
+    if not getattr(args, "dry_run", False) and args.cmd not in ("version", "where"):
         # An explicit CLI call (a uccif skill's step) is the opt-in: it activates the project.
         try:
             ensure_local(resolve_project())

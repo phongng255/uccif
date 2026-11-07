@@ -50,6 +50,8 @@ ANTIGRAVITY = [
     ("the extension's", "the plugin's"),
     ("the\n  extension's", "the\n  plugin's"),
     ("the extension declares", "the plugin declares"),
+    (".claude/uccif", ".agents/uccif"),
+    ("uccif skills generate", "uccif skills generate --host antigravity"),
 ]
 
 

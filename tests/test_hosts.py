@@ -21,6 +21,8 @@ def gem(event, data):
 
 @pytest.fixture
 def base(project):
+    from uccif_lib.paths import ensure_local
+    ensure_local(project)
     return {"session_id": "s1", "cwd": str(project.root)}
 
 
@@ -130,7 +132,8 @@ def test_gemini_shell_search_failure_reaches_model(base, project):
     assert "grep: bad" in out["hookSpecificOutput"]["additionalContext"]
 
 
-def test_gemini_stop_without_readable_transcript_prints_nothing(base, project):
+def test_gemini_stop_without_readable_transcript_prints_nothing(base, project, monkeypatch):
+    monkeypatch.setenv("CLAUDE_PLUGIN_OPTION_TOKEN_REPORT", "true")
     code, out = gem("AfterAgent", dict(base, transcript_path=str(project.root / "none.json")))
     assert code == 0 and out is None
     assert hook_log(project)[-1]["rule"] == "token-n/a"

@@ -1,6 +1,6 @@
 ---
 name: uccif-init
-description: Write the project notes the code graph cannot know (what the project is for, conventions a newcomer would get wrong, external services) to .claude/uccif/summary.md and a short UCCIF block in AGENTS.md, with test commands verified. Use this when the user runs /uccif-init, asks to set up, initialise or refresh UCCIF for a project ("init uccif", "ghi summary", "cập nhật ghi chú dự án"), or a hook says the project notes are stale. Not for code changes.
+description: Write the project notes the code graph cannot know (what the project is for, conventions a newcomer would get wrong, external services) to .agents/uccif/summary.md and a short UCCIF block in AGENTS.md, with test commands verified. Use this when the user runs /uccif-init, asks to set up, initialise or refresh UCCIF for a project ("init uccif", "ghi summary", "cập nhật ghi chú dự án"), or a hook says the project notes are stale. Not for code changes.
 ---
 <!-- generated from plugins/uccif/skills by plugins/uccif/scripts/build_antigravity.py; edit the source -->
 
@@ -17,7 +17,7 @@ compound commands need the user's approval, and this skill should run without pr
    notes point to the map skill, which needs the index.
 2. Load the `<project>-map` skill, so you know the layout without reading files for it.
 3. Read at most 4 files, in one parallel batch, with offset/limit: README, the main manifest, and
-   up to 2 of: the existing `.claude/uccif/summary.md`, CONTRIBUTING / AGENTS.md, an env example
+   up to 2 of: the existing `.agents/uccif/summary.md`, CONTRIBUTING / AGENTS.md, an env example
    (`.env.example`). Never lockfiles or generated files, and never `.env` or any file that may
    hold secrets: an external service is named in the env example or the code, and reading a key
    would put it in the transcript.
@@ -26,7 +26,7 @@ compound commands need the user's approval, and this skill should run without pr
    for, conventions a newcomer would get wrong, external services. End each claim with
    `[src: file]` so a reader can check it. No modules, commands or layout, and nothing CLAUDE.md /
    AGENTS.md already says (the agent reads those anyway): point to them instead.
-   Write under `.claude/uccif/` only through these `uccif` commands. The command also stores the drift baseline that later
+   Write under `.agents/uccif/` only through these `uccif` commands. The command also stores the drift baseline that later
    tells you when these notes go stale.
 5. `uccif verify-tests`, once. It lists the tests (vitest list, jest --listTests, pytest
    --collect-only, go test -list, cargo test -- --list) or runs them only when the runner has no

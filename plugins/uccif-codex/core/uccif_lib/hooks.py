@@ -55,7 +55,7 @@ def options():
     cached = read_json(data_root() / CORE_MARKER, {})
     env = lambda key: os.environ.get("CLAUDE_PLUGIN_OPTION_" + key) or os.environ.get("UCCIF_" + key)
     lang = env("REPLY_LANGUAGE") or cached.get("reply_language") or "vi"  # UCCIF_*: Gemini extension settings
-    report = _bool(env("TOKEN_REPORT"), cached.get("token_report", True))
+    report = _bool(env("TOKEN_REPORT"), cached.get("token_report", False))
     setup = _bool(env("AUTO_SETUP"), cached.get("auto_setup", False))
     strict = _bool(env("STRICT_CODEGRAPH"), cached.get("strict_codegraph", False))
     return {"reply_language": lang, "token_report": report, "auto_setup": setup, "strict_codegraph": strict}
@@ -174,7 +174,7 @@ def on_session_start(data, project):
     if offer:
         parts.append(offer)
     if (project.docs_dir / "summary.md").exists():
-        parts.append("Project purpose, conventions, external services: .claude/uccif/summary.md.")
+        parts.append("Project purpose, conventions, external services: %s/summary.md." % project.docs_subdir.as_posix())
     lines = task.summary_lines(project)
     if lines:
         parts.append("\n".join(lines) + " (continue it if the request is related: uccif:resume)")
@@ -702,11 +702,19 @@ def run(event, stdin=None, stdout=None, host="claude"):
         hosts.check(host)
         event, data = hosts.normalize(host, event, data)
         data["_host"] = host
+        if host == "antigravity":
+            os.environ["UCCIF_AGENT"] = "antigravity"
         handler = HANDLERS.get(event)
         if handler is None:
             raise ValueError("unknown hook event: %s" % event)
         project = resolve_project(data.get("cwd"))
-        out, fields = handler(data, project)
+        active = project.docs_dir.is_dir() or (host == "antigravity" and (project.root / ".agents" / "rules" / "uccif.md").is_file())
+        if active:
+            out, fields = handler(data, project)
+        else:
+            # Opt-in: UCCIF stays silent in a project until a uccif skill runs its CLI there
+            # (that creates .claude/uccif/ or .agents/uccif/). Hooks never create that folder by themselves.
+            out, fields = None, {"decision": "skip", "rule": "inactive"}
         out = hosts.format_output(host, event, out)
         fields.setdefault("decision", "nudge" if out and event != "stop" else "allow")
         fields.update(session=data.get("session_id"), tool=data.get("tool_name"),
@@ -724,7 +732,7 @@ def run(event, stdin=None, stdout=None, host="claude"):
     if ms > SLOW_MS.get(event, 1000):
         fields["slow"] = True
     quiet = ((event == "pre-tool-use" and fields.get("decision") == "skip") or
-             fields.get("rule") == "same-turn") and not fields.get("slow")
+             fields.get("rule") in ("same-turn", "inactive")) and not fields.get("slow")
     try:
         if project is None:
             project = resolve_project()

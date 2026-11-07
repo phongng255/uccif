@@ -191,8 +191,21 @@ class Project:
         return self.data_dir.name
 
     @property
+    def docs_subdir(self):
+        from uccif_lib import hosts
+        if (self.root / ".agents" / "uccif").is_dir():
+            return Path(".agents") / "uccif"
+        if (self.root / ".claude" / "uccif").is_dir():
+            return Path(".claude") / "uccif"
+        if (self.root / ".gemini" / "uccif").is_dir():
+            return Path(".gemini") / "uccif"
+        if hosts.is_antigravity(self):
+            return Path(".agents") / "uccif"
+        return DOCS_SUBDIR
+
+    @property
     def docs_dir(self):
-        return self.root / DOCS_SUBDIR
+        return self.root / self.docs_subdir
 
     @property
     def local_dir(self):

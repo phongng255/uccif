@@ -40,7 +40,7 @@ package `codegraph` is an unrelated project with no CLI, so it fails in confusin
 6. **Check.** `codegraph status` must show files and symbols. Then try one real lookup on the
    main entry point or a module name, `codegraph explore "<name>"`, so you report a working
    index, not just a finished command.
-7. **Project skills.** `uccif skills generate` writes `.agents/skills/<project>-map`,
+7. **Project skills.** `uccif skills generate --host antigravity` writes `.agents/skills/<project>-map`,
    `<project>-bugfix` and one `<project>-mod-*` per sizeable module from the graph. Hooks
    refresh them by themselves when the project's structure changes (option `auto_setup`).
 

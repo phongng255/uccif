@@ -203,6 +203,20 @@ def default_output(host, event):
 
 # ---- which hosts a project uses ----------------------------------------------------
 
+def is_antigravity(project=None):
+    """Whether the current process/environment or project is running Antigravity."""
+    import os
+    if os.environ.get("UCCIF_AGENT") == "antigravity":
+        return True
+    if os.environ.get("ANTIGRAVITY_LS_ADDRESS") or os.environ.get("ANTIGRAVITY_CSRF_TOKEN"):
+        return True
+    if project:
+        root = Path(project.root)
+        if (root / ".agents" / "rules" / "uccif.md").is_file() or (root / ".agents" / "uccif").is_dir():
+            return True
+    return False
+
+
 def _state_path(project):
     return Path(project.local_dir) / "hosts.json"
 
@@ -220,9 +234,12 @@ def record(project, host):
 
 def enabled(project):
     """Hosts this project uses: the ones that ran a session here, plus Antigravity when
-    `uccif setup antigravity` wrote its rule file. Nothing recorded -> Claude Code (1.1 behavior)."""
+    running in Antigravity or when `uccif setup antigravity` wrote its rule file.
+    Nothing recorded -> Claude Code (1.1 behavior)."""
     from uccif_lib.paths import read_json
     seen = set(read_json(_state_path(project), {}) or {})
+    if is_antigravity(project):
+        seen.add("antigravity")
     if (Path(project.root) / ".agents" / "rules" / "uccif.md").exists():
         seen.add("antigravity")
     if (Path(project.root) / ".codex" / ".uccif-setup.json").is_file():

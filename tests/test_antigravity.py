@@ -23,6 +23,9 @@ import build_antigravity  # noqa: E402
 
 
 def common(project, **kw):
+    from uccif_lib.paths import ensure_local
+    if not project.docs_dir.exists():
+        ensure_local(project)
     return dict({"conversationId": "c1", "workspacePaths": [str(project.root)],
                  "transcriptPath": str(project.root / "none.jsonl"),
                  "artifactDirectoryPath": "/tmp/a", "modelName": "gemini-3-pro"}, **kw)
@@ -55,7 +58,7 @@ def test_skills_have_no_other_host_names():
         text = p.read_text(encoding="utf-8")
         head = text.split("\n---\n")[0]
         assert "name: %s\n" % p.parent.name in head + "\n" and "description:" in head
-        for word in ("Claude Code", "Gemini", "gemini-extension", "run_shell_command", "uccif:", "$ARGUMENTS"):
+        for word in ("Claude Code", ".claude", "Gemini", "gemini-extension", "run_shell_command", "uccif:", "$ARGUMENTS"):
             assert word not in text, (p, word)
 
 
@@ -153,6 +156,25 @@ def test_session_start_uses_the_workspace_not_the_hook_cwd(project, monkeypatch,
     assert "is not on PATH here" in step["systemMessage"] and "Claude Code restart" not in step["systemMessage"]
     assert not (other / ".claude").exists()
     assert "antigravity" in hosts.enabled(project)
+
+
+def test_antigravity_clean_repo_uses_agents_uccif_and_no_claude_folder(project, monkeypatch):
+    monkeypatch.setenv("UCCIF_AGENT", "antigravity")
+    out = call("SessionStart", common(project))
+    assert not (project.root / ".claude").exists()
+    assert (project.root / ".agents" / "uccif" / ".local").is_dir()
+    assert (project.root / ".agents" / "uccif" / ".local" / "hosts.json").is_file()
+    assert hosts.enabled(project) == ["antigravity"]
+    assert hosts.skill_dirs(project) == [project.root / ".agents" / "skills"]
+
+
+def test_antigravity_respects_existing_claude_folder(project, monkeypatch):
+    monkeypatch.setenv("UCCIF_AGENT", "antigravity")
+    (project.root / ".claude" / "uccif").mkdir(parents=True)
+    out = call("SessionStart", common(project))
+    assert not (project.root / ".agents" / "uccif").exists()
+    assert (project.root / ".claude" / "uccif" / ".local").is_dir()
+    assert (project.root / ".claude" / "uccif" / ".local" / "hosts.json").is_file()
 
 
 def test_agents_block_is_not_injected(project):
