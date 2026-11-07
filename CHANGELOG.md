@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.3.3 — Antigravity native folders
+
+### Features
+
+- Antigravity now uses `.agents/uccif/` for docs and task memory and `.agents/skills/` for generated project skills, eliminating unwanted `.claude/` folders in clean Antigravity workspaces.
+- Existing `.claude/uccif/` folders continue to be preserved for backwards compatibility across shared environments.
+
 ## 1.3.2 — No folder until init
 
 ### Fixes
