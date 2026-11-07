@@ -28,7 +28,7 @@
       "type": "boolean",
       "title": "Token line after each turn",
       "description": "Show one line with real token usage (read from the transcript) after each reply.",
-      "default": true
+      "default": false
     },
     "auto_setup": {
       "type": "boolean",

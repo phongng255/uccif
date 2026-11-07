@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 from uccif_lib import SCHEMA_VERSION, __version__, codegraph, detect, drift, hooks, hosts, log, task, usage
-from uccif_lib.paths import data_root_source, resolve_project
+from uccif_lib.paths import data_root_source, ensure_local, resolve_project
 
 
 def build_parser():
@@ -348,6 +348,12 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if args.cmd == "hook":
         return hooks.run(args.event, host=args.host)  # never raises, always 0
+    if args.cmd not in ("version", "where"):
+        # An explicit CLI call (a uccif skill's step) is the opt-in: it activates the project.
+        try:
+            ensure_local(resolve_project())
+        except OSError:
+            pass
     try:
         if args.cmd == "version":
             print("uccif %s (schema %d)" % (__version__, SCHEMA_VERSION))
